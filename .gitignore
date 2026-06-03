@@ -1,0 +1,28 @@
+# Java
+target/
+*.class
+*.jar
+*.war
+.idea/
+*.iml
+.settings/
+.project
+.classpath
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Config (contain API keys)
+.env
+*.env.local
+
+# Build
+node_modules/
+dist/
