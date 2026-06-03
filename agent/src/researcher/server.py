@@ -21,7 +21,12 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
-from .agent import FastLevel1Agent, Level1Agent, Level2Agent
+import asyncio as aio
+import logging
+
+log = logging.getLogger(__name__)
+
+from .agent import ClarifyHelper, FastLevel1Agent, Level1Agent, Level2Agent, Level3Agent, Level4Agent
 from .config import config
 
 app = FastAPI(title="Deep Researcher Agent", version="0.1.0")
@@ -40,9 +45,10 @@ app.add_middleware(
 
 class ResearchRequest(BaseModel):
     question: str
-    level: int = 2              # 1 或 2（Agent 等级）
-    max_rounds: int | None = None  # 覆盖默认搜索轮数
+    level: int = 2
+    max_rounds: int | None = None
     language: str = "auto"
+    context: str = ""  # 之前的对话上下文（用于多轮追问）
 
 
 class ProgressEvent(BaseModel):
@@ -65,6 +71,7 @@ async def run_agent_with_sse(
     level: int,
     max_rounds: int | None,
     language: str,
+    context: str,
     cancel: asyncio.Event,
 ) -> AsyncGenerator[dict, None]:
     """运行 Agent 并以 SSE 事件流返回进度。"""
@@ -83,8 +90,136 @@ async def run_agent_with_sse(
         search_tool = SearchTool()
         rounds = max_rounds or config.max_search_rounds
 
+        # ---- 澄清用户意图（Level 2/3/4 默认开启，Level 1 跳过保持极速） ----
+        if level != 1:
+            yield {"event": "status", "data": json.dumps({
+                "step": "planning",
+                "message": "正在分析问题是否需要澄清...",
+            })}
+            # 拼接上下文：之前的对话 + 当前问题
+            full_context = context + "\n\n---\n用户最新消息：" + question if context else question
+            clarify = ClarifyHelper()
+            check = await clarify.check(full_context)
+            if check.get("need_clarify"):
+                yield {"event": "status", "data": json.dumps({
+                    "step": "clarify",
+                    "message": f"需要澄清: {check.get('question', '')}",
+                    "clarify_question": check.get("question", ""),
+                    "understanding": check.get("summary", ""),
+                })}
+                yield {"event": "done", "data": json.dumps({
+                    "report": "",
+                    "language": language,
+                    "need_clarify": True,
+                    "question": check.get("question", ""),
+                })}
+                return
+            else:
+                yield {"event": "status", "data": json.dumps({
+                    "step": "planned",
+                    "message": f"需求明确: {check.get('summary', '')}",
+                })}
+
+        # ---- Level 4: Supervisor-Researcher 双层循环 ----
+        if level == 4:
+            agent = Level4Agent()
+            yield {"event": "status", "data": json.dumps({
+                "step": "planning",
+                "message": f"Supervisor 开始调度，最多 {agent.max_rounds} 轮...",
+            })}
+            try:
+                result = await agent.run(question)
+                yield {"event": "done", "data": json.dumps({
+                    "report": result,
+                    "language": language,
+                })}
+            except Exception as e:
+                yield {"event": "error", "data": json.dumps({
+                    "message": str(e),
+                    "traceback": traceback.format_exc(),
+                })}
+            return
+
+        # ---- Level 3: 拆题 → 并行 Level 2 → 汇总 ----
+        if level == 3:
+            from .agent import DECOMPOSE_PROMPT, DECOMPOSE_SCHEMA, MERGE_PROMPT
+
+            yield {"event": "status", "data": json.dumps({
+                "step": "planning",
+                "message": "正在分析问题，拆分子课题...",
+            })}
+
+            plan = llm.structured_output(
+                system_prompt="你是研究规划专家。",
+                user_message=DECOMPOSE_PROMPT.format(question=question),
+                schema=DECOMPOSE_SCHEMA,
+            )
+            sub_topics = plan.get("sub_topics", [question])
+
+            yield {"event": "status", "data": json.dumps({
+                "step": "planned",
+                "message": f"拆成 {len(sub_topics)} 个子课题，每个启动一个研究员并行工作",
+                "sub_topics": sub_topics,
+                "understanding": plan.get("understanding", ""),
+            })}
+
+            if cancel.is_set():
+                return
+
+            # 并行跑 Level 2（每个子课题独立 Agent 实例，gather 等待）
+            for i, topic in enumerate(sub_topics):
+                yield {"event": "status", "data": json.dumps({
+                    "step": "searching",
+                    "message": f"研究员 #{i+1}/{len(sub_topics)} 启动: {topic[:50]}...",
+                })}
+
+            async def safe_run(topic, idx):
+                """每个子研究员独立运行，出错不影响其他。"""
+                try:
+                    agent = Level2Agent()
+                    result = await agent.run(topic)
+                    log.info("研究员 #%d 完成: topic=%s, len=%d", idx, topic[:40], len(result))
+                    return result
+                except Exception as e:
+                    log.error("研究员 #%d 失败: %s", idx, str(e))
+                    return f"# 研究失败\n\n子课题「{topic}」研究出错: {e}"
+
+            tasks = [safe_run(t, i) for i, t in enumerate(sub_topics)]
+            results = await aio.gather(*tasks)
+            reports = [r for r in results if r]
+
+            yield {"event": "status", "data": json.dumps({
+                "step": "reporting",
+                "message": f"所有研究员完成，正在汇总 {len(reports)} 份子报告...",
+            })}
+
+            if not reports:
+                yield {"event": "done", "data": json.dumps({
+                    "report": "# 研究失败\n\n所有子研究员未能获取有效结果，请简化问题重试。",
+                    "language": language,
+                })}
+                return
+
+            merged = "\n\n---\n\n".join(
+                f"## 子课题{i+1}\n{r}"
+                for i, r in enumerate(reports)
+            )
+            final_report = llm.chat(
+                system_prompt="你是专业的深度研究报告汇总专家。",
+                user_message=MERGE_PROMPT.format(
+                    question=question,
+                    reports=merged,
+                ),
+            )
+
+            yield {"event": "done", "data": json.dumps({
+                "report": final_report,
+                "language": language,
+            })}
+            return
+
+        # ---- Level 1: 极速模式 ----
         if level == 1:
-            # 极速模式: 跳过 LLM 规划 → 直接搜索 → 1 次 LLM 写报告
             yield {"event": "status", "data": json.dumps({
                 "step": "searching",
                 "message": "极速搜索中（跳过 LLM 规划 + LLM 摘要，全程仅 1 次 LLM 调用）...",
@@ -283,6 +418,7 @@ async def research_sync(req: ResearchRequest):
             level=req.level,
             max_rounds=req.max_rounds,
             language=req.language,
+            context=req.context,
             cancel=cancel,
         ):
             if event["event"] == "done":
@@ -317,6 +453,7 @@ async def research_stream(req: ResearchRequest):
                 level=req.level,
                 max_rounds=req.max_rounds,
                 language=req.language,
+                context=req.context,
                 cancel=cancel,
             ):
                 yield event

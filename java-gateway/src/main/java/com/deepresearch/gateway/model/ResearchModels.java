@@ -18,7 +18,8 @@ public class ResearchModels {
             String question,
             int level,
             @JsonProperty("max_rounds") Integer maxRounds,
-            String language
+            String language,
+            String context
     ) {
         public ResearchRequest {
             if (level == 0) level = 2;
@@ -27,7 +28,7 @@ public class ResearchModels {
 
         /** 快速构造：只传问题，默认 Level 2。 */
         public ResearchRequest(String question) {
-            this(question, 2, null, "auto");
+            this(question, 2, null, "auto", "");
         }
     }
 
@@ -40,7 +41,9 @@ public class ResearchModels {
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record ResearchResponse(
             String report,
-            String language
+            String language,
+            @JsonProperty("need_clarify") Boolean needClarify,
+            String question
     ) {}
 
     // ========== 会话 ==========

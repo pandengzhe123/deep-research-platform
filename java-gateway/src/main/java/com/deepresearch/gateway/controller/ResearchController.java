@@ -46,7 +46,7 @@ public class ResearchController {
      * 同步研究 —— 等 Agent 完全跑完，返回完整报告。
      */
     @PostMapping("/research")
-    public Mono<ResponseEntity<ResearchResponse>> research(@RequestBody ResearchRequest req) {
+    public Mono<ResearchResponse> research(@RequestBody ResearchRequest req) {
         return Mono.fromCallable(() -> {
             // 1. 创建会话
             ResearchSession session = sessionService.createSession("anonymous", req.question());
@@ -60,7 +60,9 @@ public class ResearchController {
 
             // 3. 保存结果
             sessionService.appendReport(session.getId(), resp.report());
-            return ResponseEntity.ok(resp);
+            log.info("研究完成: session={}, report_len={}", session.getId(),
+                    resp.report() != null ? resp.report().length() : 0);
+            return resp;
         }).subscribeOn(Schedulers.boundedElastic());
     }
 

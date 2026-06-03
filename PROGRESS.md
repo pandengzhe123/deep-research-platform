@@ -5,50 +5,52 @@
 ## 总览
 
 ```
-整体进度  ██████████░░░░░░░░  50%
+整体进度  █████████████░░░░░  65%
 
-├── Python Agent      ████████████████░░  80%
-├── Java 网关          ████████░░░░░░░░░░  40%
+├── Python Agent      ██████████████████  95%
+├── Java 网关          ████████░░░░░░░░░░  45%
 ├── 前端 UI            ██░░░░░░░░░░░░░░░░  10%
 ├── RAG 集成           ░░░░░░░░░░░░░░░░░░   0%
 ├── 部署              ██░░░░░░░░░░░░░░░░  10%
 └── 文档              ██████████████████  90%
 ```
 
+**代码量：2,100 行**（Python 1,457 + Java 492 + HTML 143）
+
 ---
 
-## Python Agent（80%）
+## Python Agent（95%）
 
 | 任务 | 状态 | 说明 |
 |------|:--:|------|
 | 项目骨架搭建 | ✅ | `pyproject.toml`、目录结构 |
 | LLM 客户端 | ✅ | DeepSeek V4 Flash，chat + 工具调用 + 结构化输出 |
 | 搜索工具 | ✅ | Tavily API + 网页抓取 + LLM 摘要 |
-| 搜索快速模式 | ✅ | `search_fast()` 跳过 LLM 摘要，直接返回 Tavily 原始结果 |
+| 搜索快速模式 | ✅ | `search_fast()` 跳过 LLM 摘要 |
 | 配置管理 | ✅ | 环境变量驱动 |
-| Level 1 Agent | ✅ | 原版：分析→搜索→报告（~22次LLM调用） |
-| Level 1 Fast | ✅ | **极速版**：跳过规划+跳过摘要，全程仅1次LLM调用，15-30秒出结果 |
-| Level 2 Agent | ✅ | 搜索-反思 5 轮循环，SSE 已验证 |
-| FastAPI 服务 | ✅ | `/research` + `/research/stream`(SSE) + `/health` + `/research/{id}` |
-| Level 3 Agent | | 多路并行搜索 |
-| Level 4 Agent | | Supervisor-Researcher 双层架构 |
+| Level 1 Fast | ✅ | 极速版，全程 1 次 LLM，15-30 秒 |
+| Level 2 | ✅ | 搜索-反思 5 轮循环，Function Calling 驱动 |
+| Level 3 | ✅ | LLM 拆题 → asyncio.gather 并行 Level 2 → 汇总 |
+| Level 4 | ✅ | Supervisor 循环调度 → 分批派遣 Level 2 → ResearchComplete → 汇总 |
+| FastAPI 服务 | ✅ | `/research` + `/research/stream`(SSE) + `/health` |
+| 任务取消 | ✅ | `DELETE /research/{id}` |
 | 报告导出 | | Markdown → PDF/Word |
 | 搜索结果缓存 | | 相同 query 复用 |
 
-## Java 网关（40%）
+## Java 网关（45%）
 
 | 任务 | 状态 | 说明 |
 |------|:--:|------|
 | Spring Boot 项目初始化 | ✅ | Maven + JDK 21，仅依赖 webflux |
 | AgentClient | ✅ | WebClient 封装，同步+流式+健康检查+取消 |
-| ResearchController | ✅ | 4 个接口：同步/流式/取消/会话查询 |
+| ResearchController | ✅ | 4 个接口，Level 1-4 全支持 |
 | SessionService | ✅ | 内存存储，会话创建→报告写入→查询 |
 | ResearchScheduler | ✅ | Semaphore(20) 并发控制 |
-| Web UI（内置HTML） | ✅ | `index.html`，同步模式已验证通过 |
-| 编译运行 | ✅ | `mvn compile` 成功，`mvn spring-boot:run` 正常 |
-| 端到端验证 | ✅ | **浏览器→Java→Python→Tavily→报告→浏览器**，12秒出结果 |
-| SSE 流式转发 | | Java Flux→浏览器 SSE 解析还有 bug |
-| 会话持久化 | | 当前内存，需换 H2/MySQL |
+| Web UI | ✅ | 内置 HTML，Level 1-4 下拉切换 |
+| 编译运行 | ✅ | `mvn compile && spring-boot:run` |
+| 端到端验证 | ✅ | 浏览器→Java→Python→Agent→Tavily→报告 OK |
+| SSE 流式转发 | ⚠️ | 同步模式稳定，SSE 流式偶有问题 |
+| 会话持久化 | | 当前内存，需 H2/MySQL |
 | JWT 认证 | | |
 | 费用估算 | | |
 
@@ -108,10 +110,9 @@
 
 ## 下一步（优先级排序）
 
-1.   **修复 SSE 流式推送** —— Java Flux → 浏览器 EventSource 解析
-2.   **实现 Python Agent Level 3** —— 多路并行搜索
-3.   **实现 Python Agent Level 4** —— Supervisor-Researcher 双层架构
-4.   **前端 UI 升级** —— Vue 3 / React 取代内置 HTML
-5.   **RAG 集成** —— 向量数据库 + 混合检索
-6.   **用户认证** —— Spring Security + JWT
-7.   **Docker Compose 一键部署**
+1.   **修 SSE 流式 + 前端优化** —— 流式体验是演示时的加分项
+2.   **RAG 集成** —— 向量数据库 + 混合检索，简历差异化卖点
+3.   **会话持久化** —— H2/MySQL 替换内存存储
+4.   **前端 UI 升级** —— Vue 3 / React
+5.   **用户认证** —— Spring Security + JWT
+6.   **Docker Compose 一键部署**
