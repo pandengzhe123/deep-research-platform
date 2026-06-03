@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Deep Research</title>
+    <style>
+        :root { color-scheme: dark; }
+        body { font-family: system-ui; max-width: 900px; margin: 40px auto; padding: 0 20px; background: #111; color: #eee; }
+        h1 { font-size: 1.5rem; }
+        textarea, input { width: 100%; padding: 12px; margin: 8px 0; background: #1a1a2e; color: #eee; border: 1px solid #333; border-radius: 8px; font-size: 14px; box-sizing: border-box; }
+        textarea { height: 80px; resize: vertical; }
+        button { padding: 12px 32px; background: #6366f1; color: #fff; border: none; border-radius: 8px; font-size: 16px; cursor: pointer; }
+        button:disabled { background: #444; cursor: not-allowed; }
+        #progress { margin: 20px 0; padding: 16px; background: #1a1a2e; border-radius: 8px; min-height: 60px; font-family: monospace; font-size: 13px; white-space: pre-wrap; line-height: 1.6; }
+        #report { margin: 20px 0; padding: 30px 40px; background: #1a1a2e; border-radius: 8px; line-height: 1.8; display: none; }
+        #report h1 { font-size: 1.6rem; border-bottom: 2px solid #6366f1; padding-bottom: 12px; }
+        #report h2 { font-size: 1.2rem; margin-top: 28px; color: #a5b4fc; }
+        #report code { background: #2d2d3f; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+        #report a { color: #818cf8; }
+        .badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 12px; }
+        .badge-ok { background: #065f46; color: #6ee7b7; }
+        .badge-warn { background: #78350f; color: #fcd34d; }
+        .error { color: #fca5a5; }
+    </style>
+</head>
+<body>
+    <h1>Deep Research</h1>
+    <p>输入问题，Agent 自动搜索网络并生成深度研究报告。</p>
+
+    <textarea id="question" placeholder="例如：2025年AI领域最重要的三件事是什么？"></textarea>
+
+    <div style="display:flex; align-items:center; gap:12px">
+        <select id="level" style="padding:10px; background:#1a1a2e; color:#eee; border:1px solid #333; border-radius:8px">
+            <option value="1">Level 1 — 快速搜索</option>
+            <option value="2" selected>Level 2 — 搜索+反思</option>
+        </select>
+        <button id="btn" onclick="start()">开始研究</button>
+        <span id="status"></span>
+    </div>
+
+    <div id="progress"><em>等待提交...</em></div>
+    <div id="report"></div>
+
+    <script>
+        function start() {
+            const question = document.getElementById('question').value.trim();
+            if (!question) return alert('请输入问题');
+
+            const level = parseInt(document.getElementById('level').value);
+            const btn = document.getElementById('btn');
+            const progress = document.getElementById('progress');
+            const reportDiv = document.getElementById('report');
+            const statusEl = document.getElementById('status');
+
+            btn.disabled = true;
+            progress.textContent = '⏳ 提交中...\n';
+            reportDiv.style.display = 'none';
+            reportDiv.innerHTML = '';
+
+            // 先用同步接口测通
+            const useSync = true;  // 改成 false 试用流式
+            const url = useSync ? '/api/research' : '/api/research/stream';
+
+            if (useSync) {
+                fetch('/api/research', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ question, level })
+                }).then(res => res.json()).then(data => {
+                    progress.textContent += '✅ 研究完成\n';
+                    statusEl.innerHTML = '<span class="badge badge-ok">完成</span>';
+                    if (data.report) {
+                        reportDiv.innerHTML = data.report
+                            .replace(/### /g, '<h3>').replace(/## /g, '<h2>').replace(/# /g, '<h1>')
+                            .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+                            .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+                            .replace(/\n- /g, '\n• ');
+                        reportDiv.style.display = 'block';
+                    }
+                }).catch(err => {
+                    progress.textContent += `❌ 请求失败: ${err.message}\n`;
+                    statusEl.innerHTML = '<span class="badge badge-warn">失败</span>';
+                }).finally(() => { btn.disabled = false; });
+                return;
+            }
+
+            // 流式模式
+            fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ question, level })
+            }).then(async response => {
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    buffer += decoder.decode(value, { stream: true });
+
+                    const parts = buffer.split('\n\n');
+                    buffer = parts.pop();
+
+                    for (const part of parts) {
+                        const line = part.trim();
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const obj = JSON.parse(line.slice(6));
+                                if (obj.step) {
+                                    const icons = {planning:'🧠',planned:'✅',searching:'🔍',thinking:'💭',reporting:'📝',decided:'🛑'};
+                                    const icon = icons[obj.step] || '⏳';
+                                    const rd = obj.round ? ` [第${obj.round}轮]` : '';
+                                    progress.textContent += `${icon} ${obj.message}${rd}\n`;
+                                }
+                                if (obj.report) {
+                                    progress.textContent += '✅ 研究完成\n';
+                                    statusEl.innerHTML = '<span class="badge badge-ok">完成</span>';
+                                    reportDiv.innerHTML = obj.report
+                                        .replace(/### /g, '<h3>').replace(/## /g, '<h2>').replace(/# /g, '<h1>')
+                                        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+                                        .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+                                    reportDiv.style.display = 'block';
+                                }
+                            } catch (e) {
+                                progress.textContent += `⚠️ 解析异常: ${line}\n`;
+                            }
+                        }
+                    }
+                    progress.scrollTop = progress.scrollHeight;
+                }
+            }).catch(err => {
+                progress.textContent += `❌ 请求失败: ${err.message}\n`;
+                statusEl.innerHTML = '<span class="badge badge-warn">失败</span>';
+            }).finally(() => { btn.disabled = false; });
+        }
+    </script>
+</body>
+</html>

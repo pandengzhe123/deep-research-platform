@@ -88,6 +88,44 @@ class SearchTool:
 
         return "\n".join(output_parts) if len(output_parts) > 1 else "未找到相关结果。"
 
+    async def search_fast(
+        self,
+        queries: list[str],
+        max_results: int = 3,
+    ) -> str:
+        """快速搜索 —— 跳过 LLM 摘要，直接用 Tavily 返回的原始摘要。
+
+        用于 Level 1 快速模式，全程不调 LLM 做网页摘要。
+        """
+        # 1. 并行搜索
+        tasks = [
+            self.tavily.search(q, max_results=max_results, include_raw_content=False)
+            for q in queries
+        ]
+        all_results = await asyncio.gather(*tasks)
+
+        # 2. 按 URL 去重
+        seen: dict[str, dict] = {}
+        for response in all_results:
+            for r in response.get("results", []):
+                url = r.get("url", "")
+                if url and url not in seen:
+                    seen[url] = r
+
+        # 3. 直接用 Tavily 自带的摘要，不调 LLM
+        output_parts = ["# 搜索结果\n"]
+        for i, (url, r) in enumerate(seen.items()):
+            title = r.get("title", url)
+            content = r.get("content", "")
+            if not content:
+                continue
+            output_parts.append(f"\n--- 来源 {i+1}: {title} ---")
+            output_parts.append(f"URL: {url}")
+            output_parts.append(f"\n{content}")
+            output_parts.append("\n" + "-" * 60)
+
+        return "\n".join(output_parts) if len(output_parts) > 1 else "未找到相关结果。"
+
     async def _fetch_and_summarize(self, url: str, result: dict) -> dict | None:
         """抓取网页内容并用 LLM 摘要。"""
         try:

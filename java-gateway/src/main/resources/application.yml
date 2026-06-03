@@ -1,0 +1,15 @@
+server:
+  port: 8080
+
+# Python Agent 地址
+agent:
+  url: http://localhost:8000
+
+logging:
+  level:
+    com.deepresearch: DEBUG
+
+spring:
+  threads:
+    virtual:
+      enabled: true   # Java 21 虚拟线程

@@ -1,27 +1,34 @@
-# Java 网关 + Deep Research Agent 架构设计与实现指南
+# Java 网关 + Python Agent 架构设计与实现指南
+
+> 更新于 2026-06-03，反映实际项目状态。
 
 ## 一、项目概述
 
 ### 1.1 背景
 
-[Open Deep Research](https://github.com/langchain-ai/open_deep_research) 是 LangChain 团队开发的开源深度研究智能体，基于 Python 的 LangGraph 框架构建，采用 Supervisor-Researcher 双层 Agent 架构，能够自动搜索网络并生成深度研究报告。
+本项目由两个子系统组成：
 
-然而，作为一个纯 Python 的 AI Agent 服务，它缺少生产环境所需的企业级特性：用户管理、并发调度、请求队列、流式推送、多实例部署等。本项目设计一个 **Java 网关层**，在不改动原 Agent 的前提下，补齐这些工程能力。
+| 子系统 | 语言 | 框架 | 端口 | 职责 |
+|--------|------|------|------|------|
+| **Python Agent** | Python 3.11 | FastAPI + OpenAI SDK | `:8000` | LLM 推理、搜索、报告生成 |
+| **Java 网关** | Java 21 | Spring Boot 3 + WebFlux | `:8080` | 用户接入、并发控制、SSE 转发 |
+
+Python Agent 是自己从零写的（借鉴 open_deep_research 架构，不依赖 LangChain/LangGraph）。Java 网关则给它加一层企业级的"壳"。
 
 ### 1.2 核心思路
 
 ```
 ┌──────────────────────────────────────────────────┐
-│                 不要重写 Agent                     │
-│            而是用 Java 给它做一层"壳"              │
+│              不要重写 Agent                        │
+│          而是用 Java 给它做一层"壳"                 │
 └──────────────────────────────────────────────────┘
 ```
 
-**Java 负责**：用户认证、请求调度、并发控制、会话管理、流式转发、多实例路由——这是 Java/Spring 生态最擅长的事。
+**Python 负责**：LLM 调用、Tavily 搜索、Agent 循环、报告生成 —— **AI 核心逻辑**。
 
-**Python Agent 负责**：LLM 调用、搜索工具、研究推理、报告生成——这是 Python AI 生态最擅长的事。
+**Java 负责**：用户接入、请求调度、SSE 转发、会话管理、限流 —— **工程化外壳**。
 
-两个语言各司其职，通过 HTTP 协议通信，互不侵入。
+两个进程通过 HTTP/SSE 通信，部署时各自独立容器。
 
 ---
 
@@ -33,11 +40,11 @@
 
 | 痛点 | 原项目现状 | 本项目解决方案 |
 |------|-----------|-------------|
-| **启动门槛高** | 需安装 Python + uv + LangGraph CLI + 配环境变量，Windows 上 GBK 编码报错 | 一个 `docker compose up` 或双击 `start.bat` 启动 |
-| **没有自主 UI** | 必须打开 `smith.langchain.com`，数据经过第三方服务器 | 内置 Web UI（Vue/React），离线可用，数据不出本地 |
-| **不会导出** | 报告只能从 Studio 里复制粘贴 | 一键导出 Markdown / PDF / Word（`export.bat`） |
-| **不可估费** | 提交前不知道会烧多少 token，单次可高达 500 万 | 提交前估算 token 量及费用，执行中实时显示花费 |
-| **不能暂停** | 研究跑一半只能等或杀进程，无法中途干预 | 支持暂停/恢复，断点续传 |
+| **启动门槛高** | 需安装 Python + uv + LangGraph CLI + 配环境变量，Windows 上 GBK 编码报错 | `start.bat` 双击启动，或 `docker compose up` |
+| **没有自主 UI** | 必须打开 `smith.langchain.com`，数据经过第三方服务器 | 内置 Web UI，离线可用，数据不出本地 |
+| **不会导出** | 报告只能从 Studio 里复制粘贴 | 一键导出 Markdown / PDF / Word |
+| **不可估费** | 提交前不知道会烧多少 token，单次可高达 500 万 | 提交前估算 token 量，执行中实时显示花费 |
+| **不能暂停** | 研究跑一半只能等或杀进程，无法中途干预 | API 支持取消任务（`DELETE /research/{id}`） |
 | **没有历史对比** | 两次研究结果没法并排比较 | 历史报告列表，支持多报告并排对比 |
 | **中文体验差** | 搜索词未做中文优化，搜索结果多为英文 | 自动检测语言，中文问题匹配中文搜索策略 |
 
@@ -48,9 +55,9 @@
 | **搜索太单一** | 仅 Tavily API，无 RAG 能力 | 混合检索：Tavily + RAG（向量数据库 + Embedding） |
 | **没有缓存** | 相同 query 重复调用 Tavily，重复计费 | 搜索结果缓存，TTL 可配，相同 query 直接复用 |
 | **错误处理粗糙** | token 超限直接暴力截断，丢失上下文 | 自动压缩历史而非截断，优先保留关键信息 |
-| **配置散落三处** | `.env` + Studio UI + `configuration.py` | 一个 `config.yml` 集中管理，带中文注释 |
-| **MCP 接入复杂** | 需配 URL + Token + OAuth + 工具白名单 | MCP 工具市场，点选即用 |
+| **配置散落三处** | `.env` + Studio UI + `configuration.py` | 一个 `config.py` 集中管理 |
 | **监控缺失** | 没有指标面板，看不出系统健康状态 | Prometheus + Grafana 监控面板 |
+| **依赖笨重** | 必须依赖 LangChain + LangGraph 全家桶 | Python Agent 只依赖 `openai` + `fastapi` + `tavily-python`，极简 |
 
 ### 2.3 Agent 行为缺陷（深度使用后暴露）
 
@@ -79,557 +86,399 @@
 
 ---
 
-## 三、系统架构
+## 三、当前系统架构
 
-### 2.1 整体架构图
+### 3.1 整体架构图
 
 ```
-                        ┌──────────────┐
-                        │   浏览器      │
-                        │  (前端 UI)    │
-                        └──────┬───────┘
-                               │ HTTP / SSE
-                               ▼
+                     ┌──────────────┐
+                     │   浏览器       │
+                     │  (前端 UI)     │
+                     └──────┬───────┘
+                            │ HTTP / SSE
+                            ▼
 ┌─────────────────────────────────────────────────────────┐
-│                   Java 网关层 (Spring Boot 3)             │
+│              Java 网关 (Spring Boot 3 + WebFlux)          │
+│                       localhost:8080                      │
 │                                                          │
-│  ┌──────────┐  ┌───────────┐  ┌────────────────────┐   │
-│  │ 认证模块  │  │ 会话管理   │  │  请求队列 + 限流    │   │
-│  │ JWT      │  │ thread_id │  │  Semaphore / Queue │   │
-│  │ Spring   │  │ 映射管理   │  │  优先级调度        │   │
-│  │ Security │  │           │  │                    │   │
-│  └──────────┘  └───────────┘  └────────────────────┘   │
-│                                                          │
-│  ┌──────────┐  ┌───────────┐  ┌────────────────────┐   │
-│  │ 路由层    │  │ 流式转发   │  │  多实例负载均衡     │   │
-│  │ REST API │  │ WebFlux   │  │  Round-Robin       │   │
-│  │ 参数校验  │  │ SSE 推送   │  │  Health Check     │   │
-│  └──────────┘  └───────────┘  └────────────────────┘   │
+│  POST /api/research          同步研究                     │
+│  POST /api/research/stream   SSE 流式（实时进度）          │
+│  GET  /api/sessions          历史记录                     │
+│  GET  /api/sessions/{id}     查看报告                     │
+│  DELETE /api/research/{id}   取消任务                     │
 │                                                          │
 │  ┌──────────────────────────────────────────────────┐   │
-│  │            LangGraph HTTP Client                  │   │
-│  │    - /threads  (创建/恢复会话)                     │   │
-│  │    - /runs     (提交研究任务)                     │   │
-│  │    - /runs/stream  (SSE 流式获取进度)             │   │
+│  │  内部组件                                         │   │
+│  │  ┌──────────┐  ┌──────────┐  ┌───────────────┐  │   │
+│  │  │AgentClient│  │SessionSvc│  │Semaphore(20)  │  │   │
+│  │  │(WebClient)│  │(H2/MySQL)│  │并发控制        │  │   │
+│  │  └──────────┘  └──────────┘  └───────────────┘  │   │
 │  └──────────────────────────────────────────────────┘   │
 │                                                          │
 └───────────────────────┬─────────────────────────────────┘
-                        │  HTTP (内网)
-          ┌─────────────┼─────────────┐
-          ▼             ▼             ▼
-   ┌──────────┐  ┌──────────┐  ┌──────────┐
-   │ Agent #1 │  │ Agent #2 │  │ Agent #3 │
-   │ LangGraph│  │ LangGraph│  │ LangGraph│
-   │ Server   │  │ Server   │  │ Server   │
-   │ :2024    │  │ :2025    │  │ :2026    │
-   │          │  │          │  │          │
-   │ Tavily   │  │ Tavily   │  │ Tavily   │
-   │ OpenAI   │  │ OpenAI   │  │ OpenAI   │
-   └──────────┘  └──────────┘  └──────────┘
-        Python 生态（原封不动）
+                        │  HTTP + SSE（内网）
+                        ▼
+┌─────────────────────────────────────────────────────────┐
+│            Python Agent (FastAPI + Tavily)                │
+│                    localhost:8000                         │
+│                                                          │
+│  GET  /health                 健康检查                    │
+│  POST /research               同步研究                    │
+│  POST /research/stream        SSE 流式                    │
+│  DELETE /research/{id}        取消任务                    │
+│                                                          │
+│  ┌──────────────────────────────────────────────────┐   │
+│  │  Level 1 Agent: 分析 → 搜索 → 报告                 │   │
+│  │  Level 2 Agent: 搜索 → 反思 → 再搜索 → ... → 报告  │   │
+│  │  Level 3 Agent: 多路并行搜索 (TODO)                │   │
+│  │  Level 4 Agent: Supervisor-Researcher (TODO)      │   │
+│  └──────────────────────────────────────────────────┘   │
+│                                                          │
+└─────────────────────────────────────────────────────────┘
 ```
 
-### 2.2 一次完整请求的调用链路
+### 3.2 一次完整请求的调用链路
 
 ```
-时间轴 →
-
-① 用户发起请求
-   POST /api/research  {"query": "量子计算的最新进展"}
+① 浏览器 POST /api/research/stream
+   {"question": "量子计算最新进展", "level": 2}
         │
-② Java: JWT 认证校验
+② Java: 创建会话、分配虚拟线程
         │
-③ Java: 查找或创建 LangGraph thread_id
-        │  (同一个用户在同一个话题下可以继承上下文)
+③ Java → Py: POST /research/stream
+   WebClient 发起请求，accept SSE
         │
-④ Java: 获取信号量许可（限流控制）
+④ Py: run_agent_with_sse()
+   ┌────┼──────────────────────────────────────────────┐
+   │    │ SSE: {"step":"planning","message":"分析问题中"}│
+   │    │ SSE: {"step":"searching","message":"搜索中"}   │
+   │    │ SSE: {"step":"thinking","message":"反思中"}    │
+   │    │ SSE: {"step":"reporting","message":"写报告"}    │
+   │    │ SSE: {"event":"done","data":{"report":"..."}} │
+   └────┼──────────────────────────────────────────────┘
         │
-⑤ Java: 选择一台 Agent 实例（负载均衡）
+⑤ Java: Flux<String> 逐条转发 SSE 给浏览器
+   （可选：存入数据库）
         │
-⑥ Java → Agent: POST /threads/{tid}/runs  (提交任务)
-        │
-⑦ Java ← Agent: SSE 事件流（实时进度）
-   ┌────┼────────────────────────────────────────┐
-   │    │ event: metadata  → "研究任务已拆分"      │
-   │    │ event: values    → "Researcher#1 搜索中" │
-   │    │ event: values    → "Researcher#2 搜索中" │
-   │    │ event: values    → "开始生成最终报告"     │
-   │    │ event: values    → "报告生成完成"         │
-   └────┼────────────────────────────────────────┘
-        │
-⑧ Java: SSE → SSE 透传/转换 → 前端
-   (可选: 将中间状态存入数据库)
-        │
-⑨ 前端: 实时展示研究进度，最终渲染 Markdown 报告
+⑥ 浏览器: 实时显示进度，最后渲染 Markdown 报告
 ```
 
 ---
 
 ## 四、核心模块设计
 
-### 3.1 认证模块
-
-**技术选型**：Spring Security + JWT
+### 4.1 AgentClient —— 封装对 Python 的 HTTP 调用
 
 ```java
-@Configuration
-@EnableWebSecurity
-public class SecurityConfig {
+@Service
+public class AgentClient {
 
-    @Bean
-    public SecurityFilterChain filterChain(HttpSecurity http) {
-        return http
-            .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/auth/**").permitAll()
-                .anyRequest().authenticated()
-            )
-            .oauth2ResourceServer(oauth2 -> oauth2
-                .jwt(Customizer.withDefaults())
-            )
+    private final WebClient client;
+
+    public AgentClient(@Value("${agent.url}") String agentUrl) {
+        this.client = WebClient.builder()
+            .baseUrl(agentUrl) // http://localhost:8000
             .build();
     }
-}
-```
 
-设计要点：
-- 登录接口返回 JWT token，后续请求携带 `Authorization: Bearer <token>`
-- 每个用户有自己的 `user_id`，用于隔离会话和配额
-- 管理员角色可以查看全局统计、管理队列
-
-### 3.2 会话管理模块
-
-LangGraph 使用 `thread_id` 来标识一个对话会话。同一个 thread_id 下的多次请求共享聊天历史。
-
-```java
-@Service
-public class SessionService {
-
-    // 数据库存储映射关系
-    // user_id → topic_id → thread_id
-
-    public String getOrCreateThreadId(Long userId, String topicId) {
-        // 查找该用户在该话题下的 thread_id
-        // 如果不存在，调用 LangGraph POST /threads 创建新会话
-        // 返回 thread_id
+    /**
+     * 同步调用 —— 等 Agent 完全跑完再返回。
+     */
+    public ResearchResponse research(String question, int level) {
+        return client.post()
+            .uri("/research")
+            .bodyValue(Map.of("question", question, "level", level))
+            .retrieve()
+            .bodyToMono(ResearchResponse.class)
+            .block(Duration.ofMinutes(5));  // Agent 可能跑几分钟
     }
 
-    public List<TopicInfo> getUserTopics(Long userId) {
-        // 返回该用户的所有历史话题列表
-    }
-}
-```
-
-为什么要做这个映射？
-
-- 原项目每次请求都是独立的 thread，**没有用户概念**
-- 网关层补上用户体系，让同一个用户的对话可以延续
-- 用户可以看到自己的历史研究记录
-
-### 3.3 并发调度模块
-
-这是 Java 网关最核心的价值所在。
-
-```java
-@Service
-public class ResearchScheduler {
-
-    // 全局并发数限制，防止 LLM API 被限流
-    private final Semaphore globalSemaphore = new Semaphore(20);
-
-    // 每用户并发限制
-    private final LoadingCache<Long, Semaphore> perUserSemaphore;
-
-    // 优先级队列（付费用户优先）
-    private final PriorityBlockingQueue<ResearchTask> priorityQueue;
-
-    public CompletableFuture<ResearchResult> submit(Long userId, String query) {
-        return CompletableFuture.supplyAsync(() -> {
-            // 1. 获取用户级许可
-            perUserSemaphore.get(userId).acquire();
-            try {
-                // 2. 获取全局许可
-                globalSemaphore.acquire();
-                try {
-                    // 3. 实际执行研究
-                    return executeResearch(userId, query);
-                } finally {
-                    globalSemaphore.release();
-                }
-            } finally {
-                perUserSemaphore.get(userId).release();
-            }
-        }, virtualThreadExecutor);  // 使用虚拟线程
-    }
-}
-```
-
-并发控制层级：
-
-```
-第一层：用户级 Semaphore (每用户 3 个并发)
-    └── 第二层：全局 Semaphore (总计 20 个并发)
-            └── 第三层：Agent 实例内部 max_concurrent_research_units (每个请求 5 个)
-```
-
-这样三层控制下来，最多有 20 × 5 = 100 个 Researcher 同时工作。
-
-### 3.4 流式转发模块
-
-LangGraph Server 的 `/runs/stream` 接口返回 SSE（Server-Sent Events）格式的实时进度。网关需要把它转发给前端。
-
-```java
-@RestController
-@RequestMapping("/api/research")
-public class ResearchController {
-
-    private final WebClient langGraphClient;
-
-    @GetMapping(value = "/stream/{topicId}", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<ServerSentEvent<String>> streamResearch(
-            @PathVariable String topicId,
-            @RequestParam String query,
-            @AuthenticationPrincipal Jwt jwt) {
-
-        Long userId = Long.valueOf(jwt.getSubject());
-        String threadId = sessionService.getOrCreateThreadId(userId, topicId);
-
-        // 向 LangGraph Server 发起流式请求
-        return langGraphClient.post()
-            .uri("/threads/{threadId}/runs/stream", threadId)
-            .bodyValue(Map.of(
-                "assistant_id", "deep-researcher",
-                "input", Map.of("messages", List.of(
-                    Map.of("role", "user", "content", query)
-                ))
-            ))
+    /**
+     * SSE 流式 —— 返回 Flux，网关不做缓冲，原样转发。
+     */
+    public Flux<String> researchStream(String question, int level) {
+        return client.post()
+            .uri("/research/stream")
+            .bodyValue(Map.of("question", question, "level", level))
             .accept(MediaType.TEXT_EVENT_STREAM)
             .retrieve()
-            .bodyToFlux(String.class)
-            // 转换为标准 SSE 格式
-            .map(data -> ServerSentEvent.builder(data).build())
-            // 出错时向前端发送错误事件
-            .onErrorResume(e -> Flux.just(
-                ServerSentEvent.builder("{\"error\": \"" + e.getMessage() + "\"}")
-                    .event("error")
-                    .build()
-            ));
-    }
-}
-```
-
-### 3.5 多实例负载均衡
-
-当单个 LangGraph Server 不够用时，可以水平扩展：
-
-```java
-@Component
-public class AgentLoadBalancer {
-
-    // 可用实例列表（可以通过配置中心动态更新）
-    private final List<String> instances = List.of(
-        "http://agent1.internal:2024",
-        "http://agent2.internal:2024",
-        "http://agent3.internal:2024"
-    );
-
-    private final AtomicInteger roundRobinIndex = new AtomicInteger(0);
-    private final WebClient.Builder webClientBuilder;
-
-    public String pickInstance() {
-        // Round-Robin 轮询
-        int idx = roundRobinIndex.getAndIncrement() % instances.size();
-        return instances.get(idx);
+            .bodyToFlux(String.class);
     }
 
-    // 可选：健康检查
-    @Scheduled(fixedDelay = 30000)
-    public void healthCheck() {
-        for (String instance : instances) {
-            try {
-                webClientBuilder.build()
-                    .get()
-                    .uri(instance + "/ok")
+    /**
+     * 健康检查 —— 网关启动时 / 定时探测 Agent 是否存活。
+     */
+    public boolean isHealthy() {
+        try {
+            return Boolean.TRUE.equals(
+                client.get().uri("/health")
                     .retrieve()
-                    .toBodilessEntity()
-                    .block(Duration.ofSeconds(5));
-                // 标记为健康
-            } catch (Exception e) {
-                // 标记为不健康，暂时摘除
-            }
+                    .bodyToMono(Map.class)
+                    .map(m -> "ok".equals(m.get("status")))
+                    .block(Duration.ofSeconds(3))
+            );
+        } catch (Exception e) {
+            return false;
         }
     }
 }
 ```
 
----
-
-## 五、技术栈一览
-
-| 层级 | 技术 | 用途 |
-|------|------|------|
-| **Java 框架** | Spring Boot 3.2+ | 应用框架 |
-| **响应式** | Spring WebFlux | 非阻塞 HTTP + SSE 流式推送 |
-| **并发** | Java 21 Virtual Threads | 高并发请求处理 |
-| **安全** | Spring Security + JWT + OAuth2 | 用户认证与授权 |
-| **HTTP 客户端** | WebClient | 调用 LangGraph Server API |
-| **数据库** | PostgreSQL / MySQL | 用户、会话、历史记录 |
-| **缓存** | Caffeine / Redis | 限流计数、会话缓存 |
-| **消息队列** | RabbitMQ / Kafka（可选） | 异步任务队列、削峰 |
-| **监控** | Micrometer + Prometheus | 指标采集 |
-| **AI Agent** | Python LangGraph Server | 深度研究核心引擎 |
-
----
-
-## 六、项目结构
-
-```
-deep-research-platform/
-├── java-gateway/                        # Java 网关（你写的）
-│   ├── pom.xml
-│   └── src/main/java/com/example/gateway/
-│       ├── GatewayApplication.java       # 启动类
-│       ├── config/
-│       │   ├── SecurityConfig.java       # Spring Security 配置
-│       │   ├── ExecutorConfig.java       # 虚拟线程执行器
-│       │   └── WebClientConfig.java      # HTTP 客户端配置
-│       ├── controller/
-│       │   ├── AuthController.java       # 登录/注册
-│       │   └── ResearchController.java   # 研究接口（核心）
-│       ├── service/
-│       │   ├── SessionService.java       # 会话管理
-│       │   ├── ResearchScheduler.java    # 并发调度
-│       │   └── StreamService.java        # 流式转发
-│       ├── client/
-│       │   ├── LangGraphClient.java      # LangGraph API 封装
-│       │   └── AgentLoadBalancer.java    # 多实例负载均衡
-│       ├── model/
-│       │   ├── User.java                # 用户实体
-│       │   ├── ResearchTask.java         # 研究任务
-│       │   └── Topic.java               # 话题实体
-│       └── repository/
-│           ├── UserRepository.java
-│           └── TopicRepository.java
-│
-├── python-agent/                         # Python Agent（不动）
-│   └── (open_deep_research 原项目)
-│
-├── frontend/                             # 前端 UI（可选）
-│   └── (Vue/React，调用 Java 网关的 API)
-│
-├── docker-compose.yml                    # 一键部署
-│   ├── java-gateway (端口 8080)
-│   ├── langgraph-server-1 (端口 2024)
-│   ├── langgraph-server-2 (端口 2025)
-│   ├── postgres (端口 5432)
-│   └── redis (端口 6379)
-│
-└── README.md
-```
-
----
-
-## 七、实现步骤
-
-### 第一阶段：基础打通（1-2 天）
-
-**目标**：Java 能调用 Python Agent，拿到结果。
-
-```
-□ 启动 LangGraph Server 本地 (端口 2024)
-□ 创建 Spring Boot 3 项目，引入 WebFlux
-□ 写一个简单的 LangGraphClient
-    - POST /threads             创建会话
-    - POST /threads/{id}/runs   提交任务
-□ 写一个简单的 ResearchController
-    - 接收 query
-    - 调用 LangGraphClient
-    - 返回最终结果
-□ 用 Postman 测试整个链路
-```
-
-### 第二阶段：流式进度（1 天）
-
-**目标**：前端能实时看到研究进度。
-
-```
-□ 对接 SSE 流式接口 /runs/stream
-□ 实现 WebFlux 的 Flux<SSEEvent> 转发
-□ 写一个简单的 HTML 页面验证 SSE
-```
-
-### 第三阶段：用户体系（1 天）
-
-**目标**：多用户隔离，每个人有自己的会话。
-
-```
-□ 集成 Spring Security + JWT
-□ 设计用户表、话题表
-□ 实现 SessionService（user_id ↔ thread_id 映射）
-□ 登录/注册接口
-□ 历史记录查询接口
-```
-
-### 第四阶段：并发控制（1-2 天）
-
-**目标**：控制并发，防止 LLM API 被打爆。
-
-```
-□ 全局 Semaphore 限流
-□ 每用户 Semaphore 限流
-□ 虚拟线程执行器配置
-□ 请求队列（超出并发数时排队而非拒绝）
-□ 超时与优雅降级处理
-```
-
-### 第五阶段：完善交付（1-2 天）
-
-**目标**：可演示、可部署。
-
-```
-□ 多实例负载均衡配置
-□ Docker Compose 一键部署脚本
-□ README 文档 + 架构图
-□ 基础前端页面（或者直接用 Swagger）
-□ 简单的错误处理与日志
-```
-
----
-
-## 八、关键设计决策
-
-### 7.1 为什么用 HTTP 而不是 gRPC 或消息队列？
-
-| 方案 | 优点 | 缺点 |
-|------|------|------|
-| **HTTP**（推荐） | LangGraph Server 原生支持；SSE 流式方便；调试简单 | 同步调用有超时风险 |
-| gRPC | 性能好、类型安全 | LangGraph 不原生支持，需要额外适配层 |
-| 消息队列 | 解耦彻底、削峰 | 研究任务是实时交互的，用户想等结果 |
-
-建议：**同步请求用 HTTP，如果后续有离线批量研究需求，再引入消息队列。**
-
-### 7.2 虚拟线程 vs 传统线程池
+### 4.2 ResearchController —— 前端调用的 REST 接口
 
 ```java
-// 传统方式：固定线程池
-ExecutorService executor = Executors.newFixedThreadPool(200);
-// 问题：200 个请求就把池子占满了，后面的全排队
+@RestController
+@RequestMapping("/api")
+public class ResearchController {
 
-// 虚拟线程方式：
-ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
-// 优势：可以同时处理上万个请求，每个请求一个虚拟线程
-//       虚拟线程非常廉价（几 KB 栈空间），阻塞时让出 CPU
-```
+    private final AgentClient agentClient;
 
-对于网关这种 IO 密集型场景（等待 LLM 响应），虚拟线程是完美选择。
-
-### 7.3 限流策略
-
-```
-并发数限制（同步）：
-  - 全局: Semaphore(20)
-  - 每用户: Semaphore(3)
-
-速率限制（异步）：
-  - 每分钟 60 个请求（Bucket4j 令牌桶）
-
-组合使用：
-  1. 先过速率限制（防止瞬时洪峰）
-  2. 再过并发限制（防止累积占用）
-```
-
----
-
-## 九、LangGraph Server API 关键接口
-
-Java 网关需要调用的 LangGraph API：
-
-| 方法 | 路径 | 用途 |
-|------|------|------|
-| `POST` | `/threads` | 创建新会话 |
-| `GET` | `/threads/{id}/state` | 获取会话状态/历史 |
-| `POST` | `/threads/{id}/runs` | 提交研究任务（同步等待） |
-| `POST` | `/threads/{id}/runs/stream` | 提交研究任务（SSE 流式） |
-| `GET` | `/assistants` | 获取可用 Agent 列表 |
-
-示例——创建会话：
-
-```bash
-curl -X POST http://127.0.0.1:2024/threads \
-  -H "Content-Type: application/json" \
-  -d '{}'
-
-# 响应: {"thread_id": "d4f8e2a1-..."}
-```
-
-示例——提交研究任务（流式）：
-
-```bash
-curl -X POST http://127.0.0.1:2024/threads/{thread_id}/runs/stream \
-  -H "Content-Type: application/json" \
-  -d '{
-    "assistant_id": "deep-researcher",
-    "input": {
-      "messages": [{"role": "user", "content": "量子计算最新进展"}]
+    /**
+     * 同步 —— 等结果。
+     */
+    @PostMapping("/research")
+    public Mono<ResponseEntity<ResearchResponse>> research(@RequestBody ResearchRequest req) {
+        return Mono.fromCallable(() ->
+            ResponseEntity.ok(agentClient.research(req.question(), req.level()))
+        ).subscribeOn(Schedulers.boundedElastic());
     }
-  }'
 
-# 响应: SSE 事件流
+    /**
+     * 流式 —— 实时 SSE，核心接口。
+     */
+    @PostMapping(value = "/research/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux<String> researchStream(@RequestBody ResearchRequest req) {
+        return agentClient.researchStream(req.question(), req.level());
+    }
+}
+```
+
+### 4.3 会话管理
+
+```java
+@Service
+public class SessionService {
+
+    // 轻量实现：内存存储
+    private final ConcurrentHashMap<String, ResearchSession> sessions = new ConcurrentHashMap<>();
+
+    public ResearchSession createSession(String userId, String question) {
+        String id = UUID.randomUUID().toString().substring(0, 8);
+        ResearchSession session = new ResearchSession(id, userId, question);
+        sessions.put(id, session);
+        return session;
+    }
+
+    public void appendReport(String sessionId, String report) {
+        ResearchSession session = sessions.get(sessionId);
+        if (session != null) session.setReport(report);
+    }
+
+    public List<ResearchSession> getUserSessions(String userId) {
+        return sessions.values().stream()
+            .filter(s -> s.getUserId().equals(userId))
+            .toList();
+    }
+}
+```
+
+### 4.4 并发控制
+
+```java
+@Service
+public class ResearchScheduler {
+
+    // 全局最多 20 个并发研究任务（保护 Python Agent 和 LLM API）
+    private final Semaphore semaphore = new Semaphore(20);
+
+    public <T> T execute(Supplier<T> task) throws InterruptedException {
+        semaphore.acquire();
+        try {
+            return task.get();
+        } finally {
+            semaphore.release();
+        }
+    }
+}
+```
+
+### 4.5 超时处理
+
+```java
+@RestControllerAdvice
+public class GlobalExceptionHandler {
+
+    @ExceptionHandler(TimeoutException.class)
+    public ResponseEntity<Map<String, String>> handleTimeout(TimeoutException e) {
+        return ResponseEntity
+            .status(504)
+            .body(Map.of("error", "研究超时，请简化问题或稍后重试"));
+    }
+}
 ```
 
 ---
 
-## 十、部署架构
+## 五、Java 网关文件清单
+
+```
+java-gateway/
+├── pom.xml                                   Maven 配置
+│   └── 依赖: spring-boot-starter-webflux
+│
+├── src/main/resources/application.yml
+│   agent.url: http://localhost:8000
+│   server.port: 8080
+│
+└── src/main/java/com/deepresearch/gateway/
+    ├── GatewayApplication.java               @SpringBootApplication
+    ├── config/
+    │   └── WebClientConfig.java              WebClient Bean
+    ├── controller/
+    │   └── ResearchController.java           REST 接口
+    ├── service/
+    │   ├── AgentClient.java                  Python HTTP 客户端
+    │   ├── SessionService.java               会话管理
+    │   └── ResearchScheduler.java            并发控制
+    └── model/
+        └── ResearchModels.java               Request/Response 记录类
+```
+
+总共 **8 个文件**，依赖仅 `spring-boot-starter-webflux`，极其干净。
+
+---
+
+## 六、实现步骤
+
+### 第一阶段：基础打通（30 分钟）
+
+**目标**：Java 成功调用 Python Agent，拿到报告。
+
+```
+□ mvn archetype 创建 Spring Boot 项目
+□ 加 spring-boot-starter-webflux 依赖
+□ 写 WebClientConfig（一个 Bean）
+□ 写 AgentClient.research()
+□ 写 ResearchController（一个 POST）
+□ 启动 Python Agent（start.bat）
+□ 启动 Java 网关
+□ 用 curl 测试：POST /api/research
+```
+
+### 第二阶段：SSE 流式（20 分钟）
+
+**目标**：前端实时看到研究进度。
+
+```
+□ 写 AgentClient.researchStream()（返回 Flux<String>）
+□ 写 ResearchController.researchStream()（produces = TEXT_EVENT_STREAM）
+□ 写一个 static HTML 页面用 EventSource 消费
+□ 验证：进度一条条弹出来
+```
+
+### 第三阶段：完善（1-2 小时）
+
+```
+□ SessionService（内存/H2 存储）
+□ ResearchScheduler（Semaphore 限流）
+□ 超时处理（@ControllerAdvice）
+□ 全局异常处理
+□ 启动脚本
+```
+
+---
+
+## 七、关键设计决策
+
+### 7.1 为什么是 HTTP + SSE，不是 WebSocket？
+
+| 场景 | 方案 |
+|------|------|
+| 进度推送（单向，服务器→客户端） | **SSE** —— 更简单，浏览器原生 `EventSource` 支持 |
+| 双向实时通信 | WebSocket |
+
+研究进度是纯单向的推送，SSE 正好，没到需要 WebSocket 的地步。
+
+### 7.2 为什么是 WebFlux，不是 Tomcat？
+
+一个研究任务要跑 1-3 分钟，传统 Tomcat（一个请求占一个线程）很快就会被堵满。WebFlux 响应式模型不占用线程等待 I/O，一条线程可以同时处理几百个连接。
+
+### 7.3 为什么请求体设计这么简单？
+
+```json
+{"question": "...", "level": 2}
+```
+
+Python Agent 的接口就是这两个字段。Java 网关不增加复杂度——原样透传，Java 只负责"接客"，不改"内容"。
+
+---
+
+## 八、Python ↔ Java 通信契约
+
+### Python 提供的接口（`http://localhost:8000`）
+
+| 方法 | 路径 | 请求 | 响应 |
+|------|------|------|------|
+| `GET` | `/health` | 无 | `{"status":"ok","model":"deepseek-v4-flash"}` |
+| `POST` | `/research` | `{"question":"...","level":2}` | `{"report":"# 报告...","language":"auto"}` |
+| `POST` | `/research/stream` | 同上 | SSE 事件流（见下方格式） |
+| `DELETE` | `/research/{id}` | 无 | `{"status":"cancelled"}` |
+
+### SSE 事件格式
+
+```
+event: status
+data: {"step":"planning","message":"分析问题中"}
+
+event: status
+data: {"step":"searching","message":"搜索: 量子计算进展","round":1}
+
+event: status
+data: {"step":"thinking","message":"信息充足，停止搜索","round":2}
+
+event: status
+data: {"step":"reporting","message":"写报告中"}
+
+event: done
+data: {"report":"# 研究报告\n\n...","language":"auto"}
+```
+
+Java 网关**不解析** SSE 内容，只做 `Flux<String>` 透明转发——保持解耦。
+
+---
+
+## 九、部署
 
 ### 开发环境
 
-```
-docker compose up
+```bash
+# 终端 1：启动 Python Agent
+cd agent && start.bat       # → localhost:8000
 
-本地访问：
-  Java 网关: http://localhost:8080
-  LangGraph: http://localhost:2024
-  Swagger:   http://localhost:8080/swagger-ui.html
+# 终端 2：启动 Java 网关
+cd java-gateway && mvn spring-boot:run   # → localhost:8080
+
+# 浏览器打开
+http://localhost:8080
 ```
 
 ### 生产环境
 
 ```
-                    ┌──────────────┐
-                    │  Nginx / CDN │
-                    └──────┬───────┘
-                           │
-              ┌────────────┼────────────┐
-              ▼            ▼            ▼
-        ┌─────────┐  ┌─────────┐  ┌─────────┐
-        │Gateway#1│  │Gateway#2│  │Gateway#3│   (K8s Pod, 自动扩缩)
-        └────┬────┘  └────┬────┘  └────┬────┘
-             │            │            │
-             └────────────┼────────────┘
-                          │
-              ┌───────────┼───────────┐
-              ▼           ▼           ▼
-        ┌─────────┐ ┌─────────┐ ┌─────────┐
-        │Agent #1 │ │Agent #2 │ │Agent #3 │   (固定池, GPU 实例)
-        └─────────┘ └─────────┘ └─────────┘
+docker compose up
+  ├── agent          (Python, :8000)
+  ├── java-gateway   (Java 21, :8080)
+  └── (可选) postgres (会话存储)
 ```
 
 ---
 
-## 十一、总结
+## 十、总结
 
-这个方案的核心哲学是 **"各司其职"**：
-
-| | Java 擅长 | Python 擅长 |
+| | Java 侧 | Python 侧 |
 |---|---|---|
-| **能力** | 企业级工程、并发控制、Web 服务 | AI/LLM 生态、LangChain、数据处理 |
-| **在项目中的角色** | 网关、调度器、门面 | 核心引擎，原封不动 |
-| **代码量** | ~2000 行 | 0 行改动 |
+| **代码量** | ~400 行（8 个文件） | ~600 行（6 个文件） |
+| **关注点** | 认证、限流、分发、转发 | LLM、搜索、Agent 逻辑 |
+| **改动频率** | 低（基础设施） | 高（模型调优、加工具） |
 
-这样的项目写进简历，展示的是：
-
-1. **架构设计能力**：你懂得如何为 AI 服务设计工程化的网关层
-2. **并发编程功底**：虚拟线程、Semaphore、SSE 流式处理
-3. **技术视野**：Java + Python 混合架构，而不是固守单一语言
-4. **工程化思维**：不是"写个 Demo"，而是考虑了认证、限流、负载均衡、水平扩展
-
-这就是一个可以拿到面试中去深入聊的项目。
+这个架构的核心价值在于：**Agent 逻辑和工程外壳完全解耦**，两边可以独立迭代、独立部署。面试时你把 Python Agent 的 Level 1→4 渐进演进和 Java 网关的架构设计放在一起讲，展现的是"能写核心逻辑也能做系统工程"的复合能力。

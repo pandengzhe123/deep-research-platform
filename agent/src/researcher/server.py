@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
-from .agent import Level1Agent, Level2Agent
+from .agent import FastLevel1Agent, Level1Agent, Level2Agent
 from .config import config
 
 app = FastAPI(title="Deep Researcher Agent", version="0.1.0")
@@ -69,13 +69,12 @@ async def run_agent_with_sse(
 ) -> AsyncGenerator[dict, None]:
     """运行 Agent 并以 SSE 事件流返回进度。"""
     try:
-        # ---- Step 1: 规划搜索 ----
+        # ---- Step 1: 搜索 ----
         from .llm import LLMClient
         from .search import SearchTool
         from .agent import (
             AGENT_SYSTEM,
-            PLAN_PROMPT,
-            PLAN_SCHEMA,
+            FAST_REPORT_PROMPT,
             REPORT_PROMPT,
             TOOLS,
         )
@@ -84,6 +83,45 @@ async def run_agent_with_sse(
         search_tool = SearchTool()
         rounds = max_rounds or config.max_search_rounds
 
+        if level == 1:
+            # 极速模式: 跳过 LLM 规划 → 直接搜索 → 1 次 LLM 写报告
+            yield {"event": "status", "data": json.dumps({
+                "step": "searching",
+                "message": "极速搜索中（跳过 LLM 规划 + LLM 摘要，全程仅 1 次 LLM 调用）...",
+            })}
+
+            if cancel.is_set():
+                return
+
+            search_results = await search_tool.search_fast(
+                queries=[question],
+                max_results=3,
+            )
+            all_results = [search_results]
+
+            yield {"event": "status", "data": json.dumps({
+                "step": "reporting",
+                "message": "正在撰写报告（全程唯一一次 LLM 调用）...",
+            })}
+
+            if cancel.is_set():
+                return
+
+            report = llm.chat(
+                system_prompt="你是专业的深度研究报告撰写助手。简洁、准确、有引用。",
+                user_message=FAST_REPORT_PROMPT.format(
+                    question=question,
+                    search_results="\n\n".join(all_results),
+                ),
+            )
+
+            yield {"event": "done", "data": json.dumps({
+                "report": report,
+                "language": language,
+            })}
+            return
+
+        # ---- Level 2: 规划 + 搜索-反思循环 ----
         yield {"event": "status", "data": json.dumps({
             "step": "planning",
             "message": "正在分析问题，规划搜索策略...",
@@ -91,6 +129,8 @@ async def run_agent_with_sse(
 
         if cancel.is_set():
             return
+
+        from .agent import PLAN_PROMPT, PLAN_SCHEMA
 
         plan = llm.structured_output(
             system_prompt=PLAN_PROMPT,
@@ -100,7 +140,7 @@ async def run_agent_with_sse(
         queries = plan.get("search_queries", [question])
         yield {"event": "status", "data": json.dumps({
             "step": "planned",
-            "message": f"搜索计划已生成",
+            "message": f"搜索计划已生成（Level 2 将进行多轮搜索+反思）",
             "queries": queries,
             "understanding": plan.get("understanding", ""),
         })}
@@ -108,93 +148,83 @@ async def run_agent_with_sse(
         if cancel.is_set():
             return
 
-        # ---- Step 2: 搜索-反思循环 ----
-        if level == 1:
-            # Level 1: 一次搜索
+        # ---- Step 2: 搜索-反思循环（Level 2） ----
+        messages: list[dict] = [
+            {"role": "user", "content": f"请研究以下问题，并在信息充分时给出报告：\n\n{question}"}
+        ]
+        all_results: list[str] = []
+        system = AGENT_SYSTEM.format(max_rounds=rounds)
+
+        for round_num in range(1, rounds + 1):
+            if cancel.is_set():
+                return
+
             yield {"event": "status", "data": json.dumps({
-                "step": "searching",
-                "message": f"搜索中（{len(queries)} 个查询）...",
+                "step": "thinking",
+                "message": f"第 {round_num}/{rounds} 轮决策中...",
+                "round": round_num,
             })}
-            search_results = await search_tool.search(queries)
-            all_results = [search_results]
-        else:
-            # Level 2: 搜索-反思循环
-            messages: list[dict] = [
-                {"role": "user", "content": f"请研究以下问题，并在信息充分时给出报告：\n\n{question}"}
-            ]
-            all_results: list[str] = []
-            system = AGENT_SYSTEM.format(max_rounds=rounds)
 
-            for round_num in range(1, rounds + 1):
-                if cancel.is_set():
-                    return
+            msg = llm.chat_with_tools(
+                system_prompt=system,
+                messages=messages,
+                tools=TOOLS,
+            )
 
+            if not msg.tool_calls:
                 yield {"event": "status", "data": json.dumps({
-                    "step": "thinking",
-                    "message": f"第 {round_num}/{rounds} 轮决策中...",
+                    "step": "decided",
+                    "message": "信息已足够，停止搜索",
                     "round": round_num,
                 })}
+                break
 
-                msg = llm.chat_with_tools(
-                    system_prompt=system,
-                    messages=messages,
-                    tools=TOOLS,
-                )
+            # 执行工具调用
+            messages.append({
+                "role": "assistant",
+                "content": msg.content or "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                    }
+                    for tc in msg.tool_calls
+                ],
+            })
 
-                if not msg.tool_calls:
+            for tc in msg.tool_calls:
+                name = tc.function.name
+                args = json.loads(tc.function.arguments)
+
+                if name == "search":
+                    qs = args.get("queries", [question])
                     yield {"event": "status", "data": json.dumps({
-                        "step": "decided",
-                        "message": "信息已足够，停止搜索",
+                        "step": "searching",
+                        "message": f"搜索: {', '.join(qs)}",
+                        "round": round_num,
+                        "queries": qs,
+                    })}
+                    result = await search_tool.search(qs)
+                    all_results.append(result)
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": result,
+                    })
+
+                elif name == "think":
+                    reflection = args.get("reflection", "")
+                    yield {"event": "status", "data": json.dumps({
+                        "step": "thinking",
+                        "message": reflection[:150] + ("..." if len(reflection) > 150 else ""),
                         "round": round_num,
                     })}
-                    break
-
-                # 执行工具调用
-                messages.append({
-                    "role": "assistant",
-                    "content": msg.content or "",
-                    "tool_calls": [
-                        {
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                        }
-                        for tc in msg.tool_calls
-                    ],
-                })
-
-                for tc in msg.tool_calls:
-                    name = tc.function.name
-                    args = json.loads(tc.function.arguments)
-
-                    if name == "search":
-                        qs = args.get("queries", [question])
-                        yield {"event": "status", "data": json.dumps({
-                            "step": "searching",
-                            "message": f"搜索: {', '.join(qs)}",
-                            "round": round_num,
-                            "queries": qs,
-                        })}
-                        result = await search_tool.search(qs)
-                        all_results.append(result)
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tc.id,
-                            "content": result,
-                        })
-
-                    elif name == "think":
-                        reflection = args.get("reflection", "")
-                        yield {"event": "status", "data": json.dumps({
-                            "step": "thinking",
-                            "message": reflection[:150] + ("..." if len(reflection) > 150 else ""),
-                            "round": round_num,
-                        })}
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tc.id,
-                            "content": f"反思已记录",
-                        })
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": "反思已记录",
+                    })
 
         if cancel.is_set():
             return
