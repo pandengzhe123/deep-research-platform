@@ -67,24 +67,19 @@ public class ResearchController {
     }
 
     /**
-     * SSE 流式研究 —— 实时推送进度，这是网关的核心接口。
+     * SSE 流式研究 —— 实时推送进度。
      */
     @PostMapping(value = "/research/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<String> researchStream(@RequestBody ResearchRequest req) {
-        // 创建会话
         ResearchSession session = sessionService.createSession("anonymous", req.question());
-
-        // 首条事件：告诉前端 session_id
         String headerEvent = "event: session\ndata: {\"id\": \"" + session.getId() + "\"}\n\n";
 
         return Flux.just(headerEvent)
                 .concatWith(
                         agentClient.researchStream(req)
-                                .doOnComplete(() ->
-                                        log.info("研究完成: session={}", session.getId()))
+                                .doOnComplete(() -> log.info("研究完成: session={}", session.getId()))
                                 .doOnError(e -> {
-                                    log.error("研究异常: session={}, error={}",
-                                            session.getId(), e.getMessage());
+                                    log.error("研究异常: session={}, error={}", session.getId(), e.getMessage());
                                     sessionService.markError(session.getId());
                                 })
                 );

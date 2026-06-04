@@ -4,6 +4,7 @@ import com.deepresearch.gateway.model.ResearchModels.ResearchRequest;
 import com.deepresearch.gateway.model.ResearchModels.ResearchResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
@@ -44,15 +45,7 @@ public class AgentClient {
     }
 
     /**
-     * SSE 流式研究 —— 实时推送进度。
-     * 返回 Flux<String>，网关不做解析，透明转发给前端。
-     *
-     * Python 返回的 SSE 事件格式：
-     *   event: status
-     *   data: {"step":"searching","message":"搜索: ...","round":1}
-     *
-     *   event: done
-     *   data: {"report":"# 报告\n...","language":"auto"}
+     * SSE 流式研究。返回 Flux<String>，每条是完整的 SSE 事件文本。
      */
     public Flux<String> researchStream(ResearchRequest request) {
         log.info("流式研究请求: question={}, level={}", request.question(), request.level());

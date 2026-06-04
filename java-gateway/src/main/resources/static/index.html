@@ -62,100 +62,52 @@
             const statusEl = document.getElementById('status');
 
             btn.disabled = true;
-            progress.textContent = '⏳ 提交中...\n';
+            progress.textContent = '';
             reportDiv.style.display = 'none';
             reportDiv.innerHTML = '';
 
-            // 先用同步接口测通
-            const useSync = true;  // 改成 false 试用流式
-            const url = useSync ? '/api/research' : '/api/research/stream';
+            // 计时器 —— 让用户知道没卡死
+            const startTime = Date.now();
+            let timerId = setInterval(() => {
+                const elapsed = Math.floor((Date.now() - startTime) / 1000);
+                const min = Math.floor(elapsed / 60);
+                const sec = elapsed % 60;
+                statusEl.innerHTML = '<span style="color:#6366f1;font-weight:600">⏳ 运行中 ' + min + '分' + (sec < 10 ? '0' : '') + sec + '秒</span>';
+            }, 1000);
 
-            if (useSync) {
-                fetch('/api/research', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ question, level, context: contextHistory })
-                }).then(res => res.json()).then(data => {
-                    // 处理澄清追问
-                    if (data.need_clarify) {
-                        // 把当前问答追加到上下文
-                        contextHistory += (contextHistory ? '\n\n' : '') + '用户: ' + question;
-                        progress.textContent += '❓ Agent 需要你补充信息:\n\n';
-                        progress.textContent += data.question + '\n\n';
-                        progress.textContent += '请在输入框中补充说明后再次提交。\n';
-                        statusEl.innerHTML = '<span class="badge badge-warn">需要补充</span>';
-                        btn.disabled = false;
-                        return;
-                    }
-                    // 研究完成了，清空上下文
-                    contextHistory = '';
-                    console.log('收到数据:', data);
-                    progress.textContent += '✅ 研究完成（report长度: ' + (data.report ? data.report.length : 0) + '）\n';
-                    statusEl.innerHTML = '<span class="badge badge-ok">完成</span>';
-                    if (data.report) {
-                        reportDiv.innerHTML = data.report
-                            .replace(/### /g, '<h3>').replace(/## /g, '<h2>').replace(/# /g, '<h1>')
-                            .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
-                            .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
-                            .replace(/\n- /g, '\n• ');
-                        reportDiv.style.display = 'block';
-                    }
-                }).catch(err => {
-                    progress.textContent += `❌ 请求失败: ${err.message}\n`;
-                    statusEl.innerHTML = '<span class="badge badge-warn">失败</span>';
-                    contextHistory = '';
-                }).finally(() => { btn.disabled = false; });
-                return;
-            }
-
-            // 流式模式
-            fetch(url, {
+            // 同步模式 —— 稳定可靠
+            fetch('/api/research', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ question, level, context: contextHistory })
-            }).then(async response => {
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
-                let buffer = '';
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    buffer += decoder.decode(value, { stream: true });
-
-                    const parts = buffer.split('\n\n');
-                    buffer = parts.pop();
-
-                    for (const part of parts) {
-                        const line = part.trim();
-                        if (line.startsWith('data: ')) {
-                            try {
-                                const obj = JSON.parse(line.slice(6));
-                                if (obj.step) {
-                                    const icons = {planning:'🧠',planned:'✅',searching:'🔍',thinking:'💭',reporting:'📝',decided:'🛑'};
-                                    const icon = icons[obj.step] || '⏳';
-                                    const rd = obj.round ? ` [第${obj.round}轮]` : '';
-                                    progress.textContent += `${icon} ${obj.message}${rd}\n`;
-                                }
-                                if (obj.report) {
-                                    progress.textContent += '✅ 研究完成\n';
-                                    statusEl.innerHTML = '<span class="badge badge-ok">完成</span>';
-                                    reportDiv.innerHTML = obj.report
-                                        .replace(/### /g, '<h3>').replace(/## /g, '<h2>').replace(/# /g, '<h1>')
-                                        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
-                                        .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
-                                    reportDiv.style.display = 'block';
-                                }
-                            } catch (e) {
-                                progress.textContent += `⚠️ 解析异常: ${line}\n`;
-                            }
-                        }
-                    }
-                    progress.scrollTop = progress.scrollHeight;
+            }).then(res => {
+                clearInterval(timerId);
+                if (!res.ok) throw new Error('服务器返回 ' + res.status);
+                return res.json();
+            }).then(data => {
+                if (data.need_clarify) {
+                    contextHistory += (contextHistory ? '\n\n' : '') + '用户: ' + question;
+                    progress.textContent = '❓ ' + (data.question || '需要补充信息') + '\n\n请在输入框补充后重新提交\n';
+                    statusEl.innerHTML = '<span class="badge badge-warn">需要补充</span>';
+                    btn.disabled = false;
+                    return;
+                }
+                contextHistory = '';
+                progress.textContent = '✅ 研究完成\n';
+                statusEl.innerHTML = '<span class="badge badge-ok">完成</span>';
+                if (data.report) {
+                    reportDiv.innerHTML = data.report
+                        .replace(/### /g, '<h3>').replace(/## /g, '<h2>').replace(/# /g, '<h1>')
+                        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+                        .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+                        .replace(/\n- /g, '\n• ');
+                    reportDiv.style.display = 'block';
                 }
             }).catch(err => {
-                progress.textContent += `❌ 请求失败: ${err.message}\n`;
+                clearInterval(timerId);
+                progress.textContent = '❌ 请求失败: ' + err.message + '\n';
                 statusEl.innerHTML = '<span class="badge badge-warn">失败</span>';
+                contextHistory = '';
             }).finally(() => { btn.disabled = false; });
         }
     </script>

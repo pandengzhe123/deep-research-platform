@@ -1,21 +1,21 @@
 # DeepResearch Platform 开发进度
 
-> 最后更新：2026年6月3日
+> 最后更新：2026年6月4日
 
 ## 总览
 
 ```
-整体进度  █████████████░░░░░  65%
+整体进度  █████████████░░░░░  70%
 
 ├── Python Agent      ██████████████████  95%
-├── Java 网关          ████████░░░░░░░░░░  45%
-├── 前端 UI            ██░░░░░░░░░░░░░░░░  10%
+├── Java 网关          ██████████░░░░░░░░  50%
+├── 前端 UI            ████░░░░░░░░░░░░░░  20%
 ├── RAG 集成           ░░░░░░░░░░░░░░░░░░   0%
 ├── 部署              ██░░░░░░░░░░░░░░░░  10%
-└── 文档              ██████████████████  90%
+└── 文档              ███████████████████  95%
 ```
 
-**代码量：2,100 行**（Python 1,457 + Java 492 + HTML 143）
+**代码量：~2,200 行**（Python 1,003 + Java 492 + HTML 120 + 文档 ~600）
 
 ---
 
@@ -31,48 +31,39 @@
 | Level 1 Fast | ✅ | 极速版，全程 1 次 LLM，15-30 秒 |
 | Level 2 | ✅ | 搜索-反思 5 轮循环，Function Calling 驱动 |
 | Level 3 | ✅ | LLM 拆题 → asyncio.gather 并行 Level 2 → 汇总 |
-| Level 4 | ✅ | Supervisor 循环调度 → 分批派遣 Level 2 → ResearchComplete → 汇总 |
+| Level 4 | ✅ | Supervisor 循环调度 → ResearchComplete → 汇总 |
 | FastAPI 服务 | ✅ | `/research` + `/research/stream`(SSE) + `/health` |
+| **架构重构** | ✅ | server.py 从 460 行缩到 218 行，消灭重复 Agent 逻辑，on_progress 回调 |
 | 任务取消 | ✅ | `DELETE /research/{id}` |
 | 报告导出 | | Markdown → PDF/Word |
 | 搜索结果缓存 | | 相同 query 复用 |
 
-## Java 网关（45%）
+## Java 网关（50%）
 
 | 任务 | 状态 | 说明 |
 |------|:--:|------|
 | Spring Boot 项目初始化 | ✅ | Maven + JDK 21，仅依赖 webflux |
-| AgentClient | ✅ | WebClient 封装，同步+流式+健康检查+取消 |
+| AgentClient | ✅ | WebClient，同步+流式+健康检查+取消 |
 | ResearchController | ✅ | 4 个接口，Level 1-4 全支持 |
-| SessionService | ✅ | 内存存储，会话创建→报告写入→查询 |
-| ResearchScheduler | ✅ | Semaphore(20) 并发控制 |
-| Web UI | ✅ | 内置 HTML，Level 1-4 下拉切换 |
-| 编译运行 | ✅ | `mvn compile && spring-boot:run` |
-| 端到端验证 | ✅ | 浏览器→Java→Python→Agent→Tavily→报告 OK |
-| SSE 流式转发 | ⚠️ | 同步模式稳定，SSE 流式偶有问题 |
-| 会话持久化 | | 当前内存，需 H2/MySQL |
+| SessionService | ✅ | 内存存储，会话生命周期管理 |
+| ResearchScheduler | ✅ | Semaphore(20) 全局并发控制 |
+| Web UI | ✅ | 内置 HTML，Level 1-4 下拉 + 计时器 |
+| 编译运行 | ✅ | mvn compile && spring-boot:run |
+| 端到端验证 | ✅ | 浏览器→Java→Python→Agent→Tavily→报告全通 |
+| SSE 流式转发 | ⚠️ | Python SSE 正常，Java→浏览器缓冲待修 |
+| 会话持久化 | | H2/MySQL 替换内存 |
 | JWT 认证 | | |
 | 费用估算 | | |
 
-| 任务 | 状态 | 说明 |
-|------|:--:|------|
-| Spring Boot 项目初始化 | | |
-| LangGraph HTTP Client | | 封装对 Python Agent 的调用 |
-| 会话管理 | | 用户 → thread_id 映射 |
-| JWT 认证 | | Spring Security + JWT |
-| SSE 流式转发 | | WebFlux 订阅 Python SSE → 转发前端 |
-| 并发调度 | | Semaphore + 虚拟线程 |
-| 限流控制 | | 全局 + 每用户 |
-| 负载均衡 | | Round-Robin 多 Agent 实例 |
-| 费用估算 | | 提交前预估 token 量 |
-
-## 前端 UI（10%）
+## 前端 UI（20%）
 
 | 任务 | 状态 | 说明 |
 |------|:--:|------|
 | 内置 HTML 测试页 | ✅ | `index.html`，同步模式 OK |
-| SSE 流式进度展示 | ⚠️ | 解析有 bug，当前用同步模式 |
+| **计时器** | ✅ | 提交后实时显示已运行时间，挂掉立即提示 |
 | Markdown 渲染 | ✅ | 基础渲染（标题+链接+粗体） |
+| 多轮对话上下文记忆 | ✅ | clarify 追问自动拼接历史 |
+| 流式实时进度 | ⚠️ | Python SSE 正常，Java 透传有缓冲待修 |
 | 框架选型 | | Vue 3 / React（后续） |
 | 报告导出按钮 | | |
 | 历史记录页 | | |
