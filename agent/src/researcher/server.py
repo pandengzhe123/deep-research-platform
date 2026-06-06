@@ -101,7 +101,7 @@ async def run_agent_with_sse(
 
         # ---- 创建 Agent（走 agent.py 的真 Agent） ----
         if level == 1:
-            agent = FastLevel1Agent(on_progress=on_progress)
+            agent = FastLevel1Agent(on_progress=on_progress, kb_enabled=kb_enabled)
         elif level == 3:
             agent = Level3Agent(on_progress=on_progress)
         elif level == 4:
