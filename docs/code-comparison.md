@@ -173,12 +173,11 @@ LangGraph Server 内置 SSE             FastAPI + sse-starlite 手动实现
 
 | 功能 | 原项目代码位置 | 你 |
 |------|-------------|-----|
-| 用户澄清 | `clarify_with_user()` | ✅ 已加 |
+| 用户澄清 | `clarify_with_user()` | ✅ 浏览器+命令行双入口 |
 | 研究简报 | `write_research_brief()` | ✅ 合并进规划步骤 |
-| 压缩研究 | `compress_research()` | ✅ 已加 |
+| 压缩研究 | `compress_research()` | ✅ Level 2 内置 |
 | Token 超限处理 | `is_token_limit_exceeded()` + 渐进截断 | ❌ |
 | MCP 集成 | `load_mcp_tools()` + OAuth | ❌ |
-| 多搜索后端 | `get_search_tool()` 4 种后端 | ❌ 只有 Tavily |
 | 多模型供应商 | `get_api_key_for_model()` 8 种 | ❌ 只有 DeepSeek |
 | 配置 UI | LangGraph Studio | ❌ 只有 .env |
 | 评估系统 | `tests/` 全套 | ❌ |
@@ -192,8 +191,11 @@ LangGraph Server 内置 SSE             FastAPI + sse-starlite 手动实现
 | Level 1 极速模式 | `FastLevel1Agent`，1 次 LLM | ❌ |
 | Level 1-4 渐进演进 | 每层独立可跑 | ❌ 直接拉满 |
 | Java 全栈网关 | 8 文件，Spring Boot | ❌ |
-| Web UI | `index.html`，SSE 消费 | 依赖外部 Studio |
-| 纯 API 实现 | 0 框架依赖 | 强依赖 LangChain/LangGraph |
+| Web UI | `index.html`，计时器 | 依赖外部 Studio |
+| 搜索自动降级 | Tavily→DuckDuckGo | ❌ |
+| 架构重构 | server.py 零 Agent 逻辑 | 强依赖 LangChain/LangGraph |
+| 纯 API 实现 | 0 框架依赖 | LangGraph StateGraph |
+| 完整面试准备 | 24 问 Q&A、架构评审、代码对照 | ❌ |
 
 ---
 

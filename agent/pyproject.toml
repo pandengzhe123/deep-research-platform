@@ -14,6 +14,7 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn>=0.34",
     "sse-starlette>=2.0",
+    "duckduckgo-search>=8.0",
 ]
 
 [tool.setuptools.packages.find]

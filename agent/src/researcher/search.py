@@ -46,15 +46,53 @@ class SearchTool:
         self.tavily = AsyncTavilyClient(api_key=config.tavily_api_key)
         self.llm = LLMClient()
 
+    async def _safe_tavily_search(self, query: str, max_results: int, include_raw: bool, retries: int = 2):
+        """带重试的 Tavily 搜索。"""
+        for attempt in range(retries):
+            try:
+                return await self.tavily.search(query, max_results=max_results, include_raw_content=include_raw)
+            except Exception:
+                if attempt < retries - 1:
+                    await asyncio.sleep(2)
+        return {"results": [], "query": query}
+
+    async def _ddg_search(self, query: str, max_results: int = 5) -> dict:
+        """DuckDuckGo 搜索（免费、不需要 API Key），返回 Tavily 兼容格式。"""
+        from duckduckgo_search import DDGS
+        try:
+            results = await asyncio.to_thread(
+                lambda: list(DDGS().text(query, max_results=max_results))
+            )
+        except Exception:
+            return {"results": [], "query": query}
+
+        tavily_format = []
+        for r in results:
+            tavily_format.append({
+                "url": r.get("href", ""),
+                "title": r.get("title", ""),
+                "content": r.get("body", ""),
+                "raw_content": None,
+            })
+        return {"results": tavily_format, "query": query}
+
+    async def _do_search(self, query: str, max_results: int, include_raw: bool) -> dict:
+        """搜索：Tavily 优先，失败自动降级到 DuckDuckGo。"""
+        result = await self._safe_tavily_search(query, max_results, include_raw)
+        if result.get("results"):
+            return result
+        print(f"  ⚠️ Tavily 无结果，降级到 DuckDuckGo: {query[:50]}...")
+        return await self._ddg_search(query, max_results)
+
     async def search(
         self,
         queries: list[str],
         max_results: int = 5,
     ) -> str:
         """执行搜索、抓取网页、摘要，返回格式化结果。"""
-        # 1. 并行搜索
+        # 1. 并行搜索（Tavily 优先，失败自动降级 DDG）
         tasks = [
-            self.tavily.search(q, max_results=max_results, include_raw_content=True)
+            self._do_search(q, max_results, True)
             for q in queries
         ]
         all_results = await asyncio.gather(*tasks)
@@ -93,13 +131,9 @@ class SearchTool:
         queries: list[str],
         max_results: int = 3,
     ) -> str:
-        """快速搜索 —— 跳过 LLM 摘要，直接用 Tavily 返回的原始摘要。
-
-        用于 Level 1 快速模式，全程不调 LLM 做网页摘要。
-        """
-        # 1. 并行搜索
+        """快速搜索 —— 跳过 LLM 摘要，Tavily 优先，失败降级 DDG。"""
         tasks = [
-            self.tavily.search(q, max_results=max_results, include_raw_content=False)
+            self._do_search(q, max_results, False)
             for q in queries
         ]
         all_results = await asyncio.gather(*tasks)

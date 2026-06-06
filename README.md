@@ -10,7 +10,7 @@
 
 ```bash
 # 1. 启动 Python Agent
-cd agent && start.bat         → http://localhost:8000
+cd agent && start.bat                    → http://localhost:8000
 
 # 2. 启动 Java 网关
 cd java-gateway && mvn spring-boot:run   → http://localhost:8080
@@ -23,6 +23,13 @@ http://localhost:8080
 
 ```
 浏览器 → Java 网关 (Spring Boot WebFlux, :8080)
+           │  HTTP + SSE
+           ▼
+         Python Agent (FastAPI, :8000)
+           │  OpenAI SDK
+           ▼
+         DeepSeek V4 Flash + Tavily / DuckDuckGo
+```
            │  HTTP + SSE
            ▼
          Python Agent (FastAPI, :8000)
@@ -44,19 +51,22 @@ http://localhost:8080
 
 - **纯 API 实现**：没有 LangChain/LangGraph，直接调 OpenAI SDK + while 循环
 - **双层 Agent 循环**：Supervisor（外循环）+ Researcher（内循环），与原项目同构
+- **渐进式 Level 1-4**：单次搜索 → Agent 循环 → 多路并行 → Supervisor 调度，每层可独立演示
+- **错误恢复三层**：LLM 自动重试 + Tavily→DuckDuckGo 降级 + Agent 循环异常兜底
+- **双搜索源**：Tavily 优先，失败自动降级 DuckDuckGo（免费备选）
 - **Java 全栈网关**：Spring Boot WebFlux + 虚拟线程 + Semaphore 并发控制
-- **SSE 流式推送**：研究进度实时推送到前端
-- **深度搜索流水线**：Tavily 搜索 → URL 去重 → 网页抓取 → LLM 摘要压缩
-- **多轮对话记忆**：context 传递，多轮追问不丢失上下文
+- **深度搜索流水线**：搜索 → URL 去重 → 网页抓取 → LLM 摘要 → 压缩去噪 → 报告
+- **多轮对话记忆**：模糊问题自动追问，context 传递上下文
 
 ## 代码量
 
 | 子项目 | 语言 | 文件数 | 行数 |
 |--------|------|--------|------|
-| Python Agent | Python | 6 | 1,517 |
+| Python Agent | Python | 6 | 1,003 |
 | Java 网关 | Java 21 | 7 | 492 |
-| 前端 | HTML/JS | 1 | 150 |
-| **合计** | | **14** | **~2,100** |
+| 前端 | HTML/JS | 1 | 120 |
+| 文档 | Markdown | 7 | ~600 |
+| **合计** | | **21** | **~2,200** |
 
 ## 核心文件
 
@@ -86,7 +96,8 @@ java-gateway/src/main/java/.../
 | 代码量 | ~3,000 行 Python | 1,517 行 Python + 492 行 Java |
 | 依赖 | LangChain/LangGraph 全家桶 | openai + fastapi + tavily-python |
 | 多模型 | 8 种供应商 | DeepSeek（可扩展） |
-| 搜索后端 | 4 种 | Tavily（可扩展） |
+| 搜索后端 | 4 种 | 2 种（Tavily + DuckDuckGo 自动降级） |
+| 错误恢复 | 重试+截断 | ✅ LLM 重试 + 搜索降级 + 循环兜底 |
 | Java 网关 | 无 | ✅ |
 | 自有 UI | 无（依赖外部 Studio） | ✅ |
 | 架构文档 | ❌ | ✅（含竞品分析、面试 Q&A、代码对照） |

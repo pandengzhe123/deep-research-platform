@@ -345,60 +345,69 @@ class Level2Agent:
             print(f"\n--- 第 {round_num}/{self.max_rounds} 轮 ---")
             self.emit({"step": "thinking", "message": f"第 {round_num}/{self.max_rounds} 轮决策中...", "round": round_num})
 
-            msg = self.llm.chat_with_tools(
-                system_prompt=system,
-                messages=messages,
-                tools=TOOLS,
-            )
+            try:
+                msg = self.llm.chat_with_tools(
+                    system_prompt=system,
+                    messages=messages,
+                    tools=TOOLS,
+                )
 
-            if not msg.tool_calls:
-                print("  LLM 认为信息足够，停止搜索")
-                self.emit({"step": "decided", "message": "信息已足够，停止搜索", "round": round_num})
-                messages.append({"role": "assistant", "content": msg.content or "信息已足够，现在可以写报告。"})
-                break
+                if not msg.tool_calls:
+                    print("  LLM 认为信息足够，停止搜索")
+                    self.emit({"step": "decided", "message": "信息已足够，停止搜索", "round": round_num})
+                    messages.append({"role": "assistant", "content": msg.content or "信息已足够，现在可以写报告。"})
+                    break
 
-            messages.append({
-                "role": "assistant",
-                "content": msg.content or "",
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                    }
-                    for tc in msg.tool_calls
-                ],
-            })
+                messages.append({
+                    "role": "assistant",
+                    "content": msg.content or "",
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                        }
+                        for tc in msg.tool_calls
+                    ],
+                })
 
-            for tc in msg.tool_calls:
-                name = tc.function.name
-                try:
-                    args = json.loads(tc.function.arguments)
-                except json.JSONDecodeError:
-                    print(f"  ⚠️ JSON 解析失败，跳过: {tc.function.arguments[:80]}...")
-                    continue
+                for tc in msg.tool_calls:
+                    name = tc.function.name
+                    try:
+                        args = json.loads(tc.function.arguments)
+                    except json.JSONDecodeError:
+                        print(f"  ⚠️ JSON 解析失败，跳过: {tc.function.arguments[:80]}...")
+                        continue
 
-                if name == "search":
-                    queries = args.get("queries", [question])
-                    print(f"  搜索: {queries}")
-                    self.emit({"step": "searching", "message": f"搜索: {', '.join(queries)}", "round": round_num, "queries": queries})
-                    result = await self.search.search(queries)
-                    all_search_results.append(result)
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": result,
-                    })
+                    if name == "search":
+                        queries = args.get("queries", [question])
+                        print(f"  搜索: {queries}")
+                        self.emit({"step": "searching", "message": f"搜索: {', '.join(queries)}", "round": round_num, "queries": queries})
+                        result = await self.search.search(queries)
+                        all_search_results.append(result)
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": result,
+                        })
 
-                elif name == "think":
-                    reflection = args.get("reflection", "")
-                    print(f"  反思: {reflection[:100]}...")
-                    self.emit({"step": "thinking", "message": reflection[:150] + ("..." if len(reflection) > 150 else ""), "round": round_num})
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": f"反思已记录：{args.get('reflection', '')}",
-                    })
+                    elif name == "think":
+                        reflection = args.get("reflection", "")
+                        print(f"  反思: {reflection[:100]}...")
+                        self.emit({"step": "thinking", "message": reflection[:150] + ("..." if len(reflection) > 150 else ""), "round": round_num})
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": f"反思已记录：{args.get('reflection', '')}",
+                        })
+
+            except Exception as e:
+                print(f"  ⚠️ 第 {round_num} 轮异常: {e}，跳过本轮继续")
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": "error",
+                    "content": f"本轮调用失败: {e}，请基于已有信息继续",
+                })
 
         # 压缩研究结果
         print(f"\n[压缩] 整理搜索结果...")
@@ -770,6 +779,16 @@ async def main():
     else:
         question = input("请输入你想研究的问题: ")
         level = 2
+
+    # 澄清判断（Level 2/3/4 默认开启，Level 1 跳过保持极速）
+    if level != 1:
+        from researcher.agent import ClarifyHelper  # noqa
+        clarify = ClarifyHelper()
+        check = await clarify.check(question)
+        if check.get("need_clarify"):
+            print(f"\n❓ Agent 需要更多信息:\n   {check.get('question', '')}")
+            print(f"   请补充后重新运行。")
+            return
 
     if level == 1:
         agent = FastLevel1Agent()

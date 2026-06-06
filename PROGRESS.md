@@ -101,9 +101,24 @@
 
 ## 下一步（优先级排序）
 
-1.   **修 SSE 流式 + 前端优化** —— 流式体验是演示时的加分项
-2.   **RAG 集成** —— 向量数据库 + 混合检索，简历差异化卖点
-3.   **会话持久化** —— H2/MySQL 替换内存存储
-4.   **前端 UI 升级** —— Vue 3 / React
-5.   **用户认证** —— Spring Security + JWT
-6.   **Docker Compose 一键部署**
+1.   **RAG 集成** —— 向量数据库 + 混合检索
+2.   **SSE 流式 Java 透传修复** —— Python SSE 正常，Java→浏览器缓冲待修
+3.   **Docker Compose 一键部署** —— `docker compose up` 一行启动
+4.   **会话持久化** —— H2/MySQL 替换内存存储
+5.   **前端 UI 升级** —— Vue 3 / React
+6.   **用户认证** —— Spring Security + JWT
+
+---
+
+## 架构评审：已知缺陷与改进方向
+
+> 站在竞品/面试官视角审视当前架构的 6 个问题。每个问题都是面试时可聊的"改进方向"。
+
+| # | 问题 | 严重度 | 影响 |
+|---|------|--------|------|
+| 1 | **agent.py 是上帝类**：785 行塞进一个文件，四个 Level + 全部 Prompt + 压缩 + 澄清 + 工具定义 | 中 | 加新功能只在上面叠，但 2000 行的项目不值得拆 |
+| 2 | **on_progress 回调是半拉子工程**：Level 1/2/3 加了回调，Level 4 没有；命令行入口不传回调走空函数；浏览器入口传了但 Java 透传没用上 | 中 | 模式方向正确，没推到全线 |
+| 3 | **没有错误恢复机制**：LLM 调一次失败 → 研究挂；Tavily 超时 → 研究挂。没有重试，没有降级。原项目有三次重试 + token 超限渐近截断 | ~~高~~ ✅ 已修复 | 三层防护：LLM 重试（429/5xx/网络）、Tavily 自动重试+降级、Agent 循环 try/except |
+| 4 | **搜索只有 Tavily 一条路**：Tavily 挂了或限制连接后，没法兜底。没有 DuckDuckGo 备用搜索、没有本地缓存 | ~~低~~ ✅ 已修复 | `_do_search()` —— Tavily 优先，失败自动降级 DuckDuckGo（免费、无需 API Key） |
+| 5 | **Java SSE 透传是个死胡同**：Flux<String> 缓冲 → DataBuffer 透传 → writeAndFlushWith——都不对。正确的做法要么让浏览器直接调 Python（CORS 已开），要么用裸 OutputStream 写字节。当前妥协：同步接口可行，实时性放弃 | 低 | 影响演示体验，不影响核心功能 |
+| 6 | **Clarify 没有融入 Agent 本体**：`ClarifyHelper` 只在 server.py 被调。命令行跑 agent.py 不会触发澄清——模糊问题直接搜，返回低质量报告 | ~~高~~ ✅ 已修复 | 在 `main()` 入口加了澄清判断，命令行和浏览器行为一致 |
