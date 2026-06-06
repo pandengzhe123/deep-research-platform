@@ -26,3 +26,11 @@ Thumbs.db
 # Build
 node_modules/
 dist/
+
+# Chroma
+agent/chroma_data/
+agent/chroma_test/
+
+# Test files
+test_rag.txt
+test2.txt

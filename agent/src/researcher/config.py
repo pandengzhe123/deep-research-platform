@@ -2,9 +2,13 @@
 
 import os
 
+from pathlib import Path
+
 from dotenv import load_dotenv
 
-load_dotenv()
+# 从 agent 目录加载 .env（兼容不同 CWD）
+env_path = Path(__file__).parent.parent.parent / ".env"
+load_dotenv(env_path) if env_path.exists() else load_dotenv()
 
 
 class Config:

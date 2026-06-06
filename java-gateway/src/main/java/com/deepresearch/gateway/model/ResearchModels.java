@@ -19,7 +19,8 @@ public class ResearchModels {
             int level,
             @JsonProperty("max_rounds") Integer maxRounds,
             String language,
-            String context
+            String context,
+            @JsonProperty("kb_enabled") Boolean kbEnabled
     ) {
         public ResearchRequest {
             if (level == 0) level = 2;

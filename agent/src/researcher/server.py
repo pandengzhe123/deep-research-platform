@@ -13,7 +13,7 @@ import traceback
 import uuid
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -21,6 +21,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from .agent import ClarifyHelper, FastLevel1Agent, Level2Agent, Level3Agent, Level4Agent
 from .config import config
+from .kb import kb
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ class ResearchRequest(BaseModel):
     max_rounds: int | None = None
     language: str = "auto"
     context: str = ""
+    kb_enabled: bool = False
 
 
 class ProgressEvent(BaseModel):
@@ -63,6 +65,7 @@ async def run_agent_with_sse(
     max_rounds: int | None,
     language: str,
     context: str,
+    kb_enabled: bool,
     cancel: aio.Event,
 ) -> AsyncGenerator[dict, None]:
     """
@@ -104,7 +107,7 @@ async def run_agent_with_sse(
         elif level == 4:
             agent = Level4Agent(on_progress=on_progress)
         else:
-            agent = Level2Agent(on_progress=on_progress)
+            agent = Level2Agent(on_progress=on_progress, kb_enabled=kb_enabled)
 
         on_progress({"step": "planning", "message": f"Level {level} Agent 启动..."})
 
@@ -185,7 +188,7 @@ async def research_sync(req: ResearchRequest):
         async for event in run_agent_with_sse(
             question=req.question, level=req.level,
             max_rounds=req.max_rounds, language=req.language,
-            context=req.context, cancel=cancel,
+            context=req.context, kb_enabled=req.kb_enabled, cancel=cancel,
         ):
             if event["event"] == "done":
                 result.append(json.loads(event["data"]))
@@ -205,7 +208,7 @@ async def research_stream(req: ResearchRequest):
     return EventSourceResponse(run_agent_with_sse(
         question=req.question, level=req.level,
         max_rounds=req.max_rounds, language=req.language,
-        context=req.context, cancel=cancel,
+        context=req.context, kb_enabled=req.kb_enabled, cancel=cancel,
     ))
 
 
@@ -221,6 +224,57 @@ async def cancel_research(task_id: str):
 @app.get("/research/active")
 async def list_active_tasks():
     return {"active_tasks": list(_active_tasks.keys())}
+
+
+# ============================================================
+# 知识库接口
+# ============================================================
+
+import os
+import tempfile
+from pathlib import Path
+
+@app.post("/kb/upload")
+async def kb_upload(file: UploadFile, user_id: str = "default"):
+    """上传文档到用户的知识库。支持 PDF/TXT/MD。"""
+    suffix = Path(file.filename or "unknown").suffix.lower()
+    if suffix not in (".pdf", ".txt", ".md"):
+        raise HTTPException(status_code=400, detail=f"不支持的文件类型: {suffix}")
+
+    try:
+        # 存临时文件
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            content = await file.read()
+            tmp.write(content)
+            tmp_path = tmp.name
+
+        # 入库（用原始文件名）
+        result = kb.ingest(tmp_path, user_id=user_id, doc_id=file.filename)
+        os.unlink(tmp_path)
+
+        if result.get("status") == "error":
+            raise HTTPException(status_code=500, detail=result.get("message", "未知错误"))
+
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/kb/files")
+async def kb_files(user_id: str = "default"):
+    """列出用户已上传的文档。"""
+    return {"files": kb.list_docs(user_id)}
+
+
+@app.delete("/kb/files/{doc_id}")
+async def kb_delete(doc_id: str, user_id: str = "default"):
+    """删除用户知识库中的指定文档。"""
+    result = kb.delete_doc(doc_id, user_id=user_id)
+    if result.get("status") == "error":
+        raise HTTPException(status_code=500, detail=result.get("message", "未知错误"))
+    return result
 
 
 if __name__ == "__main__":

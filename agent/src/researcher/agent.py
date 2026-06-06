@@ -171,6 +171,23 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_kb",
+            "description": "搜索本地知识库（用户上传的私有文档）。当用户明确提到'我的文档''本地资料''上传的文件'时优先使用此工具。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "检索查询词",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 # ============================================================
@@ -322,11 +339,15 @@ AGENT_SYSTEM = """你是一个研究助手。你可以使用以下工具：
 class Level2Agent:
     """Level 2: 搜索-反思循环 Agent"""
 
-    def __init__(self, on_progress=None):
+    def __init__(self, on_progress=None, kb_enabled: bool = False):
         self.llm = LLMClient()
-        self.search = SearchTool()
+        self.search_tool = SearchTool()
         self.max_rounds = config.max_search_rounds
         self.emit = on_progress or (lambda e: None)
+        self.kb_enabled = kb_enabled
+        if kb_enabled:
+            from .kb import kb  # noqa — 懒加载，不用 RAG 时不 import
+            self.kb = kb
 
     async def run(self, question: str) -> str:
         print(f"\n{'='*60}")
@@ -349,7 +370,7 @@ class Level2Agent:
                 msg = self.llm.chat_with_tools(
                     system_prompt=system,
                     messages=messages,
-                    tools=TOOLS,
+                    tools=TOOLS if self.kb_enabled else TOOLS[:-1],
                 )
 
                 if not msg.tool_calls:
@@ -383,8 +404,19 @@ class Level2Agent:
                         queries = args.get("queries", [question])
                         print(f"  搜索: {queries}")
                         self.emit({"step": "searching", "message": f"搜索: {', '.join(queries)}", "round": round_num, "queries": queries})
-                        result = await self.search.search(queries)
+                        result = await self.search_tool.search(queries)
                         all_search_results.append(result)
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": result,
+                        })
+
+                    elif name == "search_kb":
+                        query = args.get("query", question)
+                        print(f"  知识库检索: {query}")
+                        self.emit({"step": "searching", "message": f"知识库检索: {query}", "round": round_num})
+                        result = self.kb.search(query) if self.kb_enabled else "知识库未启用。"
                         messages.append({
                             "role": "tool",
                             "tool_call_id": tc.id,

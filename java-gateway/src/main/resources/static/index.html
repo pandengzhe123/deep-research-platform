@@ -31,6 +31,13 @@
     <h1>Deep Research</h1>
     <p>输入问题，Agent 自动搜索网络并生成深度研究报告。</p>
 
+    <div style="margin-bottom:12px; display:flex; align-items:center; gap:8px; flex-wrap:wrap">
+        <input type="file" id="fileInput" accept=".txt,.md,.pdf" style="padding:6px; font-size:13px; border:1px solid #d1d5db; border-radius:6px; background:#f8f9fa; color:#333">
+        <button onclick="uploadFile()" style="padding:8px 16px; font-size:13px; background:#059669">上传到知识库</button>
+        <span id="uploadStatus" style="font-size:13px; color:#6b7280"></span>
+        <span id="fileList" style="font-size:12px; color:#6b7280"></span>
+    </div>
+
     <textarea id="question" placeholder="例如：2025年AI领域最重要的三件事是什么？"></textarea>
 
     <div style="display:flex; align-items:center; gap:12px">
@@ -40,6 +47,9 @@
             <option value="3">Level 3 — 多路并行</option>
             <option value="4">Level 4 — Supervisor调度</option>
         </select>
+        <label style="display:flex;align-items:center;gap:4px;font-size:14px;cursor:pointer;color:#333">
+            <input type="checkbox" id="ragToggle"> RAG
+        </label>
         <button id="btn" onclick="start()">开始研究</button>
         <span id="status"></span>
     </div>
@@ -48,14 +58,68 @@
     <div id="report"></div>
 
     <script>
-        // 多轮对话上下文
         let contextHistory = '';
+
+        async function loadFileList() {
+            try {
+                const resp = await fetch('http://localhost:8000/kb/files?user_id=default');
+                const data = await resp.json();
+                const files = data.files || [];
+                const el = document.getElementById('fileList');
+                if (files.length === 0) {
+                    el.innerHTML = '（知识库为空）';
+                } else {
+                    el.innerHTML = '📁 ' + files.map(f =>
+                        `${f.doc_id} <a href="#" onclick="deleteDoc('${f.doc_id}')" style="color:#dc2626;font-size:11px">[删]</a>`
+                    ).join(' · ');
+                }
+            } catch (e) {}
+        }
+
+        async function deleteDoc(docId) {
+            if (!confirm('确定删除 ' + docId + '？')) return;
+            try {
+                await fetch('http://localhost:8000/kb/files/' + docId + '?user_id=default', { method: 'DELETE' });
+                loadFileList();
+            } catch (e) {}
+        }
+
+        async function uploadFile() {
+            const fileInput = document.getElementById('fileInput');
+            const status = document.getElementById('uploadStatus');
+            const file = fileInput.files[0];
+            if (!file) { status.textContent = '请先选择文件'; return; }
+
+            status.textContent = '上传中...';
+            const form = new FormData();
+            form.append('file', file);
+
+            try {
+                const resp = await fetch('http://localhost:8000/kb/upload?user_id=default', {
+                    method: 'POST', body: form
+                });
+                const data = await resp.json();
+                if (data.status === 'ok') {
+                    status.textContent = `✅ ${data.doc_id}`;
+                    fileInput.value = '';
+                    loadFileList();  // 刷新列表
+                } else {
+                    status.textContent = '❌ ' + (data.message || '失败');
+                }
+            } catch (e) {
+                status.textContent = '❌ ' + e.message;
+            }
+        }
+
+        // 页面加载时拉取文件列表
+        loadFileList();
 
         function start() {
             const question = document.getElementById('question').value.trim();
             if (!question) return alert('请输入问题');
 
             const level = parseInt(document.getElementById('level').value);
+            const kbEnabled = document.getElementById('ragToggle').checked;
             const btn = document.getElementById('btn');
             const progress = document.getElementById('progress');
             const reportDiv = document.getElementById('report');
@@ -79,7 +143,7 @@
             fetch('/api/research', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ question, level, context: contextHistory })
+                body: JSON.stringify({ question, level, context: contextHistory, kb_enabled: kbEnabled })
             }).then(res => {
                 clearInterval(timerId);
                 if (!res.ok) throw new Error('服务器返回 ' + res.status);
