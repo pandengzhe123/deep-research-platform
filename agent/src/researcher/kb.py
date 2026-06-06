@@ -66,21 +66,30 @@ def read_file(file_path: Path) -> str:
 # 知识库
 # ============================================================
 
-def _embed_hash(texts: list[str]) -> list[list[float]]:
-    """用 sklearn HashingVectorizer 生成固定维度向量（离线、免费、已安装）。"""
-    from sklearn.feature_extraction.text import HashingVectorizer
+def _embed_semantic(texts: list[str]) -> list[list[float]]:
+    """用 sentence-transformers 生成语义向量（384 维，中英文）。模型缓存在内存。"""
+    import os
+    import ssl
 
-    vectorizer = HashingVectorizer(n_features=384, alternate_sign=False)
-    matrix = vectorizer.transform(texts)
-    return matrix.toarray().tolist()
+    ssl._create_default_https_context = ssl._create_unverified_context
+    os.environ.setdefault("CURL_CA_BUNDLE", "")
+    os.environ.setdefault("SSL_CERT_FILE", "")
+
+    if not hasattr(_embed_semantic, "_model"):
+        from sentence_transformers import SentenceTransformer
+
+        _embed_semantic._model = SentenceTransformer(
+            "paraphrase-multilingual-MiniLM-L12-v2"
+        )
+    return _embed_semantic._model.encode(texts, show_progress_bar=False).tolist()
 
 
 class KnowledgeBase:
-    """Chroma 向量库封装。使用 TF-IDF 离线 embedding。"""
+    """Chroma 向量库封装。使用 sentence-transformers 语义 embedding。"""
 
     def __init__(self, persist_dir: str = "./chroma_data"):
         self._client = chromadb.PersistentClient(path=persist_dir)
-        self._embedder = _embed_hash  # 不用 SentenceTransformer，直接引用
+        self._embedder = _embed_semantic
         self._collections: dict[str, object] = {}
 
     # ================================================================
