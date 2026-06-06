@@ -30,13 +30,6 @@ http://localhost:8080
            ▼
          DeepSeek V4 Flash + Tavily / DuckDuckGo
 ```
-           │  HTTP + SSE
-           ▼
-         Python Agent (FastAPI, :8000)
-           │  OpenAI SDK
-           ▼
-         DeepSeek V4 Flash + Tavily Search
-```
 
 ## 四个 Agent Level
 
@@ -93,7 +86,7 @@ java-gateway/src/main/java/.../
 | LLM 调用 | init_chat_model() → bind_tools | OpenAI SDK 原生 tools |
 | 工具定义 | Pydantic BaseModel | 手写 JSON dict |
 | 状态管理 | StateGraph 自动流转 | Python 变量 + 函数传参 |
-| 代码量 | ~3,000 行 Python | 1,517 行 Python + 492 行 Java |
+| 代码量 | ~3,000 行 Python | 1,003 行 Python + 492 行 Java |
 | 依赖 | LangChain/LangGraph 全家桶 | openai + fastapi + tavily-python |
 | 多模型 | 8 种供应商 | DeepSeek（可扩展） |
 | 搜索后端 | 4 种 | 2 种（Tavily + DuckDuckGo 自动降级） |
@@ -111,7 +104,7 @@ java-gateway/src/main/java/.../
 | [docs/java-gateway-guide.md](docs/java-gateway-guide.md) | 架构设计 + 竞品分析 |
 | [docs/learning-guide.md](docs/learning-guide.md) | 原项目学习笔记 |
 | [docs/code-comparison.md](docs/code-comparison.md) | 与原项目代码层面对比 |
-| [docs/interview-qa.md](docs/interview-qa.md) | 面试 12 问 & 标准答案 |
+| [docs/interview-qa.md](docs/interview-qa.md) | 面试 25 问 & 标准答案 |
 | [docs/file-guide.md](docs/file-guide.md) | 每个文件的作用 |
 | [PROGRESS.md](PROGRESS.md) | 开发进度 |
 | [docs/prompts_cn.py](docs/prompts_cn.py) | Prompt 中文对照 |
@@ -119,10 +112,8 @@ java-gateway/src/main/java/.../
 ## 后续计划
 
 - [ ] RAG 混合检索（向量数据库 + 实时搜索融合）
-- [ ] 多搜索后端切换（DuckDuckGo 免费方案）
-- [ ] Token 超限渐进截断
-- [ ] 报告导出 PDF/Word
 - [ ] Docker Compose 一键部署
+- [ ] 报告导出 PDF/Word
 - [ ] JWT 多用户认证
 
 ## License
