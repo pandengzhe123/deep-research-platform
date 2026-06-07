@@ -1,80 +1,148 @@
 package com.deepresearch.gateway.service;
 
 import com.deepresearch.gateway.model.ResearchModels.ResearchSession;
+import com.deepresearch.gateway.model.SessionEntity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
-import java.util.Comparator;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.*;
 
 /**
- * 研究会话管理 —— 当前用内存存储，后续可替换为数据库。
+ * 研究会话管理 —— PostgreSQL 持久化。
  *
- * 每个会话记录：id、用户、问题、状态、最终报告。
+ * 每个会话记录：id、用户、问题、对话历史、状态、最终报告。
+ * 报告生成后不清空 history —— 后续追问能持续。
  */
 @Service
 public class SessionService {
 
     private static final Logger log = LoggerFactory.getLogger(SessionService.class);
-    private final Map<String, ResearchSession> sessions = new ConcurrentHashMap<>();
+    private final SessionRepository repo;
+
+    public SessionService(SessionRepository repo) {
+        this.repo = repo;
+    }
 
     /**
-     * 创建一个新会话。
+     * 创建新会话，写入数据库。
      */
     public ResearchSession createSession(String userId, String question) {
         String id = UUID.randomUUID().toString().substring(0, 8);
-        ResearchSession session = new ResearchSession(id, userId, question);
-        sessions.put(id, session);
-        log.info("创建会话: id={}, question={}", id, question);
-        return session;
+        SessionEntity entity = new SessionEntity(id, userId, question);
+        // 初始历史：第一条用户消息
+        entity.setHistory(toJson(List.of("用户: " + question)));
+        repo.save(entity);
+        log.info("创建会话: id={}, user={}", id, userId);
+        return toPojo(entity);
+    }
+
+    /**
+     * 追加一条消息到会话历史。报告生成后不清空，允许后续追问。
+     */
+    public void appendHistory(String sessionId, String message) {
+        repo.findById(sessionId).ifPresent(entity -> {
+            List<String> history = fromJson(entity.getHistory());
+            history.add(message);
+            // 只保留最近 50 条，防止 JSONB 过大
+            if (history.size() > 50) {
+                history = history.subList(history.size() - 50, history.size());
+            }
+            entity.setHistory(toJson(history));
+            repo.save(entity);
+        });
     }
 
     /**
      * 写入报告并标记完成。
      */
     public void appendReport(String sessionId, String report) {
-        ResearchSession session = sessions.get(sessionId);
-        if (session != null) {
-            session.setReport(report);
-            session.setStatus("done");
-        }
+        repo.findById(sessionId).ifPresent(entity -> {
+            entity.setReport(report);
+            entity.setStatus("done");
+            repo.save(entity);
+            log.info("报告写入: session={}, len={}", sessionId, report.length());
+        });
     }
 
     /**
      * 标记会话为错误。
      */
     public void markError(String sessionId) {
-        ResearchSession session = sessions.get(sessionId);
-        if (session != null) session.setStatus("error");
+        repo.findById(sessionId).ifPresent(entity -> {
+            entity.setStatus("error");
+            repo.save(entity);
+        });
+    }
+
+    /**
+     * 获取会话完整历史，拼成 context 字符串传给 Python。
+     */
+    public String getContextHistory(String sessionId) {
+        return repo.findById(sessionId)
+                .map(entity -> String.join("\n\n", fromJson(entity.getHistory())))
+                .orElse("");
     }
 
     /**
      * 获取单个会话。
      */
     public ResearchSession getSession(String sessionId) {
-        return sessions.get(sessionId);
+        return repo.findById(sessionId).map(this::toPojo).orElse(null);
     }
 
     /**
-     * 获取用户的所有会话，按创建时间倒序。
+     * 获取用户的所有会话。
      */
     public List<ResearchSession> getUserSessions(String userId) {
-        return sessions.values().stream()
-                .filter(s -> userId.equals(s.getUserId()))
-                .sorted(Comparator.comparing(ResearchSession::getId).reversed())
-                .toList();
+        return repo.findByUserIdOrderByCreatedAtDesc(userId)
+                .stream().map(this::toPojo).toList();
     }
 
     /**
-     * 获取全部会话（管理用）。
+     * 获取全部会话。
      */
     public List<ResearchSession> getAllSessions() {
-        return sessions.values().stream()
-                .sorted(Comparator.comparing(ResearchSession::getId).reversed())
-                .toList();
+        return repo.findAll().stream()
+                .sorted(Comparator.comparing(SessionEntity::getCreatedAt).reversed())
+                .map(this::toPojo).toList();
+    }
+
+    // ========== 工具方法 ==========
+
+    private ResearchSession toPojo(SessionEntity e) {
+        ResearchSession s = new ResearchSession(e.getId(), e.getUserId(), e.getQuestion());
+        s.setReport(e.getReport() != null ? e.getReport() : "");
+        s.setStatus(e.getStatus());
+        return s;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> fromJson(String json) {
+        try {
+            // 简单 JSON 数组解析（不用 Jackson 额外依赖）
+            if (json == null || json.isBlank() || "[]".equals(json.trim())) return new ArrayList<>();
+            String inner = json.trim().replaceAll("^\\[|\\]$", "");
+            if (inner.isBlank()) return new ArrayList<>();
+            // 按 "," 分割（简化版，只支持纯文本）
+            String[] parts = inner.split("\",\\s*\"");
+            List<String> result = new ArrayList<>();
+            for (String p : parts) {
+                result.add(p.replaceAll("^\"|\"$", "").replace("\\\"", "\""));
+            }
+            return result;
+        } catch (Exception e) {
+            return new ArrayList<>();
+        }
+    }
+
+    private String toJson(List<String> items) {
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < items.size(); i++) {
+            if (i > 0) sb.append(", ");
+            sb.append("\"").append(items.get(i).replace("\"", "\\\"")).append("\"");
+        }
+        sb.append("]");
+        return sb.toString();
     }
 }

@@ -13,3 +13,19 @@ spring:
   threads:
     virtual:
       enabled: true   # Java 21 虚拟线程
+  datasource:
+    url: jdbc:postgresql://localhost:5432/deepresearch
+    username: postgres
+    password: deepresearch
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: none  # 用 schema.sql 建表，不用 Hibernate 自动建
+    show-sql: false
+  sql:
+    init:
+      mode: always    # 启动时执行 schema.sql
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration
+      - org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration

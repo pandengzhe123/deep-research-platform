@@ -29,7 +29,7 @@ public class ResearchModels {
 
         /** 快速构造：只传问题，默认 Level 2。 */
         public ResearchRequest(String question) {
-            this(question, 2, null, "auto", "");
+            this(question, 2, null, "auto", "", null);
         }
     }
 

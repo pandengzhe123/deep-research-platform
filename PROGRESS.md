@@ -1,129 +1,173 @@
 # DeepResearch Platform 开发进度
 
-> 最后更新：2026年6月4日
+> 最后更新：2026年6月7日 | 代码 3,153 行 + 文档 3,100 行
+
+---
 
 ## 总览
 
 ```
-整体进度  █████████████░░░░░  70%
+整体进度  ██████████████░░░░  75%
 
 ├── Python Agent      ██████████████████  95%
-├── Java 网关          ██████████░░░░░░░░  50%
-├── 前端 UI            ████░░░░░░░░░░░░░░  20%
-├── RAG 集成           ████████░░░░░░░░░░  40%
-├── 部署              ██░░░░░░░░░░░░░░░░  10%
+├── Java 网关          ██████████████░░░░  70%
+├── 前端 UI            █████░░░░░░░░░░░░░  25%
+├── RAG 集成           ████████████████░░  80%
+├── 测试系统           ████████████░░░░░░  60%
+├── 部署              █████░░░░░░░░░░░░░  25%
 └── 文档              ███████████████████  95%
 ```
 
-**代码量：~2,200 行**（Python 1,003 + Java 492 + HTML 120 + 文档 ~600）
-
 ---
 
-## Python Agent（95%）
+## Python Agent（95%｜6 文件 1,759 行）
 
 | 任务 | 状态 | 说明 |
 |------|:--:|------|
-| 项目骨架搭建 | ✅ | `pyproject.toml`、目录结构 |
-| LLM 客户端 | ✅ | DeepSeek V4 Flash，chat + 工具调用 + 结构化输出 |
-| 搜索工具 | ✅ | Tavily API + 网页抓取 + LLM 摘要 |
-| 搜索快速模式 | ✅ | `search_fast()` 跳过 LLM 摘要 |
-| 配置管理 | ✅ | 环境变量驱动 |
-| Level 1 Fast | ✅ | 极速版，全程 1 次 LLM，15-30 秒 |
-| Level 2 | ✅ | 搜索-反思 5 轮循环，Function Calling 驱动 |
+| LLM 客户端 | ✅ | DeepSeek V4 Flash，chat / chat_with_tools / structured_output |
+| LLM 重试 | ✅ | `_call_with_retry()` — 429/5xx/网络 指数退避重试，4xx 不重试 |
+| 搜索工具 | ✅ | Tavily + LLM 网页摘要 + search_fast（跳过摘要） |
+| DuckDuckGo 降级 | ✅ | Tavily 失败自动降级 DDG，Agent 不感知 |
+| URL 去重 | ✅ | 相同 URL 只保留第一次出现 |
+| 配置管理 | ✅ | `.env` 环境变量，兼容不同 CWD |
+| Level 1 Fast | ✅ | 极速版，1 次 LLM，15-30 秒。支持 RAG 并行 |
+| Level 2 | ✅ | 搜索-反思 Agent 循环，Function Calling 驱动，try/except 兜底 |
 | Level 3 | ✅ | LLM 拆题 → asyncio.gather 并行 Level 2 → 汇总 |
-| Level 4 | ✅ | Supervisor 循环调度 → ResearchComplete → 汇总 |
-| FastAPI 服务 | ✅ | `/research` + `/research/stream`(SSE) + `/health` |
-| **架构重构** | ✅ | server.py 从 460 行缩到 218 行，消灭重复 Agent 逻辑，on_progress 回调 |
-| 任务取消 | ✅ | `DELETE /research/{id}` |
-| 报告导出 | | Markdown → PDF/Word |
-| 搜索结果缓存 | | 相同 query 复用 |
+| Level 4 | ✅ | Supervisor 循环 → ConductResearch / ResearchComplete / think_tool |
+| 压缩研究结果 | ✅ | Level 2 写报告前先清洗搜索结果（去重去噪） |
+| 澄清用户意图 | ✅ | ClarifyHelper，命令行 + 浏览器双入口 |
+| FastAPI 服务 | ✅ | /research + /research/stream SSE + /health + /research/{id} |
+| on_progress 回调 | ✅ | Level 1/2/3 已加，Level 4 独立实现 |
+| Token 超限处理 | | 后续 |
+| 报告导出 | | 后续 |
 
-## Java 网关（50%）
+---
+
+## Java 网关（70%｜10 文件 659 行）
 
 | 任务 | 状态 | 说明 |
 |------|:--:|------|
-| Spring Boot 项目初始化 | ✅ | Maven + JDK 21，仅依赖 webflux |
+| Spring Boot 初始化 | ✅ | Maven + JDK 21，WebFlux 响应式 |
 | AgentClient | ✅ | WebClient，同步+流式+健康检查+取消 |
-| ResearchController | ✅ | 4 个接口，Level 1-4 全支持 |
-| SessionService | ✅ | 内存存储，会话生命周期管理 |
+| ResearchController | ✅ | Level 1-4 + kb_enabled + 历史追加 |
+| SessionService | ✅ | PostgreSQL + JPA，JSONB 存对话链，报告后不清空 |
+| SessionEntity + Repository | ✅ | @JdbcTypeCode 解决 JSONB 类型映射 |
 | ResearchScheduler | ✅ | Semaphore(20) 全局并发控制 |
-| Web UI | ✅ | 内置 HTML，Level 1-4 下拉 + 计时器 |
+| SecurityConfig | ✅ | @EnableWebFluxSecurity，当前开发模式全部放行 |
+| Web UI | ✅ | Level 1-4 下拉 + RAG 复选框 + 文件上传 + 计时器 + 追问 |
 | 编译运行 | ✅ | mvn compile && spring-boot:run |
-| 端到端验证 | ✅ | 浏览器→Java→Python→Agent→Tavily→报告全通 |
-| SSE 流式转发 | ⚠️ | Python SSE 正常，Java→浏览器缓冲待修 |
-| 会话持久化 | | H2/MySQL 替换内存 |
-| JWT 认证 | | |
-| 费用估算 | | |
-
-## 前端 UI（20%）
-
-| 任务 | 状态 | 说明 |
-|------|:--:|------|
-| 内置 HTML 测试页 | ✅ | `index.html`，同步模式 OK |
-| **计时器** | ✅ | 提交后实时显示已运行时间，挂掉立即提示 |
-| Markdown 渲染 | ✅ | 基础渲染（标题+链接+粗体） |
-| 多轮对话上下文记忆 | ✅ | clarify 追问自动拼接历史 |
-| 流式实时进度 | ⚠️ | Python SSE 正常，Java 透传有缓冲待修 |
-| 框架选型 | | Vue 3 / React（后续） |
-| 报告导出按钮 | | |
-| 历史记录页 | | |
-
-## RAG 集成（40%）
-
-| 任务 | 状态 | 说明 |
-|------|:--:|------|
-| 向量库 | ✅ | Chroma 嵌入式，本地持久化 |
-| Embedding | ✅ | paraphrase-multilingual-MiniLM-L12-v2 |
-| 切块策略 | ✅ | 段落→句子→字符三级降级 |
-| 文件支持 | ✅ | PDF（PyMuPDF）+ TXT + MD |
-| search_kb 工具 | ✅ | Agent 循环内路由已加 |
-| 知识库上传接口 | ✅ | POST /kb/upload + GET /kb/files + DELETE /kb/files/{id} |
-| 前端 RAG 开关 | ✅ | 复选框已加，后续接入 API |
-| 混合检索 | | Agent 同时调 search + search_kb |
-| 会话级文档过滤 | | Phase 2 随会话系统一起做 |
-
-## 部署（10%）
-
-| 任务 | 状态 | 说明 |
-|------|:--:|------|
-| Docker Compose | | 待写 |
-| 一键启动脚本 | | 待写 |
-| 环境变量模板 | ✅ | `.env.example` |
-| GitHub 仓库 | | 待 push |
-
-## 文档（80%）
-
-| 任务 | 状态 | 说明 |
-|------|:--:|------|
-| README | ✅ | 项目主页 |
-| 架构设计文档 | ✅ | `docs/java-gateway-guide.md`（含竞品分析） |
-| 学习指南 | ✅ | `docs/learning-guide.md` |
-| Prompt 中文对照 | ✅ | `docs/prompts_cn.py` |
-| API 文档 | | FastAPI 自动生成 `/docs` |
-| 进度文件 | ✅ | 你正在看的就是 |
+| 端到端验证 | ✅ | 浏览器→Java→Python→Agent→Tavily→报告→PostgreSQL 全通 |
+| PostgreSQL 持久化 | ✅ | Docker postgres:16，sessions 表已验证有数据 |
+| start.bat | ✅ | 自动检测/启动 PG → 编译 → 启动网关 |
+| SSE 流式转发 | ⚠️ | Python SSE 正常，Java→浏览器缓冲待修（已知限制） |
+| JWT 用户认证 | 🚧 | Step 3 待开发 |
+| 费用估算 | | 后续 |
 
 ---
 
-## 下一步（优先级排序）
+## 前端 UI（25%｜1 文件 179 行）
 
-1.   **RAG 集成** —— 向量数据库 + 混合检索
-2.   **SSE 流式 Java 透传修复** —— Python SSE 正常，Java→浏览器缓冲待修
-3.   **Docker Compose 一键部署** —— `docker compose up` 一行启动
-4.   **会话持久化** —— H2/MySQL 替换内存存储
-5.   **前端 UI 升级** —— Vue 3 / React
-6.   **用户认证** —— Spring Security + JWT
+| 任务 | 状态 | 说明 |
+|------|:--:|------|
+| 问题输入 + Level 选择 | ✅ | 下拉切换 Level 1-4 |
+| RAG 复选框 | ✅ | 勾选后 Agent 可用 search_kb 工具 |
+| 文件上传 | ✅ | 支持 PDF/TXT/MD，调 Python /kb/upload |
+| 文件列表 | ✅ | 页面上传后自动刷新，支持删除 |
+| 计时器 | ✅ | 提交后实时计时，知道没卡死 |
+| 多轮追问上下文 | ✅ | contextHistory 累积 |
+| 报告渲染 | ✅ | Markdown 转 HTML（标题+链接+粗体） |
+| 登录/注册页 | 🚧 | Step 3 要做 |
+| 会话列表 | 🚧 | Step 3 要做 |
+| Vue/React 框架 | | 后续 |
 
 ---
 
-## 架构评审：已知缺陷与改进方向
+## RAG 集成（80%｜1 文件 237 行 + 配置）
 
-> 站在竞品/面试官视角审视当前架构的 6 个问题。每个问题都是面试时可聊的"改进方向"。
+| 任务 | 状态 | 说明 |
+|------|:--:|------|
+| 向量库 | ✅ | Chroma，PersistentClient 磁盘持久化 |
+| Embedding 模型 | ✅ | sentence-transformers（MiniLM-L12-v2），384 维，中英文 |
+| SSL 证书修复 | ✅ | `ssl._create_unverified_context` 解决企业网络下载问题 |
+| 模型缓存 | ✅ | 首次加载 3s，之后复用内存实例 |
+| 切块策略 | ✅ | 段落→句子→字符三级降级，chunk_size=500 + overlap=100 |
+| HashingVectorizer 踩坑 | ✅ | 维度不一致导致 Chroma 报错，最终换语义模型 |
+| 文件类型 | ✅ | PDF（PyMuPDF）+ TXT + MD |
+| search_kb 工具 | ✅ | Agent TOOLS 动态注册，不勾 RAG 不注册 |
+| Level 1 RAG 并行 | ✅ | Tavily + KB 同时搜，asyncio.gather |
+| KB Upload API | ✅ | POST /kb/upload（支持原始文件名） |
+| KB 文件列表 | ✅ | GET /kb/files |
+| KB 删除 | ✅ | DELETE /kb/files/{id} |
+| 前端文件管理 | ✅ | 上传按钮 + 文件列表 + 删除 |
+| 混合检索 | ✅ | Agent 同时调 search + search_kb |
+| 数据持久化 | ✅ | chroma_data/ 目录，重启不丢 |
+| check_kb.py | ✅ | 开发者查看知识库内容的脚本 |
+| 会话级文档过滤 | | Phase 3 做 |
+| pgvector 迁移 | | 后续 |
 
-| # | 问题 | 严重度 | 影响 |
-|---|------|--------|------|
-| 1 | **agent.py 是上帝类**：785 行塞进一个文件，四个 Level + 全部 Prompt + 压缩 + 澄清 + 工具定义 | 中 | 加新功能只在上面叠，但 2000 行的项目不值得拆 |
-| 2 | **on_progress 回调是半拉子工程**：Level 1/2/3 加了回调，Level 4 没有；命令行入口不传回调走空函数；浏览器入口传了但 Java 透传没用上 | 中 | 模式方向正确，没推到全线 |
-| 3 | **没有错误恢复机制**：LLM 调一次失败 → 研究挂；Tavily 超时 → 研究挂。没有重试，没有降级。原项目有三次重试 + token 超限渐近截断 | ~~高~~ ✅ 已修复 | 三层防护：LLM 重试（429/5xx/网络）、Tavily 自动重试+降级、Agent 循环 try/except |
-| 4 | **搜索只有 Tavily 一条路**：Tavily 挂了或限制连接后，没法兜底。没有 DuckDuckGo 备用搜索、没有本地缓存 | ~~低~~ ✅ 已修复 | `_do_search()` —— Tavily 优先，失败自动降级 DuckDuckGo（免费、无需 API Key） |
-| 5 | **Java SSE 透传是个死胡同**：Flux<String> 缓冲 → DataBuffer 透传 → writeAndFlushWith——都不对。正确的做法要么让浏览器直接调 Python（CORS 已开），要么用裸 OutputStream 写字节。当前妥协：同步接口可行，实时性放弃 | 低 | 影响演示体验，不影响核心功能 |
-| 6 | **Clarify 没有融入 Agent 本体**：`ClarifyHelper` 只在 server.py 被调。命令行跑 agent.py 不会触发澄清——模糊问题直接搜，返回低质量报告 | ~~高~~ ✅ 已修复 | 在 `main()` 入口加了澄清判断，命令行和浏览器行为一致 |
+---
+
+## 测试系统（60%｜2 文件 428 行）
+
+| 任务 | 状态 | 说明 |
+|------|:--:|------|
+| 单元测试 | ✅ | test_units.py，14 个用例，1 秒跑完 |
+| 回归测试 | ✅ | test_quality.py，3 题 × 2 Level，4 条规则检查 |
+| 规则检查 | ✅ | 内容/标题/引用/语言，纯正则，0 LLM 依赖 |
+| LLM 自评 | ⚠️ | 仅供参考，不计入通过（自己打分有偏见） |
+| CI 集成 | | 后续 |
+
+---
+
+## 部署（25%）
+
+| 任务 | 状态 | 说明 |
+|------|:--:|------|
+| Python Agent 启动脚本 | ✅ | agent/start.bat |
+| Java Gateway 启动脚本 | ✅ | java-gateway/start.bat（自动检测 PG） |
+| PostgreSQL 容器 | ✅ | Docker postgres:16，start.bat 自动拉起 |
+| Docker Compose | | 后续 |
+| Nginx 反向代理 | | 后续 |
+| 云服务器部署 | | 后续 |
+
+---
+
+## 文档（95%｜11 文件 ~3,100 行）
+
+| 文档 | 行数 | 状态 | 内容 |
+|------|------|:--:|------|
+| README.md | 121 | ✅ | 项目主页，架构、亮点、对比表 |
+| PROGRESS.md | 140 | ✅ | 开发进度（此文件） |
+| CHANGELOG.md | 222 | ✅ | 工作留痕，每次改了什么 |
+| docs/code-comparison.md | 204 | ✅ | 与原项目代码层面对比 |
+| docs/file-guide.md | 245 | ✅ | 每个文件的作用 |
+| docs/interview-qa.md | 545 | ✅ | 30 问，十类，附标准答案 |
+| docs/java-gateway-guide.md | 484 | ✅ | 架构设计 + 竞品分析 |
+| docs/learning-guide.md | 542 | ✅ | 原项目学习笔记 |
+| docs/phase2-3-plan.md | 256 | ✅ | 会话持久化 + 用户系统开发计划 |
+| docs/roadmap.md | 333 | ✅ | 六阶段完整路线图 |
+| docs/prompts_cn.py | — | ✅ | Prompt 中文对照 |
+| agent/pyproject.toml | — | ✅ | Python 依赖配置 |
+| java-gateway/pom.xml | 77 | ✅ | Maven 依赖配置 |
+
+---
+
+## 架构评审（已知缺陷追踪）
+
+| # | 问题 | 状态 |
+|---|------|:--:|
+| 1 | agent.py 是上帝类（862 行） | ⚠️ 接受——2,500 行项目不值得拆 |
+| 2 | on_progress 回调未全线覆盖 | ✅ 已修复——Level 1/2/3/4 全部贯通 |
+| 3 | 没有错误恢复 | ✅ 已修复——LLM 重试 + Tavily→DDG + Agent 循环兜底 |
+| 4 | 搜索只有 Tavily | ✅ 已修复——DuckDuckGo 自动降级 |
+| 5 | Java SSE 透传 | ⚠️ 已知限制——暂不开发 |
+| 6 | Clarify 未融入 Agent | ✅ 已修复——命令行+浏览器双入口 |
+
+---
+
+## 下一步
+
+1. **Step 3: JWT 用户系统** —— JwtTokenProvider + AuthController + 前端登录
+2. **Docker Compose** —— 一键启动所有服务
+3. **SSE 流式** —— 已知限制，暂不开发
+4. **前端框架升级** —— Vue/React

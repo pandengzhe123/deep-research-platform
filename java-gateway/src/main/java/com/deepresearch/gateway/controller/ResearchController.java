@@ -48,18 +48,26 @@ public class ResearchController {
     @PostMapping("/research")
     public Mono<ResearchResponse> research(@RequestBody ResearchRequest req) {
         return Mono.fromCallable(() -> {
-            // 1. 创建会话
-            ResearchSession session = sessionService.createSession("anonymous", req.question());
+            // 1. 创建或继续会话
+            ResearchSession session;
+            if (req.context() != null && !req.context().isBlank()) {
+                // 继续已有会话
+                session = sessionService.createSession("anonymous", req.question());
+                // 之前的历史已在 req.context() 中，传给 Python 即可
+            } else {
+                session = sessionService.createSession("anonymous", req.question());
+            }
             log.info("同步研究: session={}", session.getId());
 
-            // 2. 在并发控制下执行
+            // 2. 执行
             ResearchResponse resp = scheduler.execute(
                     () -> agentClient.research(req),
-                    60_000  // 排队最多等 1 分钟
+                    60_000
             );
 
-            // 3. 保存结果
+            // 3. 保存报告 + 追加历史
             sessionService.appendReport(session.getId(), resp.report());
+            sessionService.appendHistory(session.getId(), "Agent: 报告已生成");
             log.info("研究完成: session={}, report_len={}", session.getId(),
                     resp.report() != null ? resp.report().length() : 0);
             return resp;
