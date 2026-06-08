@@ -29,7 +29,15 @@
 </head>
 <body>
     <h1>Deep Research</h1>
-    <p>输入问题，Agent 自动搜索网络并生成深度研究报告。</p>
+
+    <!-- 登录区域 -->
+    <div id="authArea" style="margin-bottom:16px; padding:12px; background:#f3f4f6; border-radius:8px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; font-size:14px">
+        <input id="authUser" placeholder="用户名" style="width:120px; padding:6px 10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px">
+        <input id="authPass" type="password" placeholder="密码" style="width:120px; padding:6px 10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px">
+        <button onclick="doRegister()" style="padding:6px 14px; font-size:13px; background:#6366f1">注册</button>
+        <button onclick="doLogin()" style="padding:6px 14px; font-size:13px; background:#059669">登录</button>
+        <span id="authStatus" style="font-size:13px; color:#6b7280"></span>
+    </div>
 
     <div style="margin-bottom:12px; display:flex; align-items:center; gap:8px; flex-wrap:wrap">
         <input type="file" id="fileInput" accept=".txt,.md,.pdf" style="padding:6px; font-size:13px; border:1px solid #d1d5db; border-radius:6px; background:#f8f9fa; color:#333">
@@ -54,15 +62,105 @@
         <span id="status"></span>
     </div>
 
+    <div id="sessions" style="margin:16px 0; font-size:13px; color:#6b7280"></div>
+
     <div id="progress"><em>等待提交...</em></div>
     <div id="report"></div>
 
     <script>
         let contextHistory = '';
+        let authToken = localStorage.getItem('token') || '';
+
+        // ========== 认证 ==========
+
+        function updateAuthUI() {
+            if (authToken) {
+                document.getElementById('authUser').style.display = 'none';
+                document.getElementById('authPass').style.display = 'none';
+                document.querySelectorAll('#authArea button').forEach(b => b.style.display = 'none');
+                // 显示用户名 + 退出按钮
+                const username = localStorage.getItem('username') || '';
+                document.getElementById('authStatus').innerHTML =
+                    username + ' | <a href="#" onclick="logout()" style="color:#dc2626">退出</a>';
+            }
+        }
+
+        function logout() {
+            authToken = '';
+            localStorage.removeItem('token');
+            localStorage.removeItem('username');
+            document.getElementById('authUser').style.display = '';
+            document.getElementById('authPass').style.display = '';
+            document.querySelectorAll('#authArea button').forEach(b => b.style.display = '');
+            document.getElementById('authStatus').textContent = '';
+            document.getElementById('fileList').innerHTML = '';
+            document.getElementById('sessions').innerHTML = '';
+        }
+
+        async function doRegister() {
+            const username = document.getElementById('authUser').value.trim();
+            const password = document.getElementById('authPass').value.trim();
+            if (!username || !password) return;
+            try {
+                const resp = await fetch('/api/auth/register', {
+                    method: 'POST', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({username, password})
+                });
+                const data = await resp.json();
+                if (data.token) {
+                    authToken = data.token;
+                    localStorage.setItem('token', authToken);
+                    localStorage.setItem('username', data.username);
+                    updateAuthUI();
+                    loadFileList();
+                    loadSessions();
+                } else {
+                    document.getElementById('authStatus').textContent = '❌ ' + data.message;
+                }
+            } catch (e) {
+                document.getElementById('authStatus').textContent = '❌ ' + e.message;
+            }
+        }
+
+        async function doLogin() {
+            const username = document.getElementById('authUser').value.trim();
+            const password = document.getElementById('authPass').value.trim();
+            try {
+                const resp = await fetch('/api/auth/login', {
+                    method: 'POST', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({username, password})
+                });
+                const data = await resp.json();
+                if (data.token) {
+                    authToken = data.token;
+                    localStorage.setItem('token', authToken);
+                    localStorage.setItem('username', data.username);
+                    updateAuthUI();
+                    loadFileList();
+                    loadSessions();
+                } else {
+                    document.getElementById('authStatus').textContent = '❌ ' + data.message;
+                }
+            } catch (e) {
+                document.getElementById('authStatus').textContent = '❌ ' + e.message;
+            }
+        }
+
+        function kbUserId() {
+            return localStorage.getItem('username') || 'default';
+        }
+
+        function authHeaders() {
+            const headers = {'Content-Type': 'application/json'};
+            if (authToken) headers['Authorization'] = 'Bearer ' + authToken;
+            return headers;
+        }
+
+        // ========== 知识库 ==========
 
         async function loadFileList() {
             try {
-                const resp = await fetch('http://localhost:8000/kb/files?user_id=default');
+                const resp = await fetch('http://localhost:8000/kb/files?user_id=' + kbUserId());
                 const data = await resp.json();
                 const files = data.files || [];
                 const el = document.getElementById('fileList');
@@ -79,7 +177,7 @@
         async function deleteDoc(docId) {
             if (!confirm('确定删除 ' + docId + '？')) return;
             try {
-                await fetch('http://localhost:8000/kb/files/' + docId + '?user_id=default', { method: 'DELETE' });
+                await fetch('http://localhost:8000/kb/files/' + docId + '?user_id=' + kbUserId(), { method: 'DELETE' });
                 loadFileList();
             } catch (e) {}
         }
@@ -95,7 +193,8 @@
             form.append('file', file);
 
             try {
-                const resp = await fetch('http://localhost:8000/kb/upload?user_id=default', {
+                const uid = localStorage.getItem('username') || 'default';
+                const resp = await fetch('http://localhost:8000/kb/upload?user_id=' + uid, {
                     method: 'POST', body: form
                 });
                 const data = await resp.json();
@@ -111,8 +210,32 @@
             }
         }
 
-        // 页面加载时拉取文件列表
+        async function loadSessions() {
+            const el = document.getElementById('sessions');
+            try {
+                const resp = await fetch('/api/sessions', { headers: authHeaders() });
+                if (!resp.ok) { el.innerHTML = ''; return; }
+                const list = await resp.json();
+                if (!list.length) { el.innerHTML = ''; return; }
+                el.innerHTML = '📋 ' + list.map(s => {
+                    const title = (s.question || s.id).substring(0, 15);
+                    return `<a href="#" onclick="continueSession('${s.id}','${escapeHtml(s.question||'')}')" style="color:#6366f1" title="${escapeHtml(s.question||'')}">${escapeHtml(title)}</a>`;
+                }).join(' · ');
+            } catch (e) { el.innerHTML = ''; }
+        }
+
+        function escapeHtml(s) { return (s||'').replace(/'/g,"\\'").replace(/"/g,"&quot;"); }
+
+        function continueSession(sid, question) {
+            document.getElementById('question').value = '继续之前的话题: ' + question;
+            contextHistory = sessionStorage.getItem('ctx_' + sid) || '';
+            // 后续提交时会带上这个 session 的 context
+        }
+
+        // 页面加载时
+        updateAuthUI();
         loadFileList();
+        loadSessions();
 
         function start() {
             const question = document.getElementById('question').value.trim();
@@ -142,7 +265,7 @@
             // 同步模式 —— 稳定可靠
             fetch('/api/research', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: authHeaders(),
                 body: JSON.stringify({ question, level, context: contextHistory, kb_enabled: kbEnabled })
             }).then(res => {
                 clearInterval(timerId);
@@ -169,7 +292,11 @@
                 }
             }).catch(err => {
                 clearInterval(timerId);
-                progress.textContent = '❌ 请求失败: ' + err.message + '\n';
+                if (err.message.includes('401') || err.message.includes('403')) {
+                    progress.textContent = '🔒 请先登录/注册后再提问\n';
+                } else {
+                    progress.textContent = '❌ 请求失败: ' + err.message + '\n';
+                }
                 statusEl.innerHTML = '<span class="badge badge-warn">失败</span>';
                 contextHistory = '';
             }).finally(() => { btn.disabled = false; });

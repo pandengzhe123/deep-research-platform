@@ -10,6 +10,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.context.ReactiveSecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -46,22 +47,24 @@ public class ResearchController {
      * 同步研究 —— 等 Agent 完全跑完，返回完整报告。
      */
     @PostMapping("/research")
-    public Mono<ResearchResponse> research(@RequestBody ResearchRequest req) {
+    public Mono<ResearchResponse> research(@RequestBody ResearchRequest req,
+            @org.springframework.security.core.annotation.AuthenticationPrincipal String userId) {
+        final String uid = userId != null ? userId : "anonymous";
         return Mono.fromCallable(() -> {
             // 1. 创建或继续会话
-            ResearchSession session;
-            if (req.context() != null && !req.context().isBlank()) {
-                // 继续已有会话
-                session = sessionService.createSession("anonymous", req.question());
-                // 之前的历史已在 req.context() 中，传给 Python 即可
-            } else {
-                session = sessionService.createSession("anonymous", req.question());
-            }
+            ResearchSession session = sessionService.createSession(uid, req.question());
             log.info("同步研究: session={}", session.getId());
 
-            // 2. 执行
+            // 2. 注入 user_id 到请求（传给 Python → KB 隔离）
+            ResearchRequest reqWithUser = new ResearchRequest(
+                    req.question(), req.level(), req.maxRounds(),
+                    req.language(), req.context(), req.kbEnabled(),
+                    uid
+            );
+
+            // 3. 执行
             ResearchResponse resp = scheduler.execute(
-                    () -> agentClient.research(req),
+                    () -> agentClient.research(reqWithUser),
                     60_000
             );
 
@@ -70,7 +73,10 @@ public class ResearchController {
             sessionService.appendHistory(session.getId(), "Agent: 报告已生成");
             log.info("研究完成: session={}, report_len={}", session.getId(),
                     resp.report() != null ? resp.report().length() : 0);
-            return resp;
+            return new ResearchResponse(
+                    resp.report(), resp.language(), resp.needClarify(),
+                    resp.question(), session.getId()
+            );
         }).subscribeOn(Schedulers.boundedElastic());
     }
 
@@ -78,8 +84,10 @@ public class ResearchController {
      * SSE 流式研究 —— 实时推送进度。
      */
     @PostMapping(value = "/research/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<String> researchStream(@RequestBody ResearchRequest req) {
-        ResearchSession session = sessionService.createSession("anonymous", req.question());
+    public Flux<String> researchStream(@RequestBody ResearchRequest req,
+            @org.springframework.security.core.annotation.AuthenticationPrincipal String userId) {
+        final String uid = userId != null ? userId : "anonymous";
+        ResearchSession session = sessionService.createSession(uid, req.question());
         String headerEvent = "event: session\ndata: {\"id\": \"" + session.getId() + "\"}\n\n";
 
         return Flux.just(headerEvent)
@@ -122,8 +130,15 @@ public class ResearchController {
      * 获取所有会话。
      */
     @GetMapping("/sessions")
-    public ResponseEntity<List<ResearchSession>> listSessions() {
-        return ResponseEntity.ok(sessionService.getAllSessions());
+    public Mono<ResponseEntity<List<ResearchSession>>> listSessions() {
+        return ReactiveSecurityContextHolder.getContext()
+                .map(ctx -> {
+                    String uid = ctx.getAuthentication() != null
+                            ? ctx.getAuthentication().getPrincipal().toString()
+                            : "anonymous";
+                    return ResponseEntity.ok(sessionService.getUserSessions(uid));
+                })
+                .defaultIfEmpty(ResponseEntity.ok(sessionService.getUserSessions("anonymous")));
     }
 
     // ================================================================
@@ -142,4 +157,5 @@ public class ResearchController {
                 "activeTasks", scheduler.activeCount()
         ));
     }
+
 }

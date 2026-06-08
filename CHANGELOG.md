@@ -4,6 +4,76 @@
 
 ---
 
+## 2026-06-08 — Step 3 收尾：多租户隔离 + 会话/文件按用户过滤
+
+### 做了什么
+
+- KB 文件按 user_id 隔离：`list_docs` + `delete_doc` 过滤当前用户
+- 会话列表按 user_id 隔离：`listSessions` → `getUserSessions(uid)`
+- 解决 `ReactiveSecurityContextHolder` 不能跨线程的问题——`listSessions` 改回 `Mono` 响应式链
+- `@AuthenticationPrincipal` → `ReactiveSecurityContextHolder` 直接在响应式方法里拿 Principal
+- 前端会话列表改为显示问题前 15 字而非 session ID
+- 登录/注册/退出后自动刷新会话列表和文件列表
+- 清除了旧的 Chroma 数据（切换 embedding 时遗留的无 user_id 数据）
+- SSL 绕过从函数内提前到模块加载时，`local_files_only=True` 防止上传文件时联网
+
+### 修改文件
+
+| 文件 | 改动 |
+|------|------|
+| `kb.py` | SSL 绕过提前到模块级 + local_files_only + list_docs/delete_doc 加 user_id 过滤 |
+| `ResearchController.java` | listSessions 改响应式 + Principal 直接取 |
+| `server.py` | ResearchRequest 加 user_id 字段 + 传给 Agent |
+| `agent.py` | FastLevel1Agent + Level2Agent 加 user_id 参数 + kb.search 带 user_id |
+| `ResearchModels.java` | ResearchRequest +user_id, ResearchResponse +session_id |
+| `index.html` | kbUserId() + 登录/退出刷新列表 + 会话标题显示问题 |
+
+### 当前效果
+
+- 注册/登录后 session.user_id = 真实用户 ID
+- 用户 A 看不到用户 B 的文件和会话
+- 切换用户自动刷新
+- 会话列表显示问题标题
+
+### 已知限制
+
+- Spring Security 强制认证未开启（all permitted），等前端适配完成
+- KB upload 走的是直接跨域调 Python（:8000），user_id 从 localStorage 取用户名
+
+
+## 2026-06-08 — Step 3 完成：JWT 用户系统
+
+### 做了什么
+
+- 新增 JwtTokenProvider + AuthController + UserEntity + UserRepository（4 个文件，~170 行）
+- SecurityConfig 重写为 @EnableWebFluxSecurity + JWT 过滤器
+- ResearchController 不再硬编码 `"anonymous"`，改为从 JWT 提取 user_id
+- 前端加登录栏：注册/登录/存 token/自动恢复
+
+### 新增文件
+
+| 文件 | 作用 |
+|------|------|
+| `security/JwtTokenProvider.java` | JWT 签发/验证/解析 |
+| `security/UserEntity.java` | JPA 实体映射 users 表 |
+| `security/UserRepository.java` | 数据访问 |
+| `controller/AuthController.java` | /api/auth/register + /api/auth/login |
+
+### 修改文件
+
+| 文件 | 改动 |
+|------|------|
+| `config/SecurityConfig.java` | 重写 |
+| `controller/ResearchController.java` | `"anonymous"` → `getUserId()` |
+| `index.html` | 登录栏 + authToken 管理 |
+
+### 当前效果
+
+- 注册/登录返回 JWT，前端存 localStorage，所有请求自动带 token
+- session.user_id 从 `"anonymous"` 变成真实用户 ID
+- SecurityConfig 当前全部放行（未登录兼容），JWT Filter 已就绪待开启
+
+
 ## 2026-06-07 — Phase 2 完成：PostgreSQL 持久化验证通过
 
 ### 做了什么
@@ -31,6 +101,33 @@
 - 用户系统（Step 3）待开发
 
 ---
+
+## 2026-06-07 — Phase 2 完成：PostgreSQL 持久化验证通过
+
+### 做了什么
+
+- 数据库连接验证成功，`docker exec` 查到 sessions 表已有数据
+- 修了 Hibernate JSONB 类型映射 bug（`@JdbcTypeCode(SqlTypes.JSON)`）
+- 修了 Spring Security + WebFlux 冲突（Servlet→Reactive 配置切换）
+- 修了 ResearchRequest 构造函数参数数量不匹配
+- `start.bat` 更新——启动前自动检测并启动 PostgreSQL
+
+### 踩过的坑
+
+| 问题 | 原因 | 解决 |
+|------|------|------|
+| 编译失败 `ResearchRequest(...)` 参数不匹配 | record 加了 `kbEnabled` 字段后工厂方法没更新 | 构造函数加 `null` 默认值 |
+| 启动报 `NoClassDefFoundError: jakarta/servlet/Filter` | `spring-boot-starter-security` 默认 Servlet 模式，WebFlux 没有 Servlet API | 改为 `@EnableWebFluxSecurity` + 排除 Servlet 自动配置 |
+| 数据写入报 `column "history" is of type jsonb but expression is of type character varying` | Hibernate 默认把 Java String 映射为 VARCHAR | `@JdbcTypeCode(SqlTypes.JSON)` 指定映射为 JSONB |
+| Docker `postgres:16-alpine` 下载不动 | Docker Hub 网络不稳定 | 换 `postgres:16` 镜像，下载成功 |
+
+### 当前状态
+
+- PostgreSQL 运行中（Docker `deepresearch-pg` 端口 5432）
+- 会话数据持久化已验证（SELECT 查到数据）
+- 前端提交问题正常生成报告
+- 用户系统（Step 3）待开发
+
 
 ## 2026-06-07 — Phase 2 启动：PostgreSQL 替换内存存储
 

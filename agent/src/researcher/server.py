@@ -45,6 +45,7 @@ class ResearchRequest(BaseModel):
     language: str = "auto"
     context: str = ""
     kb_enabled: bool = False
+    user_id: str = "default"
 
 
 class ProgressEvent(BaseModel):
@@ -66,6 +67,7 @@ async def run_agent_with_sse(
     language: str,
     context: str,
     kb_enabled: bool,
+    user_id: str,
     cancel: aio.Event,
 ) -> AsyncGenerator[dict, None]:
     """
@@ -101,13 +103,13 @@ async def run_agent_with_sse(
 
         # ---- 创建 Agent（走 agent.py 的真 Agent） ----
         if level == 1:
-            agent = FastLevel1Agent(on_progress=on_progress, kb_enabled=kb_enabled)
+            agent = FastLevel1Agent(on_progress=on_progress, kb_enabled=kb_enabled, user_id=user_id)
         elif level == 3:
             agent = Level3Agent(on_progress=on_progress)
         elif level == 4:
             agent = Level4Agent(on_progress=on_progress)
         else:
-            agent = Level2Agent(on_progress=on_progress, kb_enabled=kb_enabled)
+            agent = Level2Agent(on_progress=on_progress, kb_enabled=kb_enabled, user_id=user_id)
 
         on_progress({"step": "planning", "message": f"Level {level} Agent 启动..."})
 
@@ -188,7 +190,7 @@ async def research_sync(req: ResearchRequest):
         async for event in run_agent_with_sse(
             question=req.question, level=req.level,
             max_rounds=req.max_rounds, language=req.language,
-            context=req.context, kb_enabled=req.kb_enabled, cancel=cancel,
+            context=req.context, kb_enabled=req.kb_enabled, user_id=req.user_id, cancel=cancel,
         ):
             if event["event"] == "done":
                 result.append(json.loads(event["data"]))
@@ -208,7 +210,7 @@ async def research_stream(req: ResearchRequest):
     return EventSourceResponse(run_agent_with_sse(
         question=req.question, level=req.level,
         max_rounds=req.max_rounds, language=req.language,
-        context=req.context, kb_enabled=req.kb_enabled, cancel=cancel,
+        context=req.context, kb_enabled=req.kb_enabled, user_id=req.user_id, cancel=cancel,
     ))
 
 

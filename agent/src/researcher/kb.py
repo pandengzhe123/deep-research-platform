@@ -1,15 +1,20 @@
-"""知识库模块 —— Chroma 向量存储 + sentence-transformers embedding + 检索。
-
-设计要点：
-- 按段落→句子→字符三级切分，不用 LangChain
-- 元数据标记 user_id + doc_id，天然支持多租户
-- embedding 模型本地运行，免费
-"""
+"""知识库模块 —— Chroma 向量存储 + sentence-transformers embedding + 检索。"""
 
 from __future__ import annotations
 
+import os
+import ssl
 import uuid
 from pathlib import Path
+
+# ============================================================
+# SSL 绕过 —— 必须在导入 sentence_transformers 之前设置
+# ============================================================
+ssl._create_default_https_context = ssl._create_unverified_context
+os.environ["CURL_CA_BUNDLE"] = ""
+os.environ["SSL_CERT_FILE"] = ""
+os.environ["HF_HUB_DISABLE_SSL_VERIFY"] = "1"
+os.environ["REQUESTS_CA_BUNDLE"] = ""
 
 import chromadb
 
@@ -68,18 +73,12 @@ def read_file(file_path: Path) -> str:
 
 def _embed_semantic(texts: list[str]) -> list[list[float]]:
     """用 sentence-transformers 生成语义向量（384 维，中英文）。模型缓存在内存。"""
-    import os
-    import ssl
-
-    ssl._create_default_https_context = ssl._create_unverified_context
-    os.environ.setdefault("CURL_CA_BUNDLE", "")
-    os.environ.setdefault("SSL_CERT_FILE", "")
-
     if not hasattr(_embed_semantic, "_model"):
         from sentence_transformers import SentenceTransformer
 
         _embed_semantic._model = SentenceTransformer(
-            "paraphrase-multilingual-MiniLM-L12-v2"
+            "paraphrase-multilingual-MiniLM-L12-v2",
+            local_files_only=True  # 不上网检查更新，只用本地缓存
         )
     return _embed_semantic._model.encode(texts, show_progress_bar=False).tolist()
 
@@ -203,13 +202,16 @@ class KnowledgeBase:
             return f"知识库检索失败: {e}"
 
     def list_docs(self, user_id: str = "default") -> list[dict]:
-        """列出用户已上传的文档。"""
+        """列出该用户已上传的文档（按 user_id 过滤元数据）。"""
         try:
             collection = self._get_collection(user_id)
             metadatas = collection.get()["metadatas"]
             seen: set[str] = set()
             result = []
             for m in metadatas:
+                # 只返回属于当前用户的文档
+                if m.get("user_id", "default") != user_id:
+                    continue
                 did = m.get("doc_id", "")
                 if did and did not in seen:
                     seen.add(did)
@@ -219,11 +221,10 @@ class KnowledgeBase:
             return []
 
     def delete_doc(self, doc_id: str, user_id: str = "default") -> dict:
-        """删除指定文档的所有 chunk。"""
+        """删除指定文档的所有 chunk（按 user_id + doc_id 过滤）。"""
         try:
             collection = self._get_collection(user_id)
-            # 找到该文档的所有 chunk id
-            results = collection.get(where={"doc_id": doc_id})
+            results = collection.get(where={"user_id": user_id, "doc_id": doc_id})
             ids = results.get("ids", [])
             if ids:
                 collection.delete(ids=ids)
