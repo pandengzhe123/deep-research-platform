@@ -296,11 +296,16 @@ git clone ... && docker compose up -d
 
 ---
 
-## Phase 5：前端升级（可选）
+## Phase 5：前端升级 ✅ 已完成
 
-**目标**：从纯 HTML 换成 Vue 3 / React，像一个真正的产品
+**目标**：从纯 HTML 换成 Vue 3 / React → **Vue 3 + Vite 已完成**
 
-这个阶段是纯前端工作，对 Agent/Java 理解没有加分。如果时间有限可以跳过——当前的 HTML 已经够演示用。
+**成果**：
+- Vue 3 + Vite + vue-router + Pinia + axios + marked
+- 全屏聊天布局：左侧栏 + 中间消息 + 右侧 KB
+- 登录/注册页 + 路由守卫
+- 多轮追问 + 会话管理 + localStorage 缓存
+- 退出确认弹窗 + 响应式布局
 
 ---
 

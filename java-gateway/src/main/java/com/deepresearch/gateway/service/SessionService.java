@@ -87,6 +87,10 @@ public class SessionService {
     /**
      * 获取单个会话。
      */
+    public SessionEntity getEntity(String sessionId) {
+        return repo.findById(sessionId).orElse(null);
+    }
+
     public ResearchSession getSession(String sessionId) {
         return repo.findById(sessionId).map(this::toPojo).orElse(null);
     }
@@ -110,6 +114,9 @@ public class SessionService {
 
     // ========== 工具方法 ==========
 
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
     private ResearchSession toPojo(SessionEntity e) {
         ResearchSession s = new ResearchSession(e.getId(), e.getUserId(), e.getQuestion());
         s.setReport(e.getReport() != null ? e.getReport() : "");
@@ -120,29 +127,18 @@ public class SessionService {
     @SuppressWarnings("unchecked")
     private List<String> fromJson(String json) {
         try {
-            // 简单 JSON 数组解析（不用 Jackson 额外依赖）
             if (json == null || json.isBlank() || "[]".equals(json.trim())) return new ArrayList<>();
-            String inner = json.trim().replaceAll("^\\[|\\]$", "");
-            if (inner.isBlank()) return new ArrayList<>();
-            // 按 "," 分割（简化版，只支持纯文本）
-            String[] parts = inner.split("\",\\s*\"");
-            List<String> result = new ArrayList<>();
-            for (String p : parts) {
-                result.add(p.replaceAll("^\"|\"$", "").replace("\\\"", "\""));
-            }
-            return result;
+            return objectMapper.readValue(json, List.class);
         } catch (Exception e) {
             return new ArrayList<>();
         }
     }
 
     private String toJson(List<String> items) {
-        StringBuilder sb = new StringBuilder("[");
-        for (int i = 0; i < items.size(); i++) {
-            if (i > 0) sb.append(", ");
-            sb.append("\"").append(items.get(i).replace("\"", "\\\"")).append("\"");
+        try {
+            return objectMapper.writeValueAsString(items);
+        } catch (Exception e) {
+            return "[]";
         }
-        sb.append("]");
-        return sb.toString();
     }
 }

@@ -21,7 +21,8 @@ public class ResearchModels {
             String language,
             String context,
             @JsonProperty("kb_enabled") Boolean kbEnabled,
-            @JsonProperty("user_id") String userId
+            @JsonProperty("user_id") String userId,
+            @JsonProperty("session_id") String sessionId
     ) {
         public ResearchRequest {
             if (level == 0) level = 2;
@@ -30,7 +31,7 @@ public class ResearchModels {
 
         /** 快速构造：只传问题，默认 Level 2。 */
         public ResearchRequest(String question) {
-            this(question, 2, null, "auto", "", null, null);
+            this(question, 2, null, "auto", "", null, null, null);
         }
     }
 

@@ -4,6 +4,47 @@
 
 ---
 
+## 2026-06-08 — Vue 3 前端重构
+
+### 做了什么
+
+- 用 Vue 3 + Vite 完全重建前端，替代旧的单文件 HTML
+- 路由：`/login`（登录页）+ `/`（研究主界面）
+- 左侧栏：品牌 + 会话列表 + 用户信息（点击可退出）
+- 中间聊天区：空状态快速提问 → 用户紫色气泡（右边）→ AI 白色卡片（左边）→ 思考动画
+- 右侧 KB 面板：上传/列表/删除知识库文件
+- 底部输入栏：Level 选择 + RAG 开关 + 计时器 + 发送按钮
+- 路由守卫：未登录自动跳转登录页
+- axios 拦截器：自动带 JWT，401 跳登录
+- 退出确认弹窗：自定义模态框
+- 多轮追问 contextHistory 从数据库 + localStorage 双恢复
+- 刷新页面自动恢复活跃会话
+
+### 新增文件
+
+| 文件 | 行数 | 作用 |
+|------|------|------|
+| `frontend/package.json` | 20 | 依赖：vue/vue-router/pinia/axios/marked |
+| `frontend/vite.config.js` | 12 | Vite + 代理配置 |
+| `frontend/index.html` | 14 | HTML 入口 |
+| `frontend/src/main.js` | 9 | Vue 初始化 |
+| `frontend/src/App.vue` | 11 | 根组件 |
+| `frontend/src/router/index.js` | 18 | 路由 + 守卫 |
+| `frontend/src/stores/auth.js` | 29 | Pinia：token/user 管理 |
+| `frontend/src/utils/api.js` | 22 | axios：拦截器 + JWT |
+| `frontend/src/views/LoginView.vue` | 88 | 登录/注册页 |
+| `frontend/src/views/ResearchView.vue` | 473 | 主界面：聊天 + 侧栏 + KB |
+| `frontend/start.bat` | 13 | 启动脚本 |
+
+### 修复的会话问题
+
+- 追问丢失上下文 → Agent 收到 `contextHistory` 完整对话链
+- 每次追问开新会话 → `session_id` 传给后端复用
+- 刷新后聊天丢失 → localStorage 缓存 + 数据库 API fallback
+- 历史会话报告不显示 → Jackson ObjectMapper 修复 JSONB 序列化
+- Clarify 追问不存 session → 追问后保存 session_id
+
+
 ## 2026-06-08 — Step 3 收尾：多租户隔离 + 会话/文件按用户过滤
 
 ### 做了什么

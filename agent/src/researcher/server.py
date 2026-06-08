@@ -114,9 +114,14 @@ async def run_agent_with_sse(
         on_progress({"step": "planning", "message": f"Level {level} Agent 启动..."})
 
         # ---- 后台跑 Agent，前台推 SSE ----
+        # 拼接前后文传给 Agent
+        full_question = question
+        if context:
+            full_question = f"对话历史：\n{context}\n\n当前问题：{question}"
+
         async def run_agent():
             try:
-                result = await agent.run(question)
+                result = await agent.run(full_question)
                 await queue.put({"type": "done", "report": result})
             except Exception as e:
                 log.exception("Agent 执行异常")

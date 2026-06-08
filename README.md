@@ -22,13 +22,34 @@ http://localhost:8080
 ## 架构
 
 ```
-浏览器 → Java 网关 (Spring Boot WebFlux, :8080)
-           │  HTTP + SSE
-           ▼
-         Python Agent (FastAPI, :8000)
-           │  OpenAI SDK
-           ▼
-         DeepSeek V4 Flash + Tavily / DuckDuckGo
+浏览器 (Vue 3 :3000)
+    │  REST / SSE
+    ▼
+Java 网关 (Spring Boot WebFlux, :8080)
+    │  HTTP
+    ▼
+Python Agent (FastAPI, :8000)
+    │  OpenAI SDK
+    ▼
+DeepSeek V4 Flash + Tavily / DuckDuckGo + Chroma
+    │
+PostgreSQL (会话持久化)
+```
+
+### 启动
+
+```bash
+# 终端 1：Python Agent
+cd agent && start.bat               → :8000
+
+# 终端 2：Java 网关  
+cd java-gateway && start.bat        → :8080
+
+# 终端 3：Vue 前端
+cd frontend && start.bat            → :3000
+
+# 浏览器打开
+http://localhost:3000
 ```
 
 ## 四个 Agent Level
@@ -55,11 +76,12 @@ http://localhost:8080
 
 | 子项目 | 语言 | 文件数 | 行数 |
 |--------|------|--------|------|
-| Python Agent | Python | 6 | 1,003 |
-| Java 网关 | Java 21 | 7 | 492 |
-| 前端 | HTML/JS | 1 | 120 |
-| 文档 | Markdown | 7 | ~600 |
-| **合计** | | **21** | **~2,200** |
+| Python Agent | Python | 6 | 1,759 |
+| Java 网关 | Java 21 | 14 | ~700 |
+| Vue 前端 | Vue 3 / JS | 11 | 650 |
+| 测试 | Python | 2 | 428 |
+| 文档 | Markdown | 12 | ~3,200 |
+| **合计** | | **45** | **~6,700** |
 
 ## 核心文件
 

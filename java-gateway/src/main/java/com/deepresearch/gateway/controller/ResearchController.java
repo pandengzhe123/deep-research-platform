@@ -3,6 +3,7 @@ package com.deepresearch.gateway.controller;
 import com.deepresearch.gateway.model.ResearchModels.ResearchRequest;
 import com.deepresearch.gateway.model.ResearchModels.ResearchResponse;
 import com.deepresearch.gateway.model.ResearchModels.ResearchSession;
+import com.deepresearch.gateway.model.SessionEntity;
 import com.deepresearch.gateway.service.AgentClient;
 import com.deepresearch.gateway.service.ResearchScheduler;
 import com.deepresearch.gateway.service.SessionService;
@@ -51,15 +52,25 @@ public class ResearchController {
             @org.springframework.security.core.annotation.AuthenticationPrincipal String userId) {
         final String uid = userId != null ? userId : "anonymous";
         return Mono.fromCallable(() -> {
-            // 1. 创建或继续会话
-            ResearchSession session = sessionService.createSession(uid, req.question());
+            // 1. 创建或继续已有会话
+            ResearchSession session;
+            if (req.sessionId() != null && !req.sessionId().isBlank()) {
+                session = sessionService.getSession(req.sessionId());
+                if (session == null) session = sessionService.createSession(uid, req.question());
+                else sessionService.appendHistory(req.sessionId(), "用户: " + req.question());
+            } else {
+                session = sessionService.createSession(uid, req.question());
+            }
             log.info("同步研究: session={}", session.getId());
 
-            // 2. 注入 user_id 到请求（传给 Python → KB 隔离）
+            // 2. 注入 user_id + session_id + 完整上下文
+            String dbContext = sessionService.getContextHistory(session.getId());
+            String fullContext = (req.context() != null && !req.context().isBlank())
+                    ? req.context() : dbContext;
             ResearchRequest reqWithUser = new ResearchRequest(
                     req.question(), req.level(), req.maxRounds(),
-                    req.language(), req.context(), req.kbEnabled(),
-                    uid
+                    req.language(), fullContext, req.kbEnabled(),
+                    uid, session.getId()
             );
 
             // 3. 执行
@@ -70,7 +81,11 @@ public class ResearchController {
 
             // 3. 保存报告 + 追加历史
             sessionService.appendReport(session.getId(), resp.report());
-            sessionService.appendHistory(session.getId(), "Agent: 报告已生成");
+            if (resp.needClarify() != null && resp.needClarify()) {
+                sessionService.appendHistory(session.getId(), "Agent: （追问）" + (resp.question() != null ? resp.question() : ""));
+            } else {
+                sessionService.appendHistory(session.getId(), "Agent: （已回复报告）");
+            }
             log.info("研究完成: session={}, report_len={}", session.getId(),
                     resp.report() != null ? resp.report().length() : 0);
             return new ResearchResponse(
@@ -120,10 +135,14 @@ public class ResearchController {
      * 获取某个会话的完整信息（含报告）。
      */
     @GetMapping("/sessions/{id}")
-    public ResponseEntity<ResearchSession> getSession(@PathVariable String id) {
+    public ResponseEntity<Map<String, Object>> getSession(@PathVariable String id) {
         ResearchSession session = sessionService.getSession(id);
         if (session == null) return ResponseEntity.notFound().build();
-        return ResponseEntity.ok(session);
+        SessionEntity entity = sessionService.getEntity(id);
+        return ResponseEntity.ok(Map.of(
+                "session", session,
+                "history", entity != null ? entity.getHistory() : "[]"
+        ));
     }
 
     /**
