@@ -4,6 +4,35 @@
 
 ---
 
+## 2026-06-08 — Docker Compose 一键部署
+
+### 做了什么
+
+- 新增 `agent/Dockerfile`：Python 3.11-slim，装依赖 + 启动 FastAPI
+- 新增 `java-gateway/Dockerfile`：多阶段构建（Maven 编译 → JRE 运行）
+- 新增 `frontend/Dockerfile`：多阶段构建（Node 编译 Vue → Nginx 托管）
+- 新增 `frontend/nginx.conf`：Nginx 反向代理 `/api`→Java，`/kb` `/research`→Python
+- 新增 `docker-compose.yml`：4 服务编排（postgres + agent + gateway + frontend）
+- `application.yml` 连接地址支持 `${ENV_VAR:default}` 环境变量覆盖
+
+### 效果
+
+```bash
+git clone ... && docker compose up
+# → http://localhost:3000 直接用，不用装任何东西
+```
+
+### 新增文件
+
+| 文件 | 作用 |
+|------|------|
+| `agent/Dockerfile` | Python Agent 镜像 |
+| `java-gateway/Dockerfile` | Java 网关镜像 |
+| `frontend/Dockerfile` | Vue + Nginx 镜像 |
+| `frontend/nginx.conf` | Nginx 反向代理配置 |
+| `docker-compose.yml` | 4 服务编排 |
+
+
 ## 2026-06-08 — Vue 3 前端重构
 
 ### 做了什么

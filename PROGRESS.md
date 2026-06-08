@@ -14,7 +14,7 @@
 ├── 前端 UI            ██████████████░░░░  75%
 ├── RAG 集成           █████████████████░  85%
 ├── 测试系统           ████████████░░░░░░  60%
-├── 部署              █████░░░░░░░░░░░░░  25%
+├── 部署              ████████████░░░░░░  60%
 └── 文档              ███████████████████  95%
 ```
 
@@ -110,7 +110,7 @@
 
 ---
 
-## 部署（25%）
+## 部署（60%）
 
 | 任务 | 状态 | 说明 |
 |------|:--:|------|
@@ -118,7 +118,10 @@
 | Java Gateway 启动 | ✅ | start.bat（自动检测 PostgreSQL） |
 | Vue 前端启动 | ✅ | frontend/start.bat (npm run dev) |
 | PostgreSQL 容器 | ✅ | Docker postgres:16 |
-| Docker Compose | | 后续 (一键启动 4 个服务) |
+| Dockerfile ×3 | ✅ | agent / gateway / frontend |
+| nginx 反向代理 | ✅ | 前端 nginx 代理 API + KB + SSE |
+| docker-compose.yml | ✅ | 4 服务编排，`docker compose up` |
+| 云服务器部署 | | 后续 |
 
 ---
 
