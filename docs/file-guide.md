@@ -8,35 +8,86 @@
 
 ```
 deep_research/
-├── .gitignore                  Git 忽略规则
-├── README.md                   项目介绍（GitHub 首页）
-├── PROGRESS.md                 开发进度（做完一项勾一项）
+├── .gitignore                      Git 忽略规则
+├── README.md                       项目介绍（GitHub 首页）
+├── PROGRESS.md                     开发进度（每项勾完后更新）
+├── CHANGELOG.md                    工作留痕（每次改动记录）
+├── docker-compose.yml              Docker 一键部署（4 服务编排）
 │
-├── agent/                     ★ 你自己写的 Python Agent
-│   ├── .env                    你的 API Key（不提交到 Git）
-│   ├── .env.example            环境变量模板（告诉别人要填什么）
-│   ├── pyproject.toml          Python 项目配置（依赖、版本）
-│   ├── start.bat               双击启动 Agent 服务
+├── agent/                          ★ Python Agent
+│   ├── .env                        你的 API Key（不提交到 Git）
+│   ├── .env.example                环境变量模板
+│   ├── pyproject.toml              Python 依赖配置
+│   ├── Dockerfile                  Docker 镜像
+│   ├── start.bat                   双击启动
+│   ├── check_kb.py                 查看 Chroma 知识库
+│   ├── chroma_data/                向量数据库（磁盘持久化）
+│   ├── tests/
+│   │   ├── test_units.py           单元测试（14 个纯函数）1 秒跑完
+│   │   └── test_quality.py         质量回归（3 题 × 2 Level）3-5 分钟
 │   └── src/researcher/
-│       ├── __init__.py          包标记文件
-│       ├── config.py            配置（从 .env 读变量）
-│       ├── llm.py               LLM 客户端（DeepSeek / OpenAI）
-│       ├── search.py            搜索工具（Tavily + 网页抓取 + 摘要）
-│       ├── agent.py             核心 Agent（Level 1 + Level 2）
-│       └── server.py            FastAPI 服务（HTTP 接口 + SSE 流）
+│       ├── __init__.py
+│       ├── config.py               配置（从 .env 读环境变量）
+│       ├── llm.py                  LLM 客户端（chat/tools/structured + 重试）
+│       ├── search.py               搜索（Tavily + DuckDuckGo 降级 + 摘要）
+│       ├── kb.py                   知识库（Chroma + sentence-transformers）
+│       ├── agent.py                ★ 核心（Level 1-4 + 全部 Prompt + 压缩 + 澄清）
+│       └── server.py               FastAPI 服务（HTTP + SSE + KB 上传）
 │
-├── java-gateway/              待写：Spring Boot 网关
-├── frontend/                  待写：Web 前端 UI
+├── java-gateway/                   ★ Java 网关
+│   ├── pom.xml                     Maven 配置（WebFlux + JPA + Security + JWT）
+│   ├── Dockerfile                  Docker 镜像（多阶段：Maven 编译 → JRE 运行）
+│   ├── start.bat                   双击编译 + 启动
+│   └── src/main/java/.../
+│       ├── GatewayApplication.java  @SpringBootApplication + @EnableScheduling
+│       ├── config/
+│       │   ├── WebClientConfig.java HTTP 客户端配置
+│       │   └── SecurityConfig.java  WebFlux Security + JWT Filter
+│       ├── controller/
+│       │   ├── ResearchController.java  REST API（研究/会话/健康检查）
+│       │   └── AuthController.java      注册/登录
+│       ├── service/
+│       │   ├── AgentClient.java         Python HTTP 客户端（含重试）
+│       │   ├── SessionService.java      会话管理（PostgreSQL JPA + 定时清理）
+│       │   ├── SessionRepository.java   Spring Data JPA
+│       │   └── ResearchScheduler.java   并发控制（Semaphore 20）
+│       ├── model/
+│       │   ├── ResearchModels.java      请求/响应 record
+│       │   └── SessionEntity.java       JPA 实体（JSONB 类型映射）
+│       └── security/
+│           ├── JwtTokenProvider.java     JWT 签发/验证
+│           ├── UserEntity.java           用户实体
+│           └── UserRepository.java       用户数据访问
 │
-├── docs/                      文档区
-│   ├── java-gateway-guide.md   架构设计文档（含竞品分析）
-│   ├── learning-guide.md       源码学习指南
-│   ├── prompts_cn.py           Prompt 中文翻译对照
-│   └── file-guide.md           你在看的就是这个
+├── frontend/                       ★ Vue 3 前端
+│   ├── package.json                Vue + Vite + axios + marked
+│   ├── vite.config.js              Vite 代理配置（API→Java, KB→Python）
+│   ├── Dockerfile                  Docker 镜像（多阶段：Node 编译 → Nginx 托管）
+│   ├── nginx.conf                  Nginx 反向代理
+│   ├── start.bat                   双击启动
+│   └── src/
+│       ├── main.js                 Vue 初始化
+│       ├── App.vue                 根组件
+│       ├── router/index.js         路由 + 守卫
+│       ├── stores/auth.js          Pinia token/用户状态
+│       ├── utils/api.js            axios 拦截器 + JWT
+│       └── views/
+│           ├── LoginView.vue        登录/注册页
+│           └── ResearchView.vue     主界面（聊天 + 侧栏 + KB + 导出）
 │
-└── scripts/                   从原项目搬来的脚本
-    ├── start.bat               启动原项目
-    └── export.bat              导出原项目报告
+└── docs/                          文档区（12 个文件 ~4,000 行）
+    ├── project-overview.md           ★ 项目全貌（面试前读这个就够了）
+    ├── interview-qa.md               ★ 面试 30 问 + 标准答案
+    ├── code-comparison.md           与原项目逐层对比
+    ├── java-gateway-guide.md        架构设计 + 竞品分析
+    ├── learning-guide.md            原项目学习笔记
+    ├── roadmap.md                   六阶段路线图
+    ├── phase2-3-plan.md             会话 + 用户系统计划
+    ├── frontend-roadmap.md          前端路线图
+    ├── file-guide.md                你在看的就是这个
+    ├── ux-critique.md               用户痛点（12 个）
+    ├── dev-critique.md              开发者漏洞（15 个）
+    └── prompts_cn.py                Prompt 中文对照
 ```
 
 ---

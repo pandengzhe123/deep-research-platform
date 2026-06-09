@@ -4,7 +4,7 @@ import json
 import time
 from typing import Any
 
-from openai import APIError, APIConnectionError, OpenAI, RateLimitError
+from openai import APIError, APIConnectionError, APITimeoutError, OpenAI, RateLimitError
 
 from .config import config
 
@@ -16,8 +16,8 @@ class LLMClient:
         self.client = OpenAI(
             api_key=config.llm_api_key,
             base_url=config.llm_base_url,
-            timeout=30.0,    # 单次调用 30s 超时
-            max_retries=0,   # 重试由 _call_with_retry 管理
+            timeout=300.0,    # 5 分钟——Level 4 汇总大报告需要时间
+            max_retries=0,
         )
         self.model = config.llm_model
 
@@ -40,8 +40,11 @@ class LLMClient:
                 wait = (attempt + 1) * 5
                 print(f"  ⚠️ LLM 限流，{wait}s 后重试（{attempt+1}/{max_retries}）...")
                 time.sleep(wait)
+            except APITimeoutError as e:
+                # 超时——不重试（不是因为网络抖动，是任务太重了）
+                raise  # 直接抛出，让上层 Agent 处理
             except APIConnectionError as e:
-                # 网络错误
+                # 网络错误（非超时）——重试
                 last_error = e
                 wait = 2 ** (attempt + 1)
                 print(f"  ⚠️ LLM 网络错误，{wait}s 后重试（{attempt+1}/{max_retries}）...")

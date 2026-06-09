@@ -159,7 +159,19 @@
 
 ## 下一步
 
-1. **Docker Compose** —— 4 个服务一键启动
-2. **Spring Security 强制认证** —— 当前 JWT 基础设施已就绪
-3. **pgvector 迁移** —— Chroma → PostgreSQL
-4. **SSE 流式** —— 已知限制，暂不开发
+### 高优先级（功能完整度）
+
+1. ✅ **Docker Compose** —— 4 个服务一键启动（已完成）
+2. **Spring Security 强制认证** —— 当前 JWT 基础设施已就绪，只差 `authenticated()` 一行
+3. **pgvector 迁移** —— Chroma → PostgreSQL，一个 DB 管所有
+
+### 中优先级（性能与效率）
+
+4. **跨轮 URL 去重** —— 目前只在同轮内按 URL 去重，跨轮重复搜索同样网页会浪费 LLM 调用。维护全局 `seen_urls` 集合，新搜索前过滤已知 URL，预计减少 30% 冗余 LLM 摘要调用（~10 行）
+5. **搜索结果缓存** —— 相同 search query 短时间重复调用 Tavily，用 TTLCache 缓存结果（~15 行）
+6. **搜索源可配置** —— 当前 Tavily 硬编码在 `SearchTool.__init__`，改为支持配置切换 Tavily / DuckDuckGo / OpenAI（~20 行）
+
+### 低优先级
+
+7. **LLM 输出 Schema 校验** —— `structured_output` 只解析 JSON 不验证字段，加 Pydantic 校验（~10 行）
+8. **SSE 流式透传** —— 已知限制，暂不开发

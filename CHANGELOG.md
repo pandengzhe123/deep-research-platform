@@ -4,6 +4,38 @@
 
 ---
 
+## 2026-06-09 — P0 漏洞修复日
+
+### 做了什么
+
+- 前端步骤轮播：等待期间不再只有"正在分析"，改为🔍搜索→📖分析→💭整理→📝撰写四种状态轮播
+- 错误提示友好化：401/429/500/超时/网络断开 → 六种用户可理解的提示
+- Agent OOM 保护：单结果 30万字符截断 + 只保留 3 轮 + 压缩前 50 万截断，三层防止内存溢出
+- Token 超限保护：消息历史超 50 万字符自动截断旧消息
+- Agent 单点故障：Java 侧 3 次指数退避重试（3s/9s/27s）
+- PG 连接失败：HikariCP 自动重连 + SELECT 1 验证 + 健康检查含 DB 状态
+- Docker 启动顺序：PostgreSQL 容器 healthcheck，gateway 等待 PG 就绪
+- Chroma 数据损坏：ingest 加 try/except + health_check()
+- API Key 泄露：验证 .gitignore 保护 + .env.example 加警告注释
+- 会话卡死：@Scheduled 每 10 分清理 30 分钟以上的 running 会话
+- 报告导出：📋 复制 Markdown + 💾 下载 .md 文件
+- LLM 超时：OpenAI client 加 30s 超时
+- 一键启动脚本 `start-all.bat`：三窗口同时启动
+
+### 新增文档
+
+| 文档 | 内容 |
+|------|------|
+| `docs/project-overview.md` | 项目全貌（9 章，面试前必读） |
+| `docs/ux-critique.md` | 用户痛点批判（12 个问题，含修复状态） |
+| `docs/dev-critique.md` | 开发者漏洞批判（15 个问题，含修复状态） |
+
+### 当前状态
+
+- 整体 88%，核心功能 + 致命/高风险漏洞全部修完
+- 代码 ~3,800 行，文档 ~4,000 行
+
+
 ## 2026-06-08 — Docker Compose 一键部署
 
 ### 做了什么
