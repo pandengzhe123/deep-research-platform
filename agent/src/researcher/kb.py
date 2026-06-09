@@ -130,13 +130,16 @@ class KnowledgeBase:
 
         # 入库（先删旧的同文档，防止重复）
         doc_id = doc_id or path.name
-        collection = self._get_collection(user_id)
         try:
-            old = collection.get(where={"doc_id": doc_id})
-            if old["ids"]:
-                collection.delete(ids=old["ids"])
-        except Exception:
-            pass
+            collection = self._get_collection(user_id)
+            try:
+                old = collection.get(where={"doc_id": doc_id})
+                if old.get("ids"):
+                    collection.delete(ids=old["ids"])
+            except Exception:
+                pass
+        except Exception as e:
+            return {"status": "error", "message": f"Chroma 连接失败: {e}"}
         chunk_ids = [f"{doc_id}_{uuid.uuid4().hex[:6]}" for _ in chunks]
 
         collection.add(
@@ -200,6 +203,15 @@ class KnowledgeBase:
 
         except Exception as e:
             return f"知识库检索失败: {e}"
+
+    def health_check(self) -> dict:
+        """检查 Chroma 是否正常。"""
+        try:
+            coll = self._get_collection("default")
+            coll.count()  # 简单操作验证可用性
+            return {"status": "ok"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
 
     def list_docs(self, user_id: str = "default") -> list[dict]:
         """列出该用户已上传的文档（按 user_id 过滤元数据）。"""

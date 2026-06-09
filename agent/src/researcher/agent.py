@@ -375,9 +375,19 @@ class Level2Agent:
         ]
 
         all_search_results: list[str] = []
+        MAX_RESULTS_CHARS = 300000  # 单个搜索结果最大 30 万字符，防止 OOM
+        MAX_TOTAL_RESULTS = 3       # 只保留最近 3 轮的搜索结果
         system = AGENT_SYSTEM.format(max_rounds=self.max_rounds)
+        MAX_HISTORY_CHARS = 500000
 
         for round_num in range(1, self.max_rounds + 1):
+            # Token 超限保护：消息历史过长时先截断旧消息
+            total_chars = sum(len(str(m)) for m in messages)
+            if total_chars > MAX_HISTORY_CHARS:
+                print(f"  ⚠️ 历史过长 ({total_chars} 字符)，截断旧内容")
+                messages = messages[-6:]  # 只保留最近 3 轮（用户+助手+tool）
+                self.emit({"step": "thinking", "message": "历史过长已截断，继续研究...", "round": round_num})
+
             print(f"\n--- 第 {round_num}/{self.max_rounds} 轮 ---")
             self.emit({"step": "thinking", "message": f"第 {round_num}/{self.max_rounds} 轮决策中...", "round": round_num})
 
@@ -420,7 +430,13 @@ class Level2Agent:
                         print(f"  搜索: {queries}")
                         self.emit({"step": "searching", "message": f"搜索: {', '.join(queries)}", "round": round_num, "queries": queries})
                         result = await self.search_tool.search(queries)
+                        # 截断单个结果防止内存溢出
+                        if len(result) > MAX_RESULTS_CHARS:
+                            result = result[:MAX_RESULTS_CHARS] + "\n\n（结果过长已截断）"
                         all_search_results.append(result)
+                        # 只保留最近 N 轮结果
+                        if len(all_search_results) > MAX_TOTAL_RESULTS:
+                            all_search_results = all_search_results[-MAX_TOTAL_RESULTS:]
                         messages.append({
                             "role": "tool",
                             "tool_call_id": tc.id,
@@ -457,13 +473,18 @@ class Level2Agent:
                 })
 
         # 压缩研究结果
+        # 压缩前再做一次内存保护
+        raw_text = "\n\n---\n\n".join(all_search_results)
+        if len(raw_text) > 500000:
+            raw_text = raw_text[:500000] + "\n\n（原始数据过长，已截断 50 万字符）"
+
         print(f"\n[压缩] 整理搜索结果...")
         self.emit({"step": "reporting", "message": "正在压缩整理搜索结果..."})
         compressed = self.llm.chat(
             system_prompt=COMPRESS_PROMPT.format(date=self._today()),
             user_message=COMPRESS_USER_MESSAGE.format(
                 question=question,
-                raw_results="\n\n---\n\n".join(all_search_results),
+                raw_results=raw_text,
             ),
         )
 

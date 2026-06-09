@@ -51,7 +51,7 @@
           </div>
           <div v-else class="ai-msg">
             <div class="ai-badge">AI</div>
-            <div class="ai-body">
+            <div class="ai-body" :id="'msg-' + i">
               <div v-if="msg.content.startsWith('❌')" class="error-msg">{{ msg.content }}</div>
               <div v-else-if="msg.content.startsWith('🤔')" class="clarify-msg">
                 <div class="clarify-icon">❓</div>
@@ -62,6 +62,10 @@
                 </div>
               </div>
               <div v-else class="report-body" v-html="renderMarkdown(msg.content)"></div>
+              <div v-if="msg.content && msg.content.length > 200" class="export-btns">
+                <button @click="copyMD(msg.content)" class="btn-export">📋 复制</button>
+                <button @click="downloadMD(msg.content)" class="btn-export">💾 下载 .md</button>
+              </div>
             </div>
           </div>
         </div>
@@ -171,7 +175,15 @@ async function start() {
 
   const q = question.value
   messages.value.push({ role: 'user', content: q })
-  messages.value.push({ role: 'thinking', content: '正在分析问题并搜索相关信息...' })
+  // 模拟步骤让用户知道没卡死
+  const steps = ['🔍 正在搜索相关信息...', '📖 正在分析网页内容...', '💭 正在整理研究发现...', '📝 正在撰写深度报告...']
+  let stepIdx = 0
+  const thinkingMsg = { role: 'thinking', content: steps[0] }
+  messages.value.push(thinkingMsg)
+  const stepTimer = setInterval(() => {
+    stepIdx = (stepIdx + 1) % steps.length
+    thinkingMsg.content = steps[stepIdx]
+  }, 8000)
   question.value = ''
   if (inputEl.value) { inputEl.value.style.height = 'auto' }
   scrollDown()
@@ -183,6 +195,7 @@ async function start() {
       context: contextHistory, session_id: currentSessionId.value || undefined
     })
     messages.value.pop()
+    clearInterval(stepTimer)
     if (data.need_clarify) {
       messages.value.push({ role: 'assistant', content: '🤔 ' + data.question })
       contextHistory += (contextHistory ? '\n\n' : '') + '用户: ' + q + '\nAgent: （追问）' + data.question
@@ -204,8 +217,17 @@ async function start() {
       }
     }
   } catch (e) {
+    clearInterval(stepTimer)
     messages.value.pop()
-    messages.value.push({ role: 'assistant', content: '❌ ' + (e.response?.data?.message || e.message || '请求失败，请重试') })
+    // 用户友好的错误提示
+    let errMsg = '请求失败，请重试'
+    const status = e.response?.status || 0
+    if (status === 401 || status === 403) errMsg = '登录已过期，请重新登录'
+    else if (status === 429) errMsg = '请求太频繁，请稍后再试'
+    else if (status >= 500) errMsg = '服务暂时不可用，请稍后重试'
+    else if (e.message?.includes('timeout') || e.code === 'ECONNABORTED') errMsg = '研究超时，请尝试简化问题或降低 Level'
+    else if (e.message?.includes('Network Error')) errMsg = '网络连接失败，请检查网络后重试'
+    messages.value.push({ role: 'assistant', content: '❌ ' + errMsg })
   } finally { running.value = false; stopTimer(); scrollDown() }
 }
 
@@ -313,6 +335,21 @@ async function deleteFile(docId) {
 
 function confirmLogout() {
   showLogoutModal.value = true
+}
+
+function copyMD(text) {
+  navigator.clipboard.writeText(text).then(() => {
+    alert('已复制到剪贴板')
+  }).catch(() => alert('复制失败'))
+}
+
+function downloadMD(text) {
+  const blob = new Blob([text], { type: 'text/markdown' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = 'deep_research_report.md'
+  a.click()
+  URL.revokeObjectURL(a.href)
 }
 
 function doLogout() {
@@ -456,6 +493,11 @@ onMounted(async () => {
 .kb-file-del { border: none; background: none; color: #94a3b8; cursor: pointer; font-size: 14px; padding: 2px; }
 .kb-file-del:hover { color: #dc2626; }
 .kb-empty { color: #94a3b8; font-size: 12px; text-align: center; padding: 20px 0; }
+
+/* 导出按钮 */
+.export-btns { margin-top: 12px; display: flex; gap: 8px; }
+.btn-export { padding: 4px 12px; font-size: 12px; border: 1px solid #d1d5db; border-radius: 6px; background: #fff; color: #6b7280; cursor: pointer; }
+.btn-export:hover { border-color: #6366f1; color: #4f46e5; background: #eef2ff; }
 
 @media (max-width: 1024px) { .kb-panel { display: none; } }
 @media (max-width: 768px) { .sidebar { display: none; } .chat-flow { padding: 20px 16px; } .user-bubble { max-width: 85%; } }

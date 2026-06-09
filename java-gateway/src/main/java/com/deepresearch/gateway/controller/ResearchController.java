@@ -170,9 +170,15 @@ public class ResearchController {
     @GetMapping("/health")
     public ResponseEntity<Map<String, Object>> health() {
         boolean agentOk = agentClient.isHealthy();
+        boolean dbOk = false;
+        try {
+            dbOk = sessionService.getAllSessions() != null;
+        } catch (Exception e) { /* ignore */ }
+        String status = (agentOk && dbOk) ? "ok" : "degraded";
         return ResponseEntity.ok(Map.of(
-                "status", agentOk ? "ok" : "degraded",
+                "status", status,
                 "agent", agentOk ? "connected" : "unreachable",
+                "database", dbOk ? "connected" : "unreachable",
                 "activeTasks", scheduler.activeCount()
         ));
     }

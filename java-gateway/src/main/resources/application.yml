@@ -18,6 +18,12 @@ spring:
     username: postgres
     password: deepresearch
     driver-class-name: org.postgresql.Driver
+    hikari:
+      connection-timeout: 10000      # 等 PG 就绪，最多 10s
+      validation-timeout: 3000
+      maximum-pool-size: 10
+      auto-commit: true
+      connection-test-query: SELECT 1  # 每次借连接前验证
   jpa:
     hibernate:
       ddl-auto: none  # 用 schema.sql 建表，不用 Hibernate 自动建

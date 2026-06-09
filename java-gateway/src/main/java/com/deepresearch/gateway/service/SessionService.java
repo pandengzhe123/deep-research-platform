@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
 import java.util.*;
 
 /**
@@ -68,6 +69,20 @@ public class SessionService {
     /**
      * 标记会话为错误。
      */
+    /** 定时清理：超过 30 分钟的 running 会话标记为 error。 */
+    @org.springframework.scheduling.annotation.Scheduled(fixedRate = 600000)
+    public void cleanupStaleSessions() {
+        List<SessionEntity> all = repo.findAll();
+        LocalDateTime cutoff = LocalDateTime.now().minusMinutes(30);
+        for (SessionEntity s : all) {
+            if ("running".equals(s.getStatus()) && s.getCreatedAt().isBefore(cutoff)) {
+                s.setStatus("error");
+                repo.save(s);
+                log.info("清理僵尸会话: {}", s.getId());
+            }
+        }
+    }
+
     public void markError(String sessionId) {
         repo.findById(sessionId).ifPresent(entity -> {
             entity.setStatus("error");

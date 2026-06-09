@@ -8,6 +8,11 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 5
 
   agent:
     build: ./agent
@@ -24,8 +29,10 @@ services:
       - AGENT_URL=http://agent:8000
       - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/deepresearch
     depends_on:
-      - agent
-      - postgres
+      postgres:
+        condition: service_healthy
+      agent:
+        condition: service_started
 
   frontend:
     build: ./frontend

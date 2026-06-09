@@ -30,22 +30,41 @@ public class AgentClient {
     }
 
     /**
-     * 同步研究 —— 等 Agent 跑完才返回。
-     * 注意：Agent 可能跑 1-3 分钟，所以超时设 10 分钟。
+     * 同步研究 —— 带重试：Agent 不可用时自动重试 3 次（指数退避）。
      */
     public ResearchResponse research(ResearchRequest request) {
         log.info("同步研究请求: question={}, level={}", request.question(), request.level());
 
-        return client.post()
-                .uri("/research")
-                .bodyValue(request)
-                .retrieve()
-                .bodyToMono(ResearchResponse.class)
-                .block(Duration.ofMinutes(10));
+        Exception lastError = null;
+        for (int attempt = 0; attempt < 3; attempt++) {
+            try {
+                return client.post()
+                        .uri("/research")
+                        .bodyValue(request)
+                        .retrieve()
+                        .bodyToMono(ResearchResponse.class)
+                        .block(Duration.ofMinutes(10));
+            } catch (Exception e) {
+                lastError = e;
+                String msg = e.getMessage() != null ? e.getMessage() : "";
+                // 只对连接错误和 5xx 重试，4xx 不重试
+                if (msg.contains("500") || msg.contains("503") ||
+                    msg.contains("Connection refused") || msg.contains("timeout")) {
+                    if (attempt < 2) {
+                        long wait = (long) Math.pow(3, attempt + 1); // 3s, 9s, 27s
+                        log.warn("Agent 不可用，{}s 后重试 ({}/3): {}", wait, attempt + 1, msg);
+                        try { Thread.sleep(wait * 1000); } catch (InterruptedException ie) { break; }
+                    }
+                } else {
+                    break; // 4xx 不重试
+                }
+            }
+        }
+        throw new RuntimeException("Agent 不可用，已重试 3 次: " + (lastError != null ? lastError.getMessage() : ""), lastError);
     }
 
     /**
-     * SSE 流式研究。返回 Flux<String>，每条是完整的 SSE 事件文本。
+     * SSE 流式研究。Agent 不可用时自动重试。
      */
     public Flux<String> researchStream(ResearchRequest request) {
         log.info("流式研究请求: question={}, level={}", request.question(), request.level());
@@ -56,6 +75,15 @@ public class AgentClient {
                 .accept(org.springframework.http.MediaType.TEXT_EVENT_STREAM)
                 .retrieve()
                 .bodyToFlux(String.class)
+                .retryWhen(
+                        reactor.util.retry.Retry.backoff(3, Duration.ofSeconds(3))
+                                .filter(e -> {
+                                    String msg = e.getMessage() != null ? e.getMessage() : "";
+                                    return msg.contains("500") || msg.contains("503") ||
+                                           msg.contains("Connection refused") || msg.contains("timeout");
+                                })
+                                .doBeforeRetry(rs -> log.warn("Agent SSE 不可用，重试: {}", rs.failure().getMessage()))
+                )
                 .doOnError(e -> log.error("SSE 流异常: {}", e.getMessage(), e));
     }
 
