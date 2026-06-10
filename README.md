@@ -6,18 +6,66 @@
 
 输入问题 → Agent 自主搜索网络 → 生成带引用的深度研究报告。
 
-## 快速开始
+## 新用户使用指南
+
+### 前置条件
+
+- 安装 **Docker Desktop**（https://www.docker.com/products/docker-desktop）
+- 注册以下服务的 API Key：
+  - DeepSeek：https://platform.deepseek.com（LLM，便宜好用）
+  - Tavily：https://app.tavily.com（搜索，免费 1000 次/月）
+
+### 第一步：配置 API Key
+
+将项目根目录下的 `.env.example` 复制为 `.env`，填入你的真实 Key：
 
 ```bash
-# 1. 启动 Python Agent
-cd agent && start.bat                    → http://localhost:8000
-
-# 2. 启动 Java 网关
-cd java-gateway && mvn spring-boot:run   → http://localhost:8080
-
-# 3. 浏览器打开提问
-http://localhost:8080
+DEEPSEEK_API_KEY=sk-你的Key
+TAVILY_API_KEY=tvly-你的Key
 ```
+
+### 第二步：一键启动
+
+```bash
+# 在项目根目录下运行（只需一条命令）
+docker compose up
+
+# 浏览器打开
+http://localhost:3000
+```
+
+首次启动需要下载基础镜像和依赖（约 10-15 分钟），后续启动只需几秒。
+
+### 第三步：开始使用
+
+1. **注册账号** —— 打开页面后输入用户名和密码，点击注册
+2. **提问** —— 输入问题，选择 Level，点击发送。普通问题用 Level 1（15-30 秒），复杂问题用 Level 2-4
+3. **查看报告** —— AI 报告会自动渲染 Markdown，底部有「📋 复制」和「💾 下载 .md」按钮
+4. **追问** —— 无需新开会话，直接在输入框问下一个问题即可，Agent 会上文
+5. **知识库（可选）** —— 上传 PDF/TXT/MD 文件，勾选「RAG」后再提问，Agent 会同时搜索网络和你上传的文件
+
+### Level 选择指南
+
+| Level | 名称 | 适合场景 | 速度 |
+|-------|------|---------|------|
+| 1 | 极速 | 简单事实查询 | 15-30 秒 |
+| 2 | 搜索反思 | 一般研究 | 1-3 分钟 |
+| 3 | 多路并行 | 多向对比（如"对比 A 和 B"） | 2-5 分钟 |
+| 4 | Supervisor | 复杂深度调研 | 3-10 分钟 |
+
+### 常见问题
+
+**Q: 费用多少？**
+A: 使用 DeepSeek V4 Flash 模型，一次普通研究约 ¥0.2-2。Tavily 搜索免费额度 1000 次/月。
+
+**Q: 怎么停止？**
+A: 终端里按 Ctrl+C，或 `docker compose down`。
+
+**Q: 数据会丢吗？**
+A: 会话历史存在 PostgreSQL 里，知识库存在 Chroma 里，都在本地磁盘。`docker compose down` 不会丢数据。
+
+**Q: 我想自己开发怎么跑？**
+A: 见下方「开发者启动」。
 
 ## 架构
 
@@ -36,7 +84,9 @@ DeepSeek V4 Flash + Tavily / DuckDuckGo + Chroma
 PostgreSQL (会话持久化)
 ```
 
-### 启动
+### 开发者启动（本地开发）
+
+适合需要改代码的开发者。需要安装 Python 3.11 + JDK 21 + Node.js + Maven。
 
 ```bash
 # 终端 1：Python Agent
