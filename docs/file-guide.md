@@ -192,7 +192,7 @@ DEEPSEEK_API_KEY=sk-xxx
 | `PLAN_PROMPT` | 让 LLM 分析问题并规划搜索词 |
 | `AGENT_SYSTEM` | Level 2 的 System Prompt——"你是研究助手，有搜索和反思两个工具..." |
 | `REPORT_PROMPT` | 让 LLM 根据搜索结果写报告 |
-| `TOOLS` | 工具的函数定义（`search` + `think`） |
+| `TOOLS` | 工具的函数定义（`search` + `search_kb` + `think`） |
 
 ---
 
@@ -212,23 +212,27 @@ DEEPSEEK_API_KEY=sk-xxx
 
 **核心函数 `run_agent_with_sse()`**：
 
-这个函数把 `agent.py` 里的 Level 2 逻辑重新实现了一遍（因为要在每个关键节点插入 `yield` 来推送事件）。每完成一个步骤就 `yield` 一条 SSE 事件：
+通过 `on_progress` 回调 + `asyncio.Queue` 实现 SSE 推送。不包含任何 Agent 逻辑，而是创建 agent.py 的真正 Agent 实例，传入回调。Agent 每完成一步就调回调，事件入队；SSE 端点从队列读取并流式推送：
 
 ```
-yield {"event": "status", "data": {"step": "searching", ...}}
-yield {"event": "done",   "data": {"report": "..."}}
+① 创建 asyncio.Queue
+② 定义 on_progress(event) 回调 → event 入队
+③ 创建 Agent 实例（传入 on_progress, kb_enabled, user_id）
+④ asyncio.create_task(agent.run()) 后台执行
+⑤ while 循环从 Queue 读取事件 → yield SSE
 ```
 
 **和 agent.py 的关系**：
 
 ```
-server.py           agent.py
-─────────          ─────────
-处理 HTTP 请求  →   调用 Agent 逻辑  →  调用 LLM / 搜索
-推送 SSE 进度   ←   返回中间状态    ←  返回结果
+server.py                agent.py
+─────────               ─────────
+创建 Agent 实例      →   Agent 内部执行研究逻辑  →  调用 LLM / 搜索
+on_progress 回调     ←   Agent 通过回调汇报进度   ←  返回结果
+Queue → SSE 推送
 ```
 
-**为什么不用 agent.py 的类**：为了在 agent.py 的每个步骤之间插入 SSE 推送。原 agent.py 是紧凑的 async 函数，不方便中途插入推送点。
+**为什么用回调模式**：Agent 所有逻辑集中在 agent.py，server.py 通过 `on_progress` 无侵入地收集进度事件。这次重构（2026-06-04）将 server.py 从 ~460 行精简到 ~280 行。
 
 ---
 

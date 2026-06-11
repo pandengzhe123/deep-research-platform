@@ -14,7 +14,7 @@ RUN pip install --default-timeout=100 --no-cache-dir -e . && \
     pip install --default-timeout=100 --no-cache-dir \
         fastapi uvicorn sse-starlette chromadb sentence-transformers openai \
         tavily-python python-dotenv httpx beautifulsoup4 markdownify pydantic \
-        duckduckgo-search scikit-learn pymupdf python-multipart
+        ddgs scikit-learn pymupdf python-multipart
 
 COPY .env .env
 

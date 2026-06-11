@@ -6,9 +6,15 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
-      '/api': 'http://localhost:8080',       // Java 网关
-      '/kb': 'http://localhost:8000',          // Python KB 接口
-      '/research': 'http://localhost:8000',    // Python 研究接口（SSE 用）
+      '/api': {
+        target: 'http://localhost:8080',
+        timeout: 1800000,  // 30 分钟，匹配 Level 3/4 超时
+      },
+      '/kb': 'http://localhost:8000',
+      '/research': {
+        target: 'http://localhost:8000',
+        timeout: 1800000,  // 30 分钟，SSE 流式连接
+      },
     }
   }
 })

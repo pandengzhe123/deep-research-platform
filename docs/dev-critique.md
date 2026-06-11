@@ -114,9 +114,9 @@ Ctrl+C 杀进程 → 所有进行中的研究丢失 → sessions 表残留 `runn
 
 `java-gateway/src/main/resources/static/index.html` 还保留着旧版 HTML。访问 `localhost:8080` 会看到老界面，而 Vue 在 `:3000`。用户混乱。
 
-### 14. 健康检查不检查数据库
+### 14. ~~健康检查不检查数据库~~ ✅ 已修复
 
-`/api/health` 只看 Agent 是否通，不看数据库是否通。PG 挂了但 Agent 正常，健康检查显示 OK。
+`/api/health` 现已包含数据库状态检查（2026-06-09 修复）。
 
 ### 15. 无日志轮转
 

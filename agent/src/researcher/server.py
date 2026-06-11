@@ -105,9 +105,9 @@ async def run_agent_with_sse(
         if level == 1:
             agent = FastLevel1Agent(on_progress=on_progress, kb_enabled=kb_enabled, user_id=user_id)
         elif level == 3:
-            agent = Level3Agent(on_progress=on_progress)
+            agent = Level3Agent(on_progress=on_progress, kb_enabled=kb_enabled, user_id=user_id)
         elif level == 4:
-            agent = Level4Agent(on_progress=on_progress)
+            agent = Level4Agent(on_progress=on_progress, kb_enabled=kb_enabled, user_id=user_id)
         else:
             agent = Level2Agent(on_progress=on_progress, kb_enabled=kb_enabled, user_id=user_id)
 

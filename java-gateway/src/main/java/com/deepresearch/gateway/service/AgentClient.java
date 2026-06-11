@@ -43,7 +43,7 @@ public class AgentClient {
                         .bodyValue(request)
                         .retrieve()
                         .bodyToMono(ResearchResponse.class)
-                        .block(Duration.ofMinutes(10));
+                        .block(Duration.ofMinutes(30));
             } catch (Exception e) {
                 lastError = e;
                 String msg = e.getMessage() != null ? e.getMessage() : "";

@@ -4,14 +4,16 @@
 
 | 我的文件 | 原项目对应 | 我的行数 | 原项目行数 |
 |---------|-----------|---------|----------|
-| `agent/src/researcher/llm.py` | `deep_researcher.py`(模型部分) + `configuration.py` + `utils.py`(API key) | 97 | ~100 |
-| `agent/src/researcher/search.py` | `utils.py`(tavily_search + summarize_webpage) | 175 | ~230 |
-| `agent/src/researcher/agent.py` | `deep_researcher.py`(主图+子图) + `state.py` + `prompts.py` | 750+ | ~1500 |
-| `agent/src/researcher/server.py` | `langgraph.json` + LangGraph Server | 470 | ~20 |
-| `agent/src/researcher/config.py` | `configuration.py` | 33 | 235 |
-| **Python 合计** | | **~1550** | **~2100** |
-| `java-gateway/` (8 个文件) | 无 | 492 | 0 |
-| `index.html` | LangGraph Studio UI | 143 | 0 |
+| `agent/src/researcher/llm.py` | `deep_researcher.py`(模型部分) + `configuration.py` + `utils.py`(API key) | ~130 | ~100 |
+| `agent/src/researcher/search.py` | `utils.py`(tavily_search + summarize_webpage) | ~210 | ~230 |
+| `agent/src/researcher/agent.py` | `deep_researcher.py`(主图+子图) + `state.py` + `prompts.py` | ~900 | ~1500 |
+| `agent/src/researcher/server.py` | `langgraph.json` + LangGraph Server | ~280 | ~20 |
+| `agent/src/researcher/config.py` | `configuration.py` | ~40 | 235 |
+| **Python 合计** | | **~1,800** | **~2,100** |
+| `java-gateway/` (14 个文件) | 无 | ~700 | 0 |
+| Vue 3 前端 (11 个文件) | LangGraph Studio UI | ~650 | 0 |
+
+> 注：原 `index.html` 单文件(143行) 已被 Vue 3 前端替代。`server.py` 经重构从 ~460 行精简到 ~218 行，后因 KB 端点增加回升到 ~280 行。
 
 ---
 
@@ -176,11 +178,11 @@ LangGraph Server 内置 SSE             FastAPI + sse-starlite 手动实现
 | 用户澄清 | `clarify_with_user()` | ✅ 浏览器+命令行双入口 |
 | 研究简报 | `write_research_brief()` | ✅ 合并进规划步骤 |
 | 压缩研究 | `compress_research()` | ✅ Level 2 内置 |
-| Token 超限处理 | `is_token_limit_exceeded()` + 渐进截断 | ❌ |
+| Token 超限处理 | `is_token_limit_exceeded()` + 渐进截断 | ✅ MAX_HISTORY_CHARS 截断 + 3 层 OOM 保护 |
 | MCP 集成 | `load_mcp_tools()` + OAuth | ❌ |
 | 多模型供应商 | `get_api_key_for_model()` 8 种 | ❌ 只有 DeepSeek |
 | 配置 UI | LangGraph Studio | ❌ 只有 .env |
-| 评估系统 | `tests/` 全套 | ❌ |
+| 评估系统 | `tests/` 全套 | ✅ test_units.py(14 用例) + test_quality.py |
 
 ---
 
@@ -190,12 +192,12 @@ LangGraph Server 内置 SSE             FastAPI + sse-starlite 手动实现
 |------|---------|--------|
 | Level 1 极速模式 | `FastLevel1Agent`，1 次 LLM | ❌ |
 | Level 1-4 渐进演进 | 每层独立可跑 | ❌ 直接拉满 |
-| Java 全栈网关 | 8 文件，Spring Boot | ❌ |
-| Web UI | `index.html`，计时器 | 依赖外部 Studio |
+| Java 全栈网关 | 14 文件，Spring Boot WebFlux | ❌ |
+| Web UI | Vue 3 前端(11 文件，~650 行) | 依赖外部 Studio |
 | 搜索自动降级 | Tavily→DuckDuckGo | ❌ |
 | 架构重构 | server.py 零 Agent 逻辑 | 强依赖 LangChain/LangGraph |
 | 纯 API 实现 | 0 框架依赖 | LangGraph StateGraph |
-| 完整面试准备 | 24 问 Q&A、架构评审、代码对照 | ❌ |
+| 完整面试准备 | 30 问 Q&A、架构评审、代码对照 | ❌ |
 
 ---
 

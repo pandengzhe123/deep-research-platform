@@ -262,10 +262,16 @@ async function switchSession(s) {
   currentSessionId.value = s.id
   localStorage.setItem('activeSession', s.id)
 
-  // 优先从 localStorage 恢复
+  // 优先从 localStorage 恢复，但仅当缓存中包含完整报告时才跳过 API
   const saved = localStorage.getItem('chat_' + s.id)
   if (saved) {
-    try { messages.value = JSON.parse(saved); contextHistory = ''; scrollDown(); return } catch(e) {}
+    try {
+      const cached = JSON.parse(saved)
+      const lastMsg = cached[cached.length - 1]
+      if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content && lastMsg.content.length > 500) {
+        messages.value = cached; contextHistory = ''; scrollDown(); return
+      }
+    } catch(e) {}
   }
 
   // fallback：从 API 加载

@@ -16,9 +16,9 @@ public class WebClientConfig {
     public WebClient agentWebClient(
             @Value("${agent.url}") String agentUrl
     ) {
-        // 配置超时：连接 5s，响应最长 10 分钟（Agent 可能跑几分钟）
+        // 配置超时：响应最长 30 分钟（Level 3/4 多路并行可能需要很长时间）
         HttpClient httpClient = HttpClient.create()
-                .responseTimeout(Duration.ofMinutes(10));
+                .responseTimeout(Duration.ofMinutes(30));
 
         return WebClient.builder()
                 .baseUrl(agentUrl)

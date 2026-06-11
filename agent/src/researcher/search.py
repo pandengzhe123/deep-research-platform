@@ -58,7 +58,7 @@ class SearchTool:
 
     async def _ddg_search(self, query: str, max_results: int = 5) -> dict:
         """DuckDuckGo 搜索（免费、不需要 API Key），返回 Tavily 兼容格式。"""
-        from duckduckgo_search import DDGS
+        from ddgs import DDGS
         try:
             results = await asyncio.to_thread(
                 lambda: list(DDGS().text(query, max_results=max_results))

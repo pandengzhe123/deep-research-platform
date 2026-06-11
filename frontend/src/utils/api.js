@@ -1,6 +1,6 @@
 import axios from 'axios'
 
-const api = axios.create({ baseURL: '/api', timeout: 600000 })
+const api = axios.create({ baseURL: '/api', timeout: 1800000 })  // 30 分钟，匹配后端 Level 3/4 超时
 
 api.interceptors.request.use(config => {
   const token = localStorage.getItem('token')
