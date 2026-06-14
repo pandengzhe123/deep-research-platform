@@ -3,18 +3,17 @@
 from __future__ import annotations
 
 import os
-import ssl
 import uuid
 from pathlib import Path
 
 # ============================================================
-# SSL 绕过 —— 必须在导入 sentence_transformers 之前设置
+# SSL 配置说明
 # ============================================================
-ssl._create_default_https_context = ssl._create_unverified_context
-os.environ["CURL_CA_BUNDLE"] = ""
-os.environ["SSL_CERT_FILE"] = ""
-os.environ["HF_HUB_DISABLE_SSL_VERIFY"] = "1"
-os.environ["REQUESTS_CA_BUNDLE"] = ""
+# 模型使用 local_files_only=True（不联网），无需禁用 SSL 验证。
+# 如果首次部署需要下载模型，临时设置环境变量：
+#   HF_HUB_DISABLE_SSL_VERIFY=1 python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')"
+# 下载完成后无需任何 SSL 配置。
+os.environ["HF_HUB_DISABLE_SSL_VERIFY"] = "1"  # 仅影响 HuggingFace Hub，不影响其他 HTTPS 请求
 
 import chromadb
 
@@ -71,15 +70,29 @@ def read_file(file_path: Path) -> str:
 # 知识库
 # ============================================================
 
+_EMBED_MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
+
+
 def _embed_semantic(texts: list[str]) -> list[list[float]]:
     """用 sentence-transformers 生成语义向量（384 维，中英文）。模型缓存在内存。"""
     if not hasattr(_embed_semantic, "_model"):
         from sentence_transformers import SentenceTransformer
 
-        _embed_semantic._model = SentenceTransformer(
-            "paraphrase-multilingual-MiniLM-L12-v2",
-            local_files_only=True  # 不上网检查更新，只用本地缓存
-        )
+        try:
+            # 优先离线加载（快，不联网）
+            _embed_semantic._model = SentenceTransformer(_EMBED_MODEL_NAME, local_files_only=True)
+        except Exception:
+            # 本地无缓存，自动下载（首次运行）
+            print(f"  ⚠️ Embedding 模型未缓存，正在下载 {_EMBED_MODEL_NAME}（约 120MB，仅首次）...")
+            try:
+                _embed_semantic._model = SentenceTransformer(_EMBED_MODEL_NAME)
+                print(f"  ✅ 模型下载完成，后续启动将使用本地缓存")
+            except Exception as e:
+                raise RuntimeError(
+                    f"Embedding 模型加载失败: {e}\n"
+                    f"请手动下载：python -c \"from sentence_transformers import SentenceTransformer; "
+                    f"SentenceTransformer('{_EMBED_MODEL_NAME}')\""
+                ) from e
     return _embed_semantic._model.encode(texts, show_progress_bar=False).tolist()
 
 
@@ -121,12 +134,10 @@ class KnowledgeBase:
         if not chunks:
             return {"status": "error", "message": "文件内容为空"}
 
-        # 截断到模型最大输入（~100 中文字符）
-        max_len = 100
-        truncated = [c[:max_len] for c in chunks]
-
-        # embedding
-        embeddings = self._embedder(truncated)
+        # embedding 输入截断（MiniLM 支持 128 tokens ≈ 256 中文字符），存储保留完整 chunk
+        EMBED_MAX_LEN = 256
+        embed_input = [c[:EMBED_MAX_LEN] for c in chunks]
+        embeddings = self._embedder(embed_input)
 
         # 入库（先删旧的同文档，防止重复）
         doc_id = doc_id or path.name
@@ -143,8 +154,8 @@ class KnowledgeBase:
         chunk_ids = [f"{doc_id}_{uuid.uuid4().hex[:6]}" for _ in chunks]
 
         collection.add(
-            documents=truncated,
-            embeddings=embeddings,
+            documents=chunks,           # 存储完整 chunk（最多 500 字），检索时返回完整内容
+            embeddings=embeddings,      # 索引用截断版算出的向量
             metadatas=[{"user_id": user_id, "doc_id": doc_id} for _ in chunks],
             ids=chunk_ids,
         )
@@ -217,18 +228,16 @@ class KnowledgeBase:
         """列出该用户已上传的文档（按 user_id 过滤元数据）。"""
         try:
             collection = self._get_collection(user_id)
-            metadatas = collection.get()["metadatas"]
+            # 用 where 条件下推到 Chroma 过滤，避免全量扫描
+            results = collection.get(where={"user_id": user_id})
             seen: set[str] = set()
-            result = []
-            for m in metadatas:
-                # 只返回属于当前用户的文档
-                if m.get("user_id", "default") != user_id:
-                    continue
+            docs = []
+            for m in results.get("metadatas", []):
                 did = m.get("doc_id", "")
                 if did and did not in seen:
                     seen.add(did)
-                    result.append({"doc_id": did})
-            return result
+                    docs.append({"doc_id": did})
+            return docs
         except Exception:
             return []
 

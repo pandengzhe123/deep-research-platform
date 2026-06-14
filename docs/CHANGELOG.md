@@ -307,6 +307,17 @@ Level 4 的 tool 响应写 `"反思已记录"` 丢弃了实际内容，Superviso
 
 **修复**：`safe_run` 返回 `(report, error)` 元组，错误信息写入 tool 消息：`f"研究失败: {error}"`。
 
+#### 33. 任务取消机制未接通（已知限制，待实现）
+
+`server.py` 中 `cancel = aio.Event()` + `_active_tasks` 字典 + `DELETE /research/{task_id}` 端点构成了取消功能的骨架，但三处断线：
+1. cancel 事件传入 `run_agent_with_sse` 但函数体**从不检查** `cancel.is_set()`
+2. `_active_tasks` 字典始终为空——没有代码把 cancel 注册进去
+3. 取消端点永远 404（找不到任何 task_id）
+
+Java 端 `AgentClient.cancel()` 也已写好转发逻辑。属于"接口占位、功能待补"的半成品。
+
+**要接通需要**：① 生成 task_id 注册到 `_active_tasks` ② `run_agent_with_sse` 循环中定期检查 `cancel.is_set()` ③ 触发后 `task.cancel()` + yield error 事件 ④ finally 清理 `_active_tasks`
+
 ### 修改文件
 
 | 文件 | 改动 |

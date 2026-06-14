@@ -196,11 +196,12 @@
 
 ### 中优先级
 
-3. **跨轮 URL 去重** —— 全局 `seen_urls` 集合，减少 ~30% 冗余 LLM 摘要调用
-4. **搜索结果缓存** —— TTLCache 缓存相同 query 的 Tavily 结果
-5. **pgvector 迁移** —— Chroma → PostgreSQL，一个 DB 管所有
+3. **任务取消功能接通** —— 骨架已有（cancel Event + DELETE 端点 + Java 转发），需接线：注册 task_id、循环中检查 cancel、前端加取消按钮
+4. **SSE 流式透传** —— Python 端 emit 已就绪，需 Java 透传 + 前端 EventSource 替代同步 POST
+5. **跨轮 URL 去重** —— 全局 `seen_urls` 集合，减少 ~30% 冗余 LLM 摘要调用
+6. **搜索结果缓存** —— TTLCache 缓存相同 query 的 Tavily 结果
 
 ### 低优先级
 
-6. **SSE 流式透传** —— 已知限制，暂不开发
-7. **报告导出 PDF/Word** —— 当前已支持 Markdown 复制/下载
+7. **pgvector 迁移** —— Chroma → PostgreSQL，一个 DB 管所有
+8. **报告导出 PDF/Word** —— 当前已支持 Markdown 复制/下载

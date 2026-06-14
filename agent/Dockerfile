@@ -16,6 +16,9 @@ RUN pip install --default-timeout=100 --no-cache-dir -e . && \
         tavily-python python-dotenv httpx beautifulsoup4 markdownify pydantic \
         ddgs scikit-learn pymupdf python-multipart
 
+# 预下载 Embedding 模型，打进镜像（~120MB），运行时无需联网
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')"
+
 COPY .env .env
 
 EXPOSE 8000
