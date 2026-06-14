@@ -4,7 +4,8 @@ import com.deepresearch.gateway.model.ResearchModels.ResearchRequest;
 import com.deepresearch.gateway.model.ResearchModels.ResearchResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.core.io.buffer.DataBuffer;
+import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
@@ -64,9 +65,9 @@ public class AgentClient {
     }
 
     /**
-     * SSE 流式研究。Agent 不可用时自动重试。
+     * SSE 流式研究。返回 ServerSentEvent 保留事件名（status/done/error）。
      */
-    public Flux<String> researchStream(ResearchRequest request) {
+    public Flux<ServerSentEvent<String>> researchStream(ResearchRequest request) {
         log.info("流式研究请求: question={}, level={}", request.question(), request.level());
 
         return client.post()
@@ -74,7 +75,7 @@ public class AgentClient {
                 .bodyValue(request)
                 .accept(org.springframework.http.MediaType.TEXT_EVENT_STREAM)
                 .retrieve()
-                .bodyToFlux(String.class)
+                .bodyToFlux(new ParameterizedTypeReference<ServerSentEvent<String>>() {})
                 .retryWhen(
                         reactor.util.retry.Retry.backoff(3, Duration.ofSeconds(3))
                                 .filter(e -> {

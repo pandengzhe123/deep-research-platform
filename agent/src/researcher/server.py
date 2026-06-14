@@ -46,6 +46,7 @@ class ResearchRequest(BaseModel):
     context: str = ""
     kb_enabled: bool = False
     user_id: str = "default"
+    rag_doc_ids: list[str] = []  # 用户勾选的文档 ID，空=搜全部
 
 
 class ProgressEvent(BaseModel):
@@ -68,6 +69,7 @@ async def run_agent_with_sse(
     context: str,
     kb_enabled: bool,
     user_id: str,
+    rag_doc_ids: list[str],
     cancel: aio.Event,
 ) -> AsyncGenerator[dict, None]:
     """
@@ -102,14 +104,15 @@ async def run_agent_with_sse(
             on_progress({"step": "planned", "message": f"需求明确: {check.get('summary', '')}"})
 
         # ---- 创建 Agent（走 agent.py 的真 Agent） ----
+        _kw = dict(on_progress=on_progress, kb_enabled=kb_enabled, user_id=user_id, rag_doc_ids=rag_doc_ids)
         if level == 1:
-            agent = FastLevel1Agent(on_progress=on_progress, kb_enabled=kb_enabled, user_id=user_id)
+            agent = FastLevel1Agent(**_kw)
         elif level == 3:
-            agent = Level3Agent(on_progress=on_progress, kb_enabled=kb_enabled, user_id=user_id)
+            agent = Level3Agent(**_kw)
         elif level == 4:
-            agent = Level4Agent(on_progress=on_progress, kb_enabled=kb_enabled, user_id=user_id)
+            agent = Level4Agent(**_kw)
         else:
-            agent = Level2Agent(on_progress=on_progress, kb_enabled=kb_enabled, user_id=user_id)
+            agent = Level2Agent(**_kw)
 
         on_progress({"step": "planning", "message": f"Level {level} Agent 启动..."})
 
@@ -123,42 +126,55 @@ async def run_agent_with_sse(
             try:
                 result = await agent.run(full_question)
                 await queue.put({"type": "done", "report": result})
+            except aio.CancelledError:
+                log.info("Agent 任务被取消，停止研究")
+                raise  # 重新抛出让 task.cancel() 的 await 正常结束
             except Exception as e:
                 log.exception("Agent 执行异常")
                 await queue.put({"type": "error", "message": str(e), "traceback": traceback.format_exc()})
 
         task = aio.create_task(run_agent())
 
-        # 从队列读取事件 → yield SSE
-        while not task.done():
-            try:
-                event = await aio.wait_for(queue.get(), timeout=0.1)
-            except aio.TimeoutError:
-                continue
+        try:
+            # 从队列读取事件 → yield SSE
+            while not task.done():
+                try:
+                    event = await aio.wait_for(queue.get(), timeout=0.1)
+                except aio.TimeoutError:
+                    continue
 
-            if event.get("type") in ("done", "error"):
-                break
-            yield {"event": "status", "data": json.dumps(event, ensure_ascii=False)}
+                if event.get("type") in ("done", "error"):
+                    break
+                yield {"event": "status", "data": json.dumps(event, ensure_ascii=False)}
 
-        # Agent 结束后，取队列里剩余的事件
-        while not queue.empty():
-            event = queue.get_nowait()
-            if event.get("type") == "done":
-                yield {"event": "done", "data": json.dumps({
-                    "report": event["report"], "language": language,
-                })}
-                return
-            elif event.get("type") == "error":
-                yield {"event": "error", "data": json.dumps({
-                    "message": event["message"], "traceback": event.get("traceback", ""),
-                })}
-                return
+            # Agent 结束后，取队列里剩余的事件
+            while not queue.empty():
+                event = queue.get_nowait()
+                if event.get("type") == "done":
+                    yield {"event": "done", "data": json.dumps({
+                        "report": event["report"], "language": language,
+                    })}
+                    return
+                elif event.get("type") == "error":
+                    yield {"event": "error", "data": json.dumps({
+                        "message": event["message"], "traceback": event.get("traceback", ""),
+                    })}
+                    return
 
-        # 如果 task 结束了但没有任何 done/error 事件（不应发生）
-        result = task.result()
-        yield {"event": "done", "data": json.dumps({
-            "report": result if isinstance(result, str) else "", "language": language,
-        })}
+            # 如果 task 结束了但没有任何 done/error 事件（不应发生）
+            result = task.result()
+            yield {"event": "done", "data": json.dumps({
+                "report": result if isinstance(result, str) else "", "language": language,
+            })}
+        finally:
+            # 客户端断开或生成器退出 → 取消 Agent 任务，停止消耗 token
+            if not task.done():
+                task.cancel()
+                log.info("客户端断开，Agent 任务已取消")
+                try:
+                    await task
+                except (aio.CancelledError, Exception):
+                    pass
 
     except Exception as e:
         log.exception("run_agent_with_sse 异常")
@@ -195,7 +211,8 @@ async def research_sync(req: ResearchRequest):
         async for event in run_agent_with_sse(
             question=req.question, level=req.level,
             max_rounds=req.max_rounds, language=req.language,
-            context=req.context, kb_enabled=req.kb_enabled, user_id=req.user_id, cancel=cancel,
+            context=req.context, kb_enabled=req.kb_enabled, user_id=req.user_id,
+            rag_doc_ids=req.rag_doc_ids, cancel=cancel,
         ):
             if event["event"] == "done":
                 result.append(json.loads(event["data"]))
@@ -215,7 +232,8 @@ async def research_stream(req: ResearchRequest):
     return EventSourceResponse(run_agent_with_sse(
         question=req.question, level=req.level,
         max_rounds=req.max_rounds, language=req.language,
-        context=req.context, kb_enabled=req.kb_enabled, user_id=req.user_id, cancel=cancel,
+        context=req.context, kb_enabled=req.kb_enabled, user_id=req.user_id,
+        rag_doc_ids=req.rag_doc_ids, cancel=cancel,
     ))
 
 

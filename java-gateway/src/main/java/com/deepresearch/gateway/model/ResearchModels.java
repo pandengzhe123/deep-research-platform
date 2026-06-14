@@ -2,6 +2,7 @@ package com.deepresearch.gateway.model;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import java.util.List;
 
 /**
  * 请求 & 响应模型 —— 与 Python Agent 的 API 契约完全一致。
@@ -22,16 +23,18 @@ public class ResearchModels {
             String context,
             @JsonProperty("kb_enabled") Boolean kbEnabled,
             @JsonProperty("user_id") String userId,
-            @JsonProperty("session_id") String sessionId
+            @JsonProperty("session_id") String sessionId,
+            @JsonProperty("rag_doc_ids") List<String> ragDocIds
     ) {
         public ResearchRequest {
             if (level == 0) level = 2;
             if (language == null || language.isBlank()) language = "auto";
+            if (ragDocIds == null) ragDocIds = List.of();
         }
 
         /** 快速构造：只传问题，默认 Level 2。 */
         public ResearchRequest(String question) {
-            this(question, 2, null, "auto", "", null, null, null);
+            this(question, 2, null, "auto", "", null, null, null, List.of());
         }
     }
 

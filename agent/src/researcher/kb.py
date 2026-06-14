@@ -242,10 +242,10 @@ class KnowledgeBase:
             return []
 
     def delete_doc(self, doc_id: str, user_id: str = "default") -> dict:
-        """删除指定文档的所有 chunk（按 user_id + doc_id 过滤）。"""
+        """删除指定文档的所有 chunk。collection 已按 user_id 隔离，只需按 doc_id 过滤。"""
         try:
             collection = self._get_collection(user_id)
-            results = collection.get(where={"user_id": user_id, "doc_id": doc_id})
+            results = collection.get(where={"doc_id": doc_id})
             ids = results.get("ids", [])
             if ids:
                 collection.delete(ids=ids)

@@ -34,3 +34,4 @@ agent/chroma_test/
 # Test files
 test_rag.txt
 test2.txt
+*.txt
