@@ -45,6 +45,9 @@ class SearchTool:
     def __init__(self):
         self.tavily = AsyncTavilyClient(api_key=config.tavily_api_key)
         self.llm = LLMClient()
+        self._seen_urls: set[str] = set()  # 跨轮 URL 去重，避免重复摘要
+        self._search_cache: dict[str, tuple[float, dict]] = {}  # query → (timestamp, result)
+        self._cache_ttl = 300  # 缓存 5 分钟
 
     async def _safe_tavily_search(self, query: str, max_results: int, include_raw: bool, retries: int = 2):
         """带重试的 Tavily 搜索。"""
@@ -77,12 +80,26 @@ class SearchTool:
         return {"results": tavily_format, "query": query}
 
     async def _do_search(self, query: str, max_results: int, include_raw: bool) -> dict:
-        """搜索：Tavily 优先，失败自动降级到 DuckDuckGo。"""
+        """搜索：先查缓存，Tavily 优先，失败自动降级到 DuckDuckGo。"""
+        import time
+        # 缓存检查
+        cache_key = f"{query}:{max_results}"
+        if cache_key in self._search_cache:
+            ts, cached = self._search_cache[cache_key]
+            if time.time() - ts < self._cache_ttl:
+                print(f"    缓存命中: {query[:40]}...")
+                return cached
+
+        # 实际搜索
         result = await self._safe_tavily_search(query, max_results, include_raw)
+        if not result.get("results"):
+            print(f"  ⚠️ Tavily 无结果，降级到 DuckDuckGo: {query[:50]}...")
+            result = await self._ddg_search(query, max_results)
+
+        # 存入缓存
         if result.get("results"):
-            return result
-        print(f"  ⚠️ Tavily 无结果，降级到 DuckDuckGo: {query[:50]}...")
-        return await self._ddg_search(query, max_results)
+            self._search_cache[cache_key] = (time.time(), result)
+        return result
 
     async def search(
         self,
@@ -97,22 +114,36 @@ class SearchTool:
         ]
         all_results = await asyncio.gather(*tasks)
 
-        # 2. 按 URL 去重
+        # 2. 按 URL 去重（同轮内 + 跨轮）
         seen: dict[str, dict] = {}
+        skipped = 0
         for response in all_results:
             for r in response.get("results", []):
                 url = r.get("url", "")
-                if url and url not in seen:
+                if not url:
+                    continue
+                if url in self._seen_urls or url in seen:
+                    skipped += 1
+                else:
                     seen[url] = r
+        # 记录本轮新 URL，下一轮不再重复摘要
+        self._seen_urls.update(seen.keys())
+        if skipped:
+            print(f"    跨轮去重：跳过 {skipped} 个已处理 URL，本轮新增 {len(seen)} 个")
 
-        # 3. 对每个网页抓取 + 摘要（并行）
-        summary_tasks = [
-            self._fetch_and_summarize(url, r)
-            for url, r in seen.items()
-        ]
-        summaries = await asyncio.gather(*summary_tasks)
+        # 3. 并行抓取网页内容
+        items = list(seen.items())
+        fetch_tasks = [self._fetch_content(url, r) for url, r in items]
+        contents = await asyncio.gather(*fetch_tasks)
 
-        # 4. 格式化输出
+        # 4. 批量 LLM 摘要（一次调用处理所有网页，大幅减少耗时）
+        valid = [(url, r, c) for (url, r), c in zip(items, contents) if c]
+        if not valid:
+            return "未找到相关结果。"
+
+        summaries = self._batch_summarize(valid)
+
+        # 5. 格式化输出
         output_parts = ["# 搜索结果\n"]
         for i, s in enumerate(summaries):
             if s is None:
@@ -160,37 +191,59 @@ class SearchTool:
 
         return "\n".join(output_parts) if len(output_parts) > 1 else "未找到相关结果。"
 
-    async def _fetch_and_summarize(self, url: str, result: dict) -> dict | None:
-        """抓取网页内容并用 LLM 摘要。"""
+    async def _fetch_content(self, url: str, result: dict) -> str | None:
+        """抓取网页内容（优先用 Tavily raw_content，否则 HTTP 抓取）。"""
         try:
-            # 尝试用 Tavily 返回的 raw_content
             content = result.get("raw_content", "")
             if not content:
                 content = await self._fetch_url(url)
-
-            if not content or len(content) < 100:
-                return {
-                    "title": result.get("title", url),
-                    "url": url,
-                    "summary": result.get("content", "无内容"),
-                    "key_facts": [],
-                }
-
-            # LLM 摘要
-            truncated = content[: config.max_content_length]
-            summary_data = self.llm.structured_output(
-                system_prompt="你是网页内容摘要助手。",
-                user_message=SUMMARY_PROMPT.format(content=truncated),
-                schema=SUMMARY_SCHEMA,
-            )
-            return {
-                "title": result.get("title", url),
-                "url": url,
-                "summary": summary_data.get("summary", ""),
-                "key_facts": summary_data.get("key_facts", []),
-            }
+            return content if content and len(content) >= 100 else None
         except Exception:
             return None
+
+    def _batch_summarize(self, items: list[tuple[str, dict, str]]) -> list[dict]:
+        """批量摘要：一次 LLM 调用处理多个网页，减少串行等待。"""
+        # 构建批量 prompt
+        parts = []
+        for i, (url, r, content) in enumerate(items):
+            truncated = content[:config.max_content_length]
+            parts.append(f"=== 网页 {i+1}: {r.get('title', url)} ===\n{truncated}\n")
+
+        batch_prompt = (
+            "对以下网页内容分别做摘要。每个网页独立摘要，保留核心事实、数据、时间、人名。\n\n"
+            + "\n".join(parts)
+            + "\n请返回 JSON 数组，每个元素对应一个网页：\n"
+            '[{"summary": "摘要", "key_facts": ["事实1", "事实2"]}, ...]'
+        )
+
+        try:
+            import json
+            resp = self.llm.chat(
+                system_prompt="你是网页内容摘要助手。只返回 JSON 数组，不加任何解释。",
+                user_message=batch_prompt,
+            )
+            # 提取 JSON 数组
+            text = resp.strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            data = json.loads(text)
+            if not isinstance(data, list):
+                data = [data]
+        except Exception:
+            # 解析失败回退：用原始 snippet 作为摘要
+            data = [{"summary": items[i][1].get("content", ""), "key_facts": []} for i in range(len(items))]
+
+        # 组装返回结果
+        results = []
+        for i, (url, r, _) in enumerate(items):
+            entry = data[i] if i < len(data) else {}
+            results.append({
+                "title": r.get("title", url),
+                "url": url,
+                "summary": entry.get("summary", r.get("content", "")),
+                "key_facts": entry.get("key_facts", []),
+            })
+        return results
 
     async def _fetch_url(self, url: str) -> str:
         """抓取网页 HTML 并转成 markdown 文本。"""

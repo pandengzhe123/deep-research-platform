@@ -4,6 +4,66 @@
 
 ---
 
+## 2026-06-14 — SSE 流式透传 + 性能优化 + 停止研究
+
+### 做了什么
+
+#### SSE 三层打通
+- Java `AgentClient`: `bodyToFlux(String)` → `bodyToFlux(ServerSentEvent<String>)`，保留事件名
+- Java `ResearchController`: SSE 端点补齐 session 管理 + user_id 注入 + 报告保存
+- 前端: `api.post('/research')` → `fetch('/api/research/stream')` + ReadableStream 解析
+- nginx: `/api/` 补齐 `proxy_http_version 1.1` + `Connection ''` + `chunked_transfer_encoding`
+- 修复 `@AuthenticationPrincipal` 在 WebFlux 中不生效 → 手动从 Header 解析 JWT
+
+#### 性能优化（Level 2+ 每轮省 ~16 秒）
+- **批量摘要**: 5 个 URL 合并 1 次 LLM 调用（串行 20s → 批量 7s）
+- **跨轮 URL 去重**: `_seen_urls` 集合，重复 URL 不再摘要（省 ~30% LLM 调用）
+- **搜索结果缓存**: TTL 5 分钟，相同 query 命中缓存（省 Tavily API 调用）
+
+#### 停止研究（真正取消）
+- 前端: `AbortController.abort()` → fetch 中断
+- Python: `finally` 块 `task.cancel()` → CancelledError 穿透所有 await
+- 效果: LLM/搜索调用立即停止，不再消耗 token
+
+#### RAG 文档勾选
+- 前端 KB 面板加 checkbox，用户选择要搜索的文档
+- `rag_doc_ids` 全链路传递: 前端 → Java → Python → Agent → kb.search(doc_ids)
+- 不勾选 = 搜全部，勾选 = 只搜选中的
+
+#### 前端体验优化
+- SSE 真实进度替代假动画（搜索/RAG/反思/撰写 分阶段显示）
+- 会话切换不中断后台研究，切回恢复实时进度
+- 研究耗时显示在报告顶部
+- 停止按钮（红色圆形）替换发送按钮
+- UI 高级感: 渐变/阴影/动画/无 emoji 文字标签
+- 计时器: 渐变药丸 + 旋转动画，仅研究会话显示
+
+#### 其他修复
+- kb.py 存储截断 100→完整 chunk（5 倍信息量）
+- SSL 全局绕过改为仅 HF_HUB
+- Embedding 模型三级降级加载（本地→自动下载→手动提示）
+- Dockerfile 预下载模型打进镜像
+- Chroma delete_doc where 多字段→单字段
+- kb.ingest 用 asyncio.to_thread
+
+### 修改文件
+
+| 文件 | 改动 |
+|------|------|
+| `agent/src/researcher/search.py` | 批量摘要 + 跨轮 URL 去重 + 搜索缓存 |
+| `agent/src/researcher/agent.py` | rag_doc_ids 全链路 + kb_searching step |
+| `agent/src/researcher/server.py` | rag_doc_ids + task.cancel + CancelledError |
+| `agent/src/researcher/kb.py` | 完整 chunk 存储 + SSL 修复 + 模型降级 + delete 修复 |
+| `agent/Dockerfile` | 预下载 embedding 模型 |
+| `java-gateway/.../AgentClient.java` | ServerSentEvent 类型 |
+| `java-gateway/.../ResearchController.java` | SSE 完整端点 + JWT 手动解析 |
+| `java-gateway/.../ResearchModels.java` | ragDocIds 字段 |
+| `frontend/src/views/ResearchView.vue` | SSE + 停止 + 文档勾选 + UI 优化 |
+| `frontend/nginx.conf` | SSE 头 |
+
+
+
+
 ## 2026-06-11 — Agent 代码审查：RAG 半失效 + 协议违规修复
 
 ### 发现的问题

@@ -1,18 +1,18 @@
 # DeepResearch Platform 开发进度
 
-> 最后更新：2026年6月11日 | Python ~1,800 行 + Java ~700 行 + 前端 ~650 行 + 文档 ~5,000 行
+> 最后更新：2026年6月14日 | Python ~1,900 行 + Java ~700 行 + 前端 ~750 行 + 文档 ~5,000 行
 
 ---
 
 ## 总览
 
 ```
-整体进度  █████████████████░  90%
+整体进度  ██████████████████░  93%
 
-├── Python Agent      ██████████████████  95%
-├── Java 网关          ████████████████░░  85%
-├── 前端 UI            ████████████████░░  85%
-├── RAG 集成           ██████████████████  95%
+├── Python Agent      ██████████████████  98%
+├── Java 网关          █████████████████░  90%
+├── 前端 UI            █████████████████░  90%
+├── RAG 集成           ██████████████████  98%
 ├── 测试系统           ████████████░░░░░░  60%
 ├── 部署              ████████████████░░  80%
 └── 文档              ███████████████████  95%
@@ -20,23 +20,25 @@
 
 ---
 
-## Python Agent（95%｜6 文件 ~1,800 行）
+## Python Agent（98%｜6 文件 ~1,900 行）
 
 | 任务 | 状态 | 说明 |
 |------|:--:|------|
 | LLM 客户端 + 重试 | ✅ | DeepSeek V4，429/5xx/网络 指数退避，超时直抛不重试 |
 | 搜索 (Tavily + DDG) | ✅ | Tavily 优先，失败自动降级 DuckDuckGo（`ddgs` 包） |
-| URL 去重 + 网页摘要 | ✅ | LLM 摘要 + search_fast 跳过摘要 |
+| 批量摘要 | ✅ | 多 URL 合并 1 次 LLM 调用，串行 20s→并行 7s |
+| 跨轮 URL 去重 | ✅ | `_seen_urls` 集合，重复 URL 不再摘要 |
+| 搜索结果缓存 | ✅ | TTL 5 分钟，相同 query 命中缓存不调 API |
 | Level 1 Fast | ✅ | 1 次 LLM，15-30s，支持 RAG |
 | Level 2 搜索-反思 | ✅ | Function Calling + 两层异常处理（per-tool + LLM） |
 | Level 3 多路并行 | ✅ | asyncio.gather + 标题降级 + 失败过滤 + 连续编号 |
-| Level 4 Supervisor | ✅ | ConductResearch / ResearchComplete / think_tool |
+| Level 4 Supervisor | ✅ | 分批派遣 + ResearchComplete 优先检测 + 错误传递 |
 | 压缩 + 澄清 | ✅ | 压缩去重去噪，澄清双入口（CLI+浏览器） |
 | on_progress 回调 | ✅ | Level 1-4 全线贯通，含子课题失败通知 |
 | FastAPI SSE 流式 | ✅ | /research + /research/stream + /health |
+| 任务取消 | ✅ | 客户端断开→task.cancel()→CancelledError 穿透所有 await |
 | Token 超限保护 | ✅ | 消息历史 >50 万字符截断，保留原始问题 |
 | OOM 保护 | ✅ | 单结果 30 万截断 + 按轮保留 3 轮 + 压缩前 50 万截断 |
-| 空结果兜底 | ✅ | 全部搜索失败时返回有意义提示，不走 LLM |
 | JSON 容错 | ✅ | LLM 生成未转义换行时自动修复后重试 |
 | LLMClient 共享 | ✅ | Level 3/4 子 Agent 共享父级客户端，减少连接洪峰 |
 
@@ -58,29 +60,32 @@
 | 会话按用户隔离 | ✅ | listSessions / getUserSessions |
 | 端到端验证 | ✅ | 浏览器→Java→Python→Tavily→报告→PG 全通 |
 | KB 多租户隔离 | ✅ | user_id 贯穿 Java→Python→Chroma |
+| SSE 流式透传 | ✅ | ServerSentEvent 保留事件名 + 报告保存 + session 管理 |
+| JWT 手动解析 | ✅ | @AuthenticationPrincipal 不可靠，改为手动从 Header 解析 |
 | Spring Security 强制认证 | ⚠️ | 开发模式放行，JWT 基础设施已就绪 |
-| SSE 流式 Java 透传 | ⚠️ | Python SSE 正常，Java 缓冲待修 |
 
 ---
 
-## 前端（85%｜11 文件 ~650 行）
+## 前端（90%｜11 文件 ~750 行）
 
 | 任务 | 状态 | 说明 |
 |------|:--:|------|
 | Vue 3 + Vite 项目 | ✅ | vue-router + Pinia + axios + marked |
 | 登录/注册页 | ✅ | 渐变背景 + 卡片设计 |
 | 研究主界面 | ✅ | 全屏聊天布局，左侧栏 + 中间消息 + 右侧 KB |
-| 聊天气泡 | ✅ | 用户紫泡右对齐，AI 白卡左对齐，思考动画 |
-| 步骤轮播 | ✅ | 🔍搜索→📖分析→💭整理→📝撰写四状态动画 |
-| 计时器 | ✅ | 提交后实时显示 |
-| Markdown 渲染 | ✅ | marked + 自定义样式 |
-| 报告导出 | ✅ | 📋 复制 Markdown + 💾 下载 .md |
-| KB 面板 | ✅ | 上传/列表/删除，按用户隔离 |
+| SSE 流式进度 | ✅ | fetch + ReadableStream，真实事件驱动 UI |
+| 停止研究 | ✅ | AbortController 中断 → 后端 task.cancel() |
+| 研究耗时显示 | ✅ | 报告顶部显示"研究耗时 X分Xs" |
+| 会话切换不中断 | ✅ | 后台研究继续，切回恢复实时进度 |
+| KB 文档勾选 | ✅ | checkbox 选择文档，rag_doc_ids 全链路传递 |
+| 计时器 | ✅ | 渐变药丸 + 旋转动画，仅研究会话显示 |
+| Markdown 渲染 | ✅ | marked + 报告卡片样式 |
+| 报告导出 | ✅ | 复制 Markdown + 下载 .md |
 | 会话侧边栏 | ✅ | 按用户过滤，显示问题标题 |
 | 多轮追问 | ✅ | contextHistory 累积 + session_id 复用 |
-| 刷新恢复 | ✅ | localStorage 缓存 + API fallback（报告穿透） |
-| 退出确认弹窗 | ✅ | 自定义模态框 |
-| 错误提示 | ✅ | 401/429/500/超时/网络断开 六种用户友好提示 |
+| 刷新恢复 | ✅ | localStorage + API fallback（报告穿透） |
+| 错误提示 | ✅ | 401/429/500/超时/网络断开 六种友好提示 |
+| UI 高级感 | ✅ | 渐变/阴影/动画/无 emoji 文字标签 |
 | 路由守卫 | ✅ | 未登录跳转登录页 |
 | axios 拦截器 | ✅ | 自动带 JWT，401 跳登录，30 分钟超时 |
 | 响应式布局 | ⚠️ | 桌面完美，移动端侧栏可隐藏 |
@@ -189,19 +194,21 @@
 
 ## 下一步
 
-### 高优先级
+### 待做
 
-1. **Spring Security 强制认证** —— JWT 基础设施已就绪，只差 `authenticated()` 一行
-2. **Level1Agent 死代码清理** —— ~50 行未调用代码
+1. **Spring Security 强制认证** —— 一行代码，开发模式暂不开
+2. **Level1Agent 死代码清理** —— ~50 行未调用
+3. **pgvector 迁移** —— Chroma → PostgreSQL，一个 DB 管所有
+4. **报告导出 PDF/Word** —— 当前已支持 Markdown 复制/下载
+5. **CI 自动测试** —— GitHub Actions
 
-### 中优先级
+### 已完成（本轮）
 
-3. **任务取消功能接通** —— 骨架已有（cancel Event + DELETE 端点 + Java 转发），需接线：注册 task_id、循环中检查 cancel、前端加取消按钮
-4. **SSE 流式透传** —— Python 端 emit 已就绪，需 Java 透传 + 前端 EventSource 替代同步 POST
-5. **跨轮 URL 去重** —— 全局 `seen_urls` 集合，减少 ~30% 冗余 LLM 摘要调用
-6. **搜索结果缓存** —— TTLCache 缓存相同 query 的 Tavily 结果
-
-### 低优先级
-
-7. **pgvector 迁移** —— Chroma → PostgreSQL，一个 DB 管所有
-8. **报告导出 PDF/Word** —— 当前已支持 Markdown 复制/下载
+- ✅ SSE 流式透传（三层打通）
+- ✅ 任务取消（task.cancel + CancelledError）
+- ✅ 跨轮 URL 去重
+- ✅ 搜索结果缓存（TTL 5 分钟）
+- ✅ 批量摘要（5 次串行→1 次批量）
+- ✅ RAG 文档勾选
+- ✅ UI 高级感优化
+- ✅ 停止按钮 + 研究耗时显示

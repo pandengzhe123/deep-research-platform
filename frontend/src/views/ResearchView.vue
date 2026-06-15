@@ -234,7 +234,9 @@ async function start() {
           myMessages.push({ role: 'assistant', content: '需要澄清：' + (d.question || '') })
           contextHistory += (contextHistory ? '\n\n' : '') + '用户: ' + q + '\nAgent: （追问）' + (d.question || '')
         } else if (d.report) {
-          myMessages.push({ role: 'assistant', content: d.report })
+          const elapsed = Math.floor((Date.now() - startTime.value) / 1000)
+          const timeStr = `${Math.floor(elapsed/60)}分${String(elapsed%60).padStart(2,'0')}秒`
+          myMessages.push({ role: 'assistant', content: `> 研究耗时 ${timeStr}\n\n${d.report}` })
           contextHistory += (contextHistory ? '\n\n' : '') + '用户: ' + q + '\nAgent: （已回复报告）'
         }
         // 无论用户是否在看，都存 localStorage
