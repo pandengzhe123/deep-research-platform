@@ -4,7 +4,7 @@
 
 ---
 
-## 2026-06-14 — SSE 流式透传 + 性能优化 + 停止研究
+## 2026-06-14 — SSE 流式透传 + 性能优化 + 停止研究 + 僵尸会话修复
 
 ### 做了什么
 
@@ -46,6 +46,15 @@
 - Chroma delete_doc where 多字段→单字段
 - kb.ingest 用 asyncio.to_thread
 
+#### 僵尸会话清理机制修复
+
+原设计用 `createdAt` 判断超时，存在三个缺陷：
+1. 追问旧会话时 `createdAt` 不刷新，30 分钟内可能被误清理
+2. 追问不改 `status` 回 `running`，状态语义不准确
+3. 合法长研究（>30 分钟）被误标 `error`
+
+修复：加 `updatedAt` 字段（最后活动时间），所有写操作自动刷新。追问时 `markRunning()` 改 status + 刷新时间。清理逻辑改用 `updatedAt` 判断。
+
 ### 修改文件
 
 | 文件 | 改动 |
@@ -60,6 +69,9 @@
 | `java-gateway/.../ResearchModels.java` | ragDocIds 字段 |
 | `frontend/src/views/ResearchView.vue` | SSE + 停止 + 文档勾选 + UI 优化 |
 | `frontend/nginx.conf` | SSE 头 |
+| `java-gateway/.../SessionEntity.java` | updatedAt 字段 + touch() |
+| `java-gateway/.../SessionService.java` | markRunning + 清理改用 updatedAt |
+| `java-gateway/src/main/resources/schema.sql` | sessions 表加 updated_at 列 |
 
 
 
