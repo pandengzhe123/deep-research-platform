@@ -37,6 +37,9 @@ public class SessionEntity {
     @Column(name = "created_at")
     private LocalDateTime createdAt = LocalDateTime.now();
 
+    @Column(name = "updated_at")
+    private LocalDateTime updatedAt = LocalDateTime.now();
+
     public SessionEntity() {}
 
     public SessionEntity(String id, String userId, String question) {
@@ -44,6 +47,9 @@ public class SessionEntity {
         this.userId = userId;
         this.question = question;
     }
+
+    /** 刷新最后活动时间 */
+    public void touch() { this.updatedAt = LocalDateTime.now(); }
 
     // getters / setters
     public String getId() { return id; }
@@ -64,4 +70,6 @@ public class SessionEntity {
     public void setStatus(String status) { this.status = status; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
+    public LocalDateTime getUpdatedAt() { return updatedAt; }
+    public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
 }

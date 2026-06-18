@@ -14,7 +14,11 @@ CREATE TABLE IF NOT EXISTS sessions (
     search_mode VARCHAR(20) DEFAULT 'hybrid',
     rag_docs JSONB DEFAULT '[]',
     status VARCHAR(20) DEFAULT 'running',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 兼容已有数据库：如果 updated_at 列不存在则添加
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
 
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id, created_at DESC);

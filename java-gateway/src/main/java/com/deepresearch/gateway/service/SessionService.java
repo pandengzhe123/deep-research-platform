@@ -50,6 +50,7 @@ public class SessionService {
                 history = history.subList(history.size() - 50, history.size());
             }
             entity.setHistory(toJson(history));
+            entity.touch();
             repo.save(entity);
         });
     }
@@ -61,21 +62,27 @@ public class SessionService {
         repo.findById(sessionId).ifPresent(entity -> {
             entity.setReport(report);
             entity.setStatus("done");
+            entity.touch();
             repo.save(entity);
             log.info("报告写入: session={}, len={}", sessionId, report.length());
         });
     }
 
-    /**
-     * 标记会话为错误。
-     */
-    /** 定时清理：超过 30 分钟的 running 会话标记为 error。 */
+    /** 刷新会话的最后活动时间。 */
+    public void touch(String sessionId) {
+        repo.findById(sessionId).ifPresent(entity -> {
+            entity.touch();
+            repo.save(entity);
+        });
+    }
+
+    /** 定时清理：最后活动超过 30 分钟仍为 running 的会话标记为 error。 */
     @org.springframework.scheduling.annotation.Scheduled(fixedRate = 600000)
     public void cleanupStaleSessions() {
         List<SessionEntity> all = repo.findAll();
         LocalDateTime cutoff = LocalDateTime.now().minusMinutes(30);
         for (SessionEntity s : all) {
-            if ("running".equals(s.getStatus()) && s.getCreatedAt().isBefore(cutoff)) {
+            if ("running".equals(s.getStatus()) && s.getUpdatedAt() != null && s.getUpdatedAt().isBefore(cutoff)) {
                 s.setStatus("error");
                 repo.save(s);
                 log.info("清理僵尸会话: {}", s.getId());
@@ -83,9 +90,19 @@ public class SessionService {
         }
     }
 
+    /** 追问时标记会话为 running + 刷新活动时间。 */
+    public void markRunning(String sessionId) {
+        repo.findById(sessionId).ifPresent(entity -> {
+            entity.setStatus("running");
+            entity.touch();
+            repo.save(entity);
+        });
+    }
+
     public void markError(String sessionId) {
         repo.findById(sessionId).ifPresent(entity -> {
             entity.setStatus("error");
+            entity.touch();
             repo.save(entity);
         });
     }

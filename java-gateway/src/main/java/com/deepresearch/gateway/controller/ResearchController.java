@@ -75,7 +75,10 @@ public class ResearchController {
             if (req.sessionId() != null && !req.sessionId().isBlank()) {
                 session = sessionService.getSession(req.sessionId());
                 if (session == null) session = sessionService.createSession(uid, req.question());
-                else sessionService.appendHistory(req.sessionId(), "用户: " + req.question());
+                else {
+                    sessionService.appendHistory(req.sessionId(), "用户: " + req.question());
+                    sessionService.markRunning(req.sessionId());  // 追问：状态改 running + 刷新活动时间
+                }
             } else {
                 session = sessionService.createSession(uid, req.question());
             }
@@ -126,7 +129,10 @@ public class ResearchController {
         if (req.sessionId() != null && !req.sessionId().isBlank()) {
             session = sessionService.getSession(req.sessionId());
             if (session == null) session = sessionService.createSession(uid, req.question());
-            else sessionService.appendHistory(req.sessionId(), "用户: " + req.question());
+            else {
+                sessionService.appendHistory(req.sessionId(), "用户: " + req.question());
+                sessionService.markRunning(req.sessionId());  // 追问：状态改 running + 刷新活动时间
+            }
         } else {
             session = sessionService.createSession(uid, req.question());
         }

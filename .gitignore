@@ -35,3 +35,6 @@ agent/chroma_test/
 test_rag.txt
 test2.txt
 *.txt
+
+# 面试准备（本地私有）
+INTERVIEW.md
