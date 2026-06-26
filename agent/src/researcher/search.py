@@ -163,7 +163,7 @@ class SearchTool:
         if not valid:
             return "未找到相关结果。"
 
-        summaries = self._batch_summarize(valid)
+        summaries = await self._batch_summarize(valid)
 
         # 5. 格式化输出
         output_parts = ["# 搜索结果\n"]
@@ -223,7 +223,7 @@ class SearchTool:
         except Exception:
             return None
 
-    def _batch_summarize(self, items: list[tuple[str, dict, str]]) -> list[dict]:
+    async def _batch_summarize(self, items: list[tuple[str, dict, str]]) -> list[dict]:
         """批量摘要：一次 LLM 调用处理多个网页，减少串行等待。"""
         # 构建批量 prompt
         parts = []
@@ -240,7 +240,7 @@ class SearchTool:
 
         try:
             import json
-            resp = self.llm.chat(
+            resp = await self.llm.chat(
                 system_prompt="你是网页内容摘要助手。只返回 JSON 数组，不加任何解释。",
                 user_message=batch_prompt,
             )

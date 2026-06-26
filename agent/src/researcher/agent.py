@@ -125,7 +125,7 @@ class ClarifyHelper:
         self.llm = LLMClient()
 
     async def check(self, question: str) -> dict:
-        return self.llm.structured_output(
+        return await self.llm.structured_output(
             system_prompt="你是用户意图分析助手。",
             user_message=CLARIFY_PROMPT.format(messages=question),
             schema=CLARIFY_SCHEMA,
@@ -263,7 +263,7 @@ class FastLevel1Agent:
 
         self.emit({"step": "reporting", "message": "正在撰写报告（唯一一次 LLM 调用）..."})
 
-        report = self.llm.chat(
+        report = await self.llm.chat(
             system_prompt="你是专业的深度研究报告撰写助手。简洁、准确、有引用。",
             user_message=FAST_REPORT_PROMPT.format(
                 question=question,
@@ -295,7 +295,7 @@ class Level1Agent:
 
         # Step 1: 规划搜索词
         print("\n[1/3] 分析问题，规划搜索...")
-        plan = self.llm.structured_output(
+        plan = await self.llm.structured_output(
             system_prompt=PLAN_PROMPT,
             user_message=f"用户问题：{question}\n\n今天日期：{self._today()}",
             schema=PLAN_SCHEMA,
@@ -311,7 +311,7 @@ class Level1Agent:
 
         # Step 3: 生成报告
         print(f"\n[3/3] 生成报告...")
-        report = self.llm.chat(
+        report = await self.llm.chat(
             system_prompt="你是专业的深度研究报告撰写助手。",
             user_message=REPORT_PROMPT.format(
                 question=question,
@@ -406,7 +406,7 @@ class Level2Agent:
             self.emit({"step": "thinking", "message": f"第 {round_num}/{self.max_rounds} 轮决策中...", "round": round_num})
 
             try:
-                msg = self.llm.chat_with_tools(
+                msg = await self.llm.chat_with_tools(
                     system_prompt=system,
                     messages=messages,
                     tools=TOOLS if self.kb_enabled else [t for t in TOOLS if t["function"]["name"] != "search_kb"],
@@ -531,7 +531,7 @@ class Level2Agent:
 
         print(f"\n[压缩] 整理搜索结果...")
         self.emit({"step": "reporting", "message": "正在压缩整理搜索结果..."})
-        compressed = self.llm.chat(
+        compressed = await self.llm.chat(
             system_prompt=COMPRESS_PROMPT.format(date=self._today()),
             user_message=COMPRESS_USER_MESSAGE.format(
                 question=question,
@@ -542,7 +542,7 @@ class Level2Agent:
         # 生成最终报告
         print(f"\n[最终] 生成报告...")
         self.emit({"step": "reporting", "message": "正在撰写最终报告..."})
-        report = self.llm.chat(
+        report = await self.llm.chat(
             system_prompt="你是专业的深度研究报告撰写助手。",
             user_message=REPORT_PROMPT.format(
                 question=question,
@@ -628,7 +628,7 @@ class Level3Agent:
         # Step 1: LLM 拆题
         print("\n[1/3] 分析问题，拆分子课题...")
         self.emit({"step": "planning", "message": "正在分析问题，拆分子课题..."})
-        plan = self.llm.structured_output(
+        plan = await self.llm.structured_output(
             system_prompt="你是研究规划专家。把用户问题拆成 1-4 个独立子课题。",
             user_message=DECOMPOSE_PROMPT.format(question=question),
             schema=DECOMPOSE_SCHEMA,
@@ -673,7 +673,7 @@ class Level3Agent:
             f"## 子课题{i+1}: {topic}\n\n{downgrade(report)}"
             for i, (_, topic, report) in enumerate(valid)
         )
-        final_report = self.llm.chat(
+        final_report = await self.llm.chat(
             system_prompt="你是专业的深度研究报告汇总专家。",
             user_message=MERGE_PROMPT.format(
                 question=question,
@@ -818,7 +818,7 @@ class Level4Agent:
             self.emit({"step": "thinking", "message": f"Supervisor 第 {round_num}/{self.max_rounds} 轮决策", "round": round_num})
 
             # Supervisor 决策
-            msg = self.llm.chat_with_tools(
+            msg = await self.llm.chat_with_tools(
                 system_prompt=system,
                 messages=messages,
                 tools=SUPERVISOR_TOOLS,
@@ -910,7 +910,7 @@ class Level4Agent:
             return "# 研究失败\n\n未能获取有效信息，请简化问题重试。"
 
         try:
-            final = self.llm.chat(
+            final = await self.llm.chat(
                 system_prompt="你是专业的深度研究报告总编。",
                 user_message=FINAL_REPORT_PROMPT.format(
                     question=question,
