@@ -22,6 +22,7 @@ from sse_starlette.sse import EventSourceResponse
 from .agent import ClarifyHelper, FastLevel1Agent, Level2Agent, Level3Agent, Level4Agent
 from .config import config
 from .kb import kb
+from .llm import LLMClient
 
 log = logging.getLogger(__name__)
 
