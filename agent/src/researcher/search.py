@@ -1,6 +1,8 @@
 """搜索工具 —— 封装 Tavily API + 网页内容抓取 + LLM 摘要。"""
 
 import asyncio
+import os
+import time
 
 import httpx
 from bs4 import BeautifulSoup
@@ -46,8 +48,10 @@ class SearchTool:
         self.tavily = AsyncTavilyClient(api_key=config.tavily_api_key)
         self.llm = LLMClient()
         self._seen_urls: set[str] = set()  # 跨轮 URL 去重，避免重复摘要
-        self._search_cache: dict[str, tuple[float, dict]] = {}  # query → (timestamp, result)
-        self._cache_ttl = 300  # 缓存 5 分钟
+        self._search_cache: dict[str, tuple[float, dict]] = {}  # key → (timestamp, result)
+        self._cache_ttl = int(os.getenv("SEARCH_CACHE_TTL", "300"))  # 缓存秒数，默认 5 分钟
+        self._cache_hits = 0
+        self._cache_misses = 0
 
     async def _safe_tavily_search(self, query: str, max_results: int, include_raw: bool, retries: int = 2):
         """带重试的 Tavily 搜索。"""
@@ -81,16 +85,22 @@ class SearchTool:
 
     async def _do_search(self, query: str, max_results: int, include_raw: bool) -> dict:
         """搜索：先查缓存，Tavily 优先，失败自动降级到 DuckDuckGo。"""
-        import time
-        # 缓存检查
-        cache_key = f"{query}:{max_results}"
+        # 过期清理 + 归一化 key
+        now = time.time()
+        expired = [k for k, (ts, _) in self._search_cache.items() if now - ts > self._cache_ttl]
+        for k in expired:
+            del self._search_cache[k]
+
+        cache_key = f"{query.strip().lower()}:{max_results}"
         if cache_key in self._search_cache:
             ts, cached = self._search_cache[cache_key]
-            if time.time() - ts < self._cache_ttl:
-                print(f"    缓存命中: {query[:40]}...")
+            if now - ts < self._cache_ttl:
+                self._cache_hits += 1
+                print(f"    缓存命中: {query[:40]}... (命中率 {self._cache_hits}/{self._cache_hits + self._cache_misses})")
                 return cached
 
-        # 实际搜索
+        # 未命中缓存，实际搜索
+        self._cache_misses += 1
         result = await self._safe_tavily_search(query, max_results, include_raw)
         if not result.get("results"):
             print(f"  ⚠️ Tavily 无结果，降级到 DuckDuckGo: {query[:50]}...")
@@ -98,8 +108,20 @@ class SearchTool:
 
         # 存入缓存
         if result.get("results"):
-            self._search_cache[cache_key] = (time.time(), result)
+            self._search_cache[cache_key] = (now, result)
         return result
+
+    def get_cache_stats(self) -> dict:
+        """返回缓存命中率统计。"""
+        total = self._cache_hits + self._cache_misses
+        return {
+            "hits": self._cache_hits,
+            "misses": self._cache_misses,
+            "total": total,
+            "hit_rate": f"{self._cache_hits / total:.1%}" if total > 0 else "N/A",
+            "cache_size": len(self._search_cache),
+            "ttl_seconds": self._cache_ttl,
+        }
 
     async def search(
         self,
