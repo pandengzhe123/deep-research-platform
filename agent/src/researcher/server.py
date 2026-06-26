@@ -144,9 +144,18 @@ async def run_agent_with_sse(
                 except aio.TimeoutError:
                     continue
 
-                if event.get("type") in ("done", "error"):
-                    break
-                yield {"event": "status", "data": json.dumps(event, ensure_ascii=False)}
+                if event.get("type") == "done":
+                    yield {"event": "done", "data": json.dumps({
+                        "report": event["report"], "language": language,
+                    })}
+                    return
+                elif event.get("type") == "error":
+                    yield {"event": "error", "data": json.dumps({
+                        "message": event["message"], "traceback": event.get("traceback", ""),
+                    })}
+                    return
+                else:
+                    yield {"event": "status", "data": json.dumps(event, ensure_ascii=False)}
 
             # Agent 结束后，取队列里剩余的事件
             while not queue.empty():
