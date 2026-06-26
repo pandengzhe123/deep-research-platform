@@ -4,7 +4,59 @@
 
 ---
 
-## 2026-06-14 — SSE 流式透传 + 性能优化 + 停止研究 + 僵尸会话修复
+## 2026-06-26 — 记忆机制修复 + 上下文预警
+
+### 做了什么
+
+#### 1. 报告完整存入对话历史（修复 Agent 追问时"失忆"）
+
+原设计 history 列只写标签 `"Agent: （已回复报告）"`，Agent 追问时看不到报告实际内容，无法引用之前研究中的具体结论。
+
+**修复 4 处**：
+- `ResearchController.java` 同步端点（第 108 行）：标签 → 完整报告文本
+- `ResearchController.java` SSE 端点（第 169 行）：标签 → 完整报告文本
+- `ResearchView.vue` done 事件处理（第 240 行）：标签 → 完整报告文本
+- `ResearchView.vue` 会话恢复（第 419 行）：标签 → 完整报告文本
+
+**防溢出**：不手动截断，依赖已有的 50 条消息上限 + 50 万字符截断自然兜底。
+
+#### 2. report 列从 TEXT 改为 JSONB 数组（支持多份报告）
+
+原设计 `appendReport()` 覆盖上一次报告。多轮追问后只有最后一轮的报告可见。
+
+**修改**：
+- `schema.sql`：`report TEXT` → `report JSONB DEFAULT '[]'` + 旧数据迁移
+- `SessionEntity.java`：report 字段改为 `@JdbcTypeCode(SqlTypes.JSON)` 类型
+- `SessionService.java`：
+  - `appendReport()`：追加到数组而非覆盖，日志记录累计份数
+  - 新增 `getLatestReport()`：返回最新一份报告（前端 API 向后兼容）
+  - `toPojo()`：改用 `getLatestReport()`
+  - `getContextHistory()`：去重后追加 history 中不存在的旧报告（截断兜底）
+
+#### 3. 上下文快满时前端预警
+
+Agent 层（`agent.py` L2 和 L4）新增两级提示：
+- **80% 阈值**（~40 万字符）：`"上下文已用 XX%，继续追问可能丢失早期内容，建议开新会话"`
+- **100% 触发截断时**：`"上下文已满（XX%），早期对话已被截断。建议开新会话以保证研究质量"`
+
+每会话只发一次预警，避免每轮重复弹。
+
+### 修改文件
+
+| 文件 | 改动 |
+|------|------|
+| `java-gateway/.../controller/ResearchController.java` | 报告完整存入 history（2 处） |
+| `java-gateway/.../service/SessionService.java` | appendReport 改追加 + getLatestReport + getContextHistory 去重兜底 |
+| `java-gateway/.../model/SessionEntity.java` | report 字段改 JSONB |
+| `java-gateway/src/main/resources/schema.sql` | report 类型 + 迁移语句 |
+| `frontend/src/views/ResearchView.vue` | contextHistory 存完整报告（2 处） |
+| `agent/src/researcher/agent.py` | L2 + L4 上下文 80%/100% 预警 |
+
+### 教训
+
+- **"完整的报告" > "标签化摘要"**：Agent 追问时需要完整上下文，人工截断不如总量控制。已有的 50 条/50 万字符兜底比人工 500 字截断更合理
+- **去重而非无条件追加**：report 列兜底 history 截断时，用报告前 200 字符做指纹搜重，避免 history 未截断时出现冗余
+- **JSONB 数组 > TEXT 单值**：多轮对话产生多份报告是常态，覆盖式存储丢失历史数据
 
 ### 做了什么
 

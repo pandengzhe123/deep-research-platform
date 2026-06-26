@@ -36,5 +36,11 @@ test_rag.txt
 test2.txt
 *.txt
 
-# 面试准备（本地私有）
+# 个人文档（全部 docs 本地保留，不上传）
+docs/
 INTERVIEW.md
+陈子聪_简历.md
+陈子聪_简历.html
+
+# 生成的报告（测试产出物）
+agent/reports/

@@ -76,7 +76,7 @@ public class ResearchController {
                 session = sessionService.getSession(req.sessionId());
                 if (session == null) session = sessionService.createSession(uid, req.question());
                 else {
-                    sessionService.appendHistory(req.sessionId(), "用户: " + req.question());
+                    sessionService.appendHistory(req.sessionId(), "user", req.question());
                     sessionService.markRunning(req.sessionId());  // 追问：状态改 running + 刷新活动时间
                 }
             } else {
@@ -103,9 +103,9 @@ public class ResearchController {
             // 3. 保存报告 + 追加历史
             sessionService.appendReport(session.getId(), resp.report());
             if (resp.needClarify() != null && resp.needClarify()) {
-                sessionService.appendHistory(session.getId(), "Agent: （追问）" + (resp.question() != null ? resp.question() : ""));
+                sessionService.appendHistory(session.getId(), "agent", "（追问）" + (resp.question() != null ? resp.question() : ""));
             } else {
-                sessionService.appendHistory(session.getId(), "Agent: （已回复报告）");
+                sessionService.appendHistory(session.getId(), "agent", resp.report() != null ? resp.report() : "");
             }
             log.info("研究完成: session={}, report_len={}", session.getId(),
                     resp.report() != null ? resp.report().length() : 0);
@@ -130,7 +130,7 @@ public class ResearchController {
             session = sessionService.getSession(req.sessionId());
             if (session == null) session = sessionService.createSession(uid, req.question());
             else {
-                sessionService.appendHistory(req.sessionId(), "用户: " + req.question());
+                sessionService.appendHistory(req.sessionId(), "user", req.question());
                 sessionService.markRunning(req.sessionId());  // 追问：状态改 running + 刷新活动时间
             }
         } else {
@@ -166,7 +166,7 @@ public class ResearchController {
                                             JsonNode node = objectMapper.readTree(data);
                                             String report = node.has("report") ? node.get("report").asText() : "";
                                             sessionService.appendReport(sessionId, report);
-                                            sessionService.appendHistory(sessionId, "Agent: （已回复报告）");
+                                            sessionService.appendHistory(sessionId, "agent", report);
                                             log.info("流式研究完成: session={}, report_len={}", sessionId, report.length());
                                         } catch (Exception e) {
                                             log.error("解析报告失败: {}", e.getMessage());

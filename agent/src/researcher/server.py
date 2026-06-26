@@ -252,6 +252,41 @@ async def list_active_tasks():
 
 
 # ============================================================
+# 上下文压缩端点
+# ============================================================
+
+COMPRESS_HISTORY_PROMPT = """你是一个对话历史压缩助手。你会收到一段较长的对话历史，需要将其压缩成简洁的摘要。
+
+规则：
+1. 保留所有关键事实、数据、约束条件（如用户身份、预算、偏好）
+2. 保留用户明确提出的研究方向和重点关注领域
+3. 压缩掉具体的搜索细节和冗长的报告正文（那些已经存在报告列中了）
+4. 保留时间顺序，标注每次研究的主题
+5. 篇幅控制在原始文本的 30% 以内
+6. 用中文输出"""
+
+
+@app.post("/compress")
+async def compress_history(req: dict):
+    """压缩对话历史，防止上下文溢出。接收旧消息列表，返回压缩摘要。"""
+    messages = req.get("messages", [])
+    if not messages or len(messages) < 5:
+        return {"summary": ""}
+
+    try:
+        llm = LLMClient()
+        raw = "\n".join(str(m) for m in messages)
+        summary = llm.chat(
+            system_prompt=COMPRESS_HISTORY_PROMPT,
+            user_message=f"请压缩以下对话历史（保留关键信息，丢弃搜索细节和冗长报告）：\n\n{raw}",
+        )
+        return {"summary": summary}
+    except Exception as e:
+        log.error(f"压缩历史失败: {e}")
+        return {"summary": ""}
+
+
+# ============================================================
 # 知识库接口
 # ============================================================
 

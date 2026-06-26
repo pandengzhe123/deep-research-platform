@@ -237,7 +237,7 @@ async function start() {
           const elapsed = Math.floor((Date.now() - startTime.value) / 1000)
           const timeStr = `${Math.floor(elapsed/60)}分${String(elapsed%60).padStart(2,'0')}秒`
           myMessages.push({ role: 'assistant', content: `> 研究耗时 ${timeStr}\n\n${d.report}` })
-          contextHistory += (contextHistory ? '\n\n' : '') + '用户: ' + q + '\nAgent: （已回复报告）'
+          contextHistory += (contextHistory ? '\n\n' : '') + '用户: ' + q + '\nAgent: ' + (d.report || '')
         }
         // 无论用户是否在看，都存 localStorage
         if (mySessionId) {
@@ -401,22 +401,34 @@ async function switchSession(s) {
     let historyItems = []
     try { historyItems = JSON.parse(data.history || '[]') } catch(e) {}
     for (const item of historyItems) {
-      if (item.startsWith('用户: ')) msgs.push({ role: 'user', content: item.slice(4) })
-      else if (item !== 'Agent: （已回复报告）') msgs.push({ role: 'assistant', content: item.replace(/^Agent: /, '') })
+      if (typeof item === 'string') {
+        // 兼容旧格式纯文本
+        if (item.startsWith('用户: ')) msgs.push({ role: 'user', content: item.slice(4) })
+        else if (item.startsWith('Agent: ')) msgs.push({ role: 'assistant', content: item.slice(7) })
+      } else if (typeof item === 'object' && item.role) {
+        // 新格式结构化消息
+        msgs.push({
+          role: item.role === 'user' ? 'user' : 'assistant',
+          content: item.content || '',
+          time: item.time || ''
+        })
+      }
     }
-    if (fullReport) msgs.push({ role: 'assistant', content: fullReport })
+    if (fullReport && !msgs.some(m => m.role === 'assistant' && m.content === fullReport)) {
+      msgs.push({ role: 'assistant', content: fullReport })
+    }
     messages.value = msgs.length ? msgs : [
       { role: 'user', content: s.question || '' },
       { role: 'assistant', content: fullReport || '（报告已丢失）' }
     ]
-    contextHistory = historyItems.join('\n')
+    contextHistory = msgs.map(m => `[${m.time || ''}] ${m.role === 'user' ? '用户' : 'Agent'}: ${m.content}`).join('\n')
     localStorage.setItem('chat_' + s.id, JSON.stringify(messages.value))  // 缓存到本地
   } catch (e) {
     messages.value = [
       { role: 'user', content: s.question || '' },
       { role: 'assistant', content: s.report || '（报告已丢失）' }
     ]
-    contextHistory = `用户: ${s.question || ''}\nAgent: （已回复报告）`
+    contextHistory = `用户: ${s.question || ''}\nAgent: ${s.report || ''}`
   }
   scrollDown()
 }

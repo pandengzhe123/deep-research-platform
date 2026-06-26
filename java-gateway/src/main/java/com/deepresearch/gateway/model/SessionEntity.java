@@ -18,8 +18,9 @@ public class SessionEntity {
     @Column(columnDefinition = "TEXT")
     private String question;
 
-    @Column(columnDefinition = "TEXT")
-    private String report;
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "report", columnDefinition = "jsonb")
+    private String report = "[]";
 
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(columnDefinition = "jsonb")

@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     id VARCHAR(8) PRIMARY KEY,
     user_id VARCHAR(64) NOT NULL DEFAULT 'anonymous',
     question TEXT,
-    report TEXT,
+    report JSONB DEFAULT '[]',
     history JSONB DEFAULT '[]',
     search_mode VARCHAR(20) DEFAULT 'hybrid',
     rag_docs JSONB DEFAULT '[]',
@@ -20,5 +20,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 -- 兼容已有数据库：如果 updated_at 列不存在则添加
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+-- 2026-06-26: report 列已从 TEXT 迁移为 JSONB（已完成，无需重复执行）
 
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id, created_at DESC);

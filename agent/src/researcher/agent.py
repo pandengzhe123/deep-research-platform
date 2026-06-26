@@ -385,15 +385,22 @@ class Level2Agent:
         MAX_ROUND_RESULTS = 3       # 只保留最近 3 轮（每轮合并后的结果）
         system = AGENT_SYSTEM.format(max_rounds=self.max_rounds)
         MAX_HISTORY_CHARS = 500000
+        context_warned = False      # 预警只发一次
 
         for round_num in range(1, self.max_rounds + 1):
-            # Token 超限保护：消息历史过长时先截断旧消息
+            # Token 超限保护
             total_chars = sum(len(str(m)) for m in messages)
+
+            # 80% 预警：上下文快满了，建议开新会话
+            if not context_warned and total_chars > MAX_HISTORY_CHARS * 0.8:
+                context_warned = True
+                self.emit({"step": "thinking", "message": f"上下文已用 {total_chars * 100 // MAX_HISTORY_CHARS}%，继续追问可能丢失早期内容，建议开新会话"})
+
+            # 100% 截断：真正触发，告知用户信息被丢弃
             if total_chars > MAX_HISTORY_CHARS:
                 print(f"  ⚠️ 历史过长 ({total_chars} 字符)，截断旧内容")
-                # 始终保留第一条用户消息（原始问题），否则 LLM 忘记研究目标
                 messages = [messages[0]] + messages[-5:]
-                self.emit({"step": "thinking", "message": "历史过长已截断，继续研究...", "round": round_num})
+                self.emit({"step": "thinking", "message": f"上下文已满（{total_chars * 100 // MAX_HISTORY_CHARS}%），早期对话已被截断。建议开新会话以保证研究质量", "round": round_num})
 
             print(f"\n--- 第 {round_num}/{self.max_rounds} 轮 ---")
             self.emit({"step": "thinking", "message": f"第 {round_num}/{self.max_rounds} 轮决策中...", "round": round_num})
@@ -790,14 +797,20 @@ class Level4Agent:
         )
 
         MAX_HISTORY_CHARS = 500000
+        context_warned = False
 
         for round_num in range(1, self.max_rounds + 1):
             # 消息历史超限保护（与 Level 2 一致）
             total_chars = sum(len(str(m)) for m in messages)
+
+            if not context_warned and total_chars > MAX_HISTORY_CHARS * 0.8:
+                context_warned = True
+                self.emit({"step": "thinking", "message": f"上下文已用 {total_chars * 100 // MAX_HISTORY_CHARS}%，继续追问可能丢失早期内容，建议开新会话"})
+
             if total_chars > MAX_HISTORY_CHARS:
                 print(f"  ⚠️ Supervisor 历史过长 ({total_chars} 字符)，截断旧内容")
                 messages = [messages[0]] + messages[-5:]
-                self.emit({"step": "thinking", "message": "历史过长已截断，继续决策...", "round": round_num})
+                self.emit({"step": "thinking", "message": f"上下文已满（{total_chars * 100 // MAX_HISTORY_CHARS}%），早期对话已被截断。建议开新会话以保证研究质量", "round": round_num})
 
             print(f"\n{'='*40}")
             print(f"  Supervisor 第 {round_num}/{self.max_rounds} 轮决策")
