@@ -103,6 +103,7 @@ CLARIFY_PROMPT = """严格判断用户问题是否足够具体，能否直接开
 - 问题包含明确的主题+具体维度（如"2025年AI领域三大趋势"）
 - 问题即使很宽，但有明确的研究框架（如"对比Java、Go性能"）
 - 从上下文可以推断出意图
+- **重要**：如果用户当前消息是对你上一轮追问的直接回答（如你问了"要研究哪些方面"，用户回答"你提到的所有方面"或"全部"），说明用户已确认你的提议，必须返回 need_clarify=false，不得反复追问
 
 返回JSON：{{"need_clarify": bool, "question": "如果需要追问的话（1-2个关键问题）", "summary": "对需求的理解总结"}}"""
 
@@ -234,7 +235,7 @@ class FastLevel1Agent:
 
     def __init__(self, on_progress=None, kb_enabled=False, user_id: str = "default", rag_doc_ids: list[str] = None):
         self.llm = LLMClient()
-        self.search = SearchTool()
+        self.search = SearchTool(on_progress=self.emit)
         self.emit = on_progress or (lambda e: None)
         self.kb_enabled = kb_enabled
         self.user_id = user_id
@@ -286,7 +287,7 @@ class Level1Agent:
 
     def __init__(self):
         self.llm = LLMClient()
-        self.search = SearchTool()
+        self.search = SearchTool(on_progress=self.emit)
 
     async def run(self, question: str) -> str:
         print(f"\n{'='*60}")
@@ -360,7 +361,7 @@ class Level2Agent:
 
     def __init__(self, on_progress=None, kb_enabled: bool = False, user_id: str = "default", llm=None, rag_doc_ids: list[str] = None):
         self.llm = llm or LLMClient()
-        self.search_tool = SearchTool()
+        self.search_tool = SearchTool(on_progress=self.emit)
         self.max_rounds = config.max_search_rounds
         self.user_id = user_id
         self.emit = on_progress or (lambda e: None)
@@ -396,11 +397,25 @@ class Level2Agent:
                 context_warned = True
                 self.emit({"step": "thinking", "message": f"上下文已用 {total_chars * 100 // MAX_HISTORY_CHARS}%，继续追问可能丢失早期内容，建议开新会话"})
 
-            # 100% 截断：真正触发，告知用户信息被丢弃
+            # 100% 截断：先压缩旧消息再截断，保留关键约束不被丢弃
             if total_chars > MAX_HISTORY_CHARS:
-                print(f"  ⚠️ 历史过长 ({total_chars} 字符)，截断旧内容")
-                messages = [messages[0]] + messages[-5:]
-                self.emit({"step": "thinking", "message": f"上下文已满（{total_chars * 100 // MAX_HISTORY_CHARS}%），早期对话已被截断。建议开新会话以保证研究质量", "round": round_num})
+                print(f"  ⚠️ 历史过长 ({total_chars} 字符)，压缩旧内容")
+                self.emit({"step": "thinking", "message": "上下文已满，正在压缩早期对话以保留关键信息...", "round": round_num})
+                try:
+                    old_msgs = messages[1:-5]  # 中间要被丢弃的部分
+                    if old_msgs:
+                        raw = "\n".join(str(m) for m in old_msgs)
+                        summary = await self.llm.chat(
+                            system_prompt="你是一个对话压缩助手。将对话历史压缩为简洁摘要，保留关键事实、数据、用户约束条件和研究方向。丢弃搜索细节和冗长报告正文。用中文。",
+                            user_message=f"请压缩以下对话，保留关键信息：\n\n{raw}",
+                        )
+                        if summary:
+                            messages = [messages[0], {"role": "system", "content": f"[早期对话摘要] {summary}"}] + messages[-5:]
+                except Exception:
+                    pass  # 压缩失败 → 降级为原截断方案
+                if total_chars > MAX_HISTORY_CHARS:  # 压缩后仍超限 → 硬截断兜底
+                    messages = [messages[0]] + messages[-5:]
+                self.emit({"step": "thinking", "message": f"早期对话已压缩（上下文已用 {sum(len(str(m)) for m in messages) * 100 // MAX_HISTORY_CHARS}%）。建议开新会话以保证研究质量", "round": round_num})
 
             print(f"\n--- 第 {round_num}/{self.max_rounds} 轮 ---")
             self.emit({"step": "thinking", "message": f"第 {round_num}/{self.max_rounds} 轮决策中...", "round": round_num})
@@ -808,9 +823,23 @@ class Level4Agent:
                 self.emit({"step": "thinking", "message": f"上下文已用 {total_chars * 100 // MAX_HISTORY_CHARS}%，继续追问可能丢失早期内容，建议开新会话"})
 
             if total_chars > MAX_HISTORY_CHARS:
-                print(f"  ⚠️ Supervisor 历史过长 ({total_chars} 字符)，截断旧内容")
-                messages = [messages[0]] + messages[-5:]
-                self.emit({"step": "thinking", "message": f"上下文已满（{total_chars * 100 // MAX_HISTORY_CHARS}%），早期对话已被截断。建议开新会话以保证研究质量", "round": round_num})
+                print(f"  ⚠️ Supervisor 历史过长 ({total_chars} 字符)，压缩旧内容")
+                self.emit({"step": "thinking", "message": "上下文已满，正在压缩早期对话以保留关键信息...", "round": round_num})
+                try:
+                    old_msgs = messages[1:-5]
+                    if old_msgs:
+                        raw = "\n".join(str(m) for m in old_msgs)
+                        summary = await self.llm.chat(
+                            system_prompt="你是一个对话压缩助手。将对话历史压缩为简洁摘要，保留关键事实、数据、用户约束条件和研究方向。丢弃搜索细节和冗长报告正文。用中文。",
+                            user_message=f"请压缩以下对话，保留关键信息：\n\n{raw}",
+                        )
+                        if summary:
+                            messages = [messages[0], {"role": "system", "content": f"[早期对话摘要] {summary}"}] + messages[-5:]
+                except Exception:
+                    pass
+                if total_chars > MAX_HISTORY_CHARS:
+                    messages = [messages[0]] + messages[-5:]
+                self.emit({"step": "thinking", "message": f"早期对话已压缩（上下文已用 {sum(len(str(m)) for m in messages) * 100 // MAX_HISTORY_CHARS}%）。建议开新会话以保证研究质量", "round": round_num})
 
             print(f"\n{'='*40}")
             print(f"  Supervisor 第 {round_num}/{self.max_rounds} 轮决策")

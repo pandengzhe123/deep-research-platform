@@ -44,7 +44,7 @@ SUMMARY_SCHEMA = {
 class SearchTool:
     """封装搜索 + 网页抓取 + LLM 摘要的完整流水线。"""
 
-    def __init__(self):
+    def __init__(self, on_progress=None):
         self.tavily = AsyncTavilyClient(api_key=config.tavily_api_key)
         self.llm = LLMClient()
         self._seen_urls: set[str] = set()  # 跨轮 URL 去重，避免重复摘要
@@ -52,6 +52,7 @@ class SearchTool:
         self._cache_ttl = int(os.getenv("SEARCH_CACHE_TTL", "300"))  # 缓存秒数，默认 5 分钟
         self._cache_hits = 0
         self._cache_misses = 0
+        self.emit = on_progress or (lambda e: None)
 
     async def _safe_tavily_search(self, query: str, max_results: int, include_raw: bool, retries: int = 2):
         """带重试的 Tavily 搜索。"""
@@ -252,7 +253,9 @@ class SearchTool:
             if not isinstance(data, list):
                 data = [data]
         except Exception:
-            # 解析失败回退：用原始 snippet 作为摘要
+            # 解析失败回退：用原始 snippet 作为摘要，通知上层质量下降
+            print(f"  ⚠️ 批量摘要解析失败，降级为原始 snippet——报告质量可能下降")
+            self.emit({"step": "searching", "message": "部分搜索结果未能摘要，报告质量可能下降"})
             data = [{"summary": items[i][1].get("content", ""), "key_facts": []} for i in range(len(items))]
 
         # 组装返回结果

@@ -5,13 +5,9 @@ import com.deepresearch.gateway.model.SessionEntity;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.web.reactive.function.client.WebClient;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -35,12 +31,11 @@ public class SessionService {
     private static final int KEEP_RECENT = 25;          // 压缩后保留最近 N 条，压缩旧的
 
     private final SessionRepository repo;
-    private final String agentUrl;
+    private final WebClient webClient;
 
-    public SessionService(SessionRepository repo,
-                          @Value("${agent.url:http://localhost:8000}") String agentUrl) {
+    public SessionService(SessionRepository repo, WebClient agentWebClient) {
         this.repo = repo;
-        this.agentUrl = agentUrl;
+        this.webClient = agentWebClient;
     }
 
     /**
@@ -242,23 +237,18 @@ public class SessionService {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    /** 调用 Python /compress 端点，将旧消息列表压缩为摘要。 */
+    /** 调用 Python /compress 端点，将旧消息列表压缩为摘要。使用项目共用的 WebClient。 */
     @SuppressWarnings("unchecked")
     private String compressHistory(List<Object> oldMessages) {
         try {
-            HttpClient client = HttpClient.newBuilder()
-                    .connectTimeout(Duration.ofSeconds(5))
-                    .build();
             String body = objectMapper.writeValueAsString(Map.of("messages", oldMessages));
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(agentUrl + "/compress"))
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(body))
-                    .timeout(Duration.ofSeconds(30))
-                    .build();
-            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() == 200) {
-                Map<String, Object> result = objectMapper.readValue(response.body(), Map.class);
+            Map<String, Object> result = webClient.post()
+                    .uri("/compress")
+                    .bodyValue(Map.of("messages", oldMessages))
+                    .retrieve()
+                    .bodyToMono(Map.class)
+                    .block(Duration.ofSeconds(30));
+            if (result != null) {
                 String summary = (String) result.getOrDefault("summary", "");
                 if (!summary.isBlank()) {
                     log.info("历史压缩完成: {} 条 → {} 字摘要", oldMessages.size(), summary.length());
