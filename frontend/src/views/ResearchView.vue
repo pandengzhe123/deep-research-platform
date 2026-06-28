@@ -80,10 +80,11 @@
             <option :value="3">L3 · 多路并行</option>
             <option :value="4">L4 · Supervisor</option>
           </select>
-          <label :class="['tool-toggle', { active: kbEnabled }]">
-            <input type="checkbox" v-model="kbEnabled" />
-            RAG
-          </label>
+          <select v-model="searchMode" class="tool-select">
+            <option value="hybrid">🌐+📁 混合搜索</option>
+            <option value="web_only">🌐 仅网络</option>
+            <option value="rag_only">📁 仅知识库</option>
+          </select>
           <span v-if="isViewingResearch" class="running-timer"><span class="timer-spinner"></span>研究中 {{ timerText }}</span>
         </div>
         <div class="input-row">
@@ -145,7 +146,7 @@ const auth = useAuthStore()
 
 const question = ref('')
 const level = ref(2)
-const kbEnabled = ref(false)
+const searchMode = ref('hybrid')
 const running = ref(false)
 const messages = ref([])
 const sessions = ref([])
@@ -273,9 +274,9 @@ async function start() {
         ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
       },
       body: JSON.stringify({
-        question: q, level: level.value, kb_enabled: kbEnabled.value,
+        question: q, level: level.value, search_mode: searchMode.value,
         context: contextHistory, session_id: currentSessionId.value || undefined,
-        rag_doc_ids: kbEnabled.value ? selectedDocs.value : [],
+        rag_doc_ids: searchMode.value !== 'web_only' ? selectedDocs.value : [],
       }),
     })
 

@@ -45,7 +45,8 @@ class ResearchRequest(BaseModel):
     max_rounds: int | None = None
     language: str = "auto"
     context: str = ""
-    kb_enabled: bool = False
+    kb_enabled: bool | None = False  # 保留旧字段兼容，新前端不传此字段
+    search_mode: str = "hybrid"  # "hybrid" | "web_only" | "rag_only"
     user_id: str = "default"
     rag_doc_ids: list[str] = []  # 用户勾选的文档 ID，空=搜全部
 
@@ -71,6 +72,7 @@ async def run_agent_with_sse(
     kb_enabled: bool,
     user_id: str,
     rag_doc_ids: list[str],
+    search_mode: str,
     cancel: aio.Event,
 ) -> AsyncGenerator[dict, None]:
     """
@@ -105,7 +107,7 @@ async def run_agent_with_sse(
             on_progress({"step": "planned", "message": f"需求明确: {check.get('summary', '')}"})
 
         # ---- 创建 Agent（走 agent.py 的真 Agent） ----
-        _kw = dict(on_progress=on_progress, kb_enabled=kb_enabled, user_id=user_id, rag_doc_ids=rag_doc_ids)
+        _kw = dict(on_progress=on_progress, kb_enabled=kb_enabled, user_id=user_id, rag_doc_ids=rag_doc_ids, search_mode=search_mode)
         if level == 1:
             agent = FastLevel1Agent(**_kw)
         elif level == 3:
@@ -222,7 +224,7 @@ async def research_sync(req: ResearchRequest):
             question=req.question, level=req.level,
             max_rounds=req.max_rounds, language=req.language,
             context=req.context, kb_enabled=req.kb_enabled, user_id=req.user_id,
-            rag_doc_ids=req.rag_doc_ids, cancel=cancel,
+            rag_doc_ids=req.rag_doc_ids, search_mode=req.search_mode, cancel=cancel,
         ):
             if event["event"] == "done":
                 result.append(json.loads(event["data"]))
@@ -243,7 +245,7 @@ async def research_stream(req: ResearchRequest):
         question=req.question, level=req.level,
         max_rounds=req.max_rounds, language=req.language,
         context=req.context, kb_enabled=req.kb_enabled, user_id=req.user_id,
-        rag_doc_ids=req.rag_doc_ids, cancel=cancel,
+        rag_doc_ids=req.rag_doc_ids, search_mode=req.search_mode, cancel=cancel,
     ))
 
 

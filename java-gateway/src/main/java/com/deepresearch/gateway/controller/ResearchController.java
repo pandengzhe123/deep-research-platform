@@ -91,6 +91,7 @@ public class ResearchController {
             ResearchRequest reqWithUser = new ResearchRequest(
                     req.question(), req.level(), req.maxRounds(),
                     req.language(), fullContext, req.kbEnabled(),
+                    req.searchMode(),
                     uid, session.getId(), req.ragDocIds()
             );
 
@@ -145,6 +146,7 @@ public class ResearchController {
         ResearchRequest reqWithUser = new ResearchRequest(
                 req.question(), req.level(), req.maxRounds(),
                 req.language(), fullContext, req.kbEnabled(),
+                req.searchMode(),
                 uid, sessionId, req.ragDocIds()
         );
 
