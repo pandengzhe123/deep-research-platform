@@ -1,0 +1,18 @@
+{
+  "simple": {
+    "total": 5,
+    "hits": 4
+  },
+  "multi_doc": {
+    "total": 4,
+    "hits": 4
+  },
+  "precision": {
+    "total": 3,
+    "hits": 3
+  },
+  "colloquial": {
+    "total": 4,
+    "hits": 2
+  }
+}

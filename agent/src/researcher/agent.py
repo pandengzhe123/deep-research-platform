@@ -275,7 +275,7 @@ class FastLevel1Agent:
 
     async def _kb_search(self, query: str) -> str:
         """异步知识库检索，在线程池中执行避免阻塞事件循环。"""
-        return await asyncio.to_thread(self.kb.search, query, user_id=self.user_id, doc_ids=self.rag_doc_ids or None)
+        return await asyncio.to_thread(lambda: self.kb.search(query, user_id=self.user_id, doc_ids=self.rag_doc_ids or None, mode="v2"))
 
     @staticmethod
     def _today() -> str:
@@ -533,7 +533,7 @@ class Level2Agent:
                             print(f"  知识库检索: {query}")
                             self.emit({"step": "kb_searching", "message": f"知识库检索: {query}", "round": round_num})
                             if self.search_mode in ("hybrid", "rag_only"):
-                                result = await asyncio.to_thread(self.kb.search, query, user_id=self.user_id, doc_ids=self.rag_doc_ids or None)
+                                result = await asyncio.to_thread(lambda: self.kb.search(query, user_id=self.user_id, doc_ids=self.rag_doc_ids or None, mode="v2"))
                             else:
                                 result = "知识库未启用。"
                             if self.search_mode == "rag_only" and "未找到相关信息" in result:
@@ -584,14 +584,6 @@ class Level2Agent:
             print("  ⚠️ 无任何搜索结果，返回兜底提示")
             self.emit({"step": "reporting", "message": "未获取到有效搜索结果"})
             return f"# 未找到相关信息\n\n关于「{question}」，未能在网络和知识库中找到有效信息。\n\n可能的原因：\n\n1. 搜索 API 暂时不可用\n2. 该问题目前没有公开资料\n3. 搜索关键词与问题不匹配\n\n建议：稍后重试，或尝试更具体的关键词。"
-
-        # rag_only 模式：所有 KB 结果都是"未找到" → 拦截，不许编造
-        if self.search_mode == "rag_only":
-            raw_text = "\n\n---\n\n".join(all_search_results)
-            if "知识库检索结果" not in raw_text or "来源" not in raw_text:
-                print("  ⚠️ rag_only 模式，知识库无有效内容，返回兜底提示")
-                self.emit({"step": "reporting", "message": "知识库中未找到相关信息"})
-                return f"# 未找到相关信息\n\n知识库中未找到与「{question}」相关的文档内容。\n\n建议：\n1. 上传相关文档到知识库\n2. 切换到混合搜索模式同时检索网络和知识库\n3. 检查文档是否已正确上传"
 
         # 压缩研究结果
         # 压缩前再做一次内存保护

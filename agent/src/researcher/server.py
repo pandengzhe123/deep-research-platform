@@ -321,7 +321,7 @@ async def kb_upload(file: UploadFile, user_id: str = "default"):
             tmp_path = tmp.name
 
         # 入库（用原始文件名）— ingest 含 embedding 推理，扔进线程池避免阻塞
-        result = await aio.to_thread(kb.ingest, tmp_path, user_id=user_id, doc_id=file.filename)
+        result = await aio.to_thread(kb.ingest_v2, tmp_path, user_id=user_id, doc_id=file.filename)
         os.unlink(tmp_path)
 
         if result.get("status") == "error":
@@ -331,6 +331,7 @@ async def kb_upload(file: UploadFile, user_id: str = "default"):
     except HTTPException:
         raise
     except Exception as e:
+        log.exception("kb_upload 失败")
         raise HTTPException(status_code=500, detail=str(e))
 
 

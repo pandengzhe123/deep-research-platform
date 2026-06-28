@@ -1,0 +1,30 @@
+[
+  {
+    "question": "Python 是谁创建的",
+    "expected_chunks": ["Guido van Rossum"]
+  },
+  {
+    "question": "Python 什么时候发布的",
+    "expected_chunks": ["1991"]
+  },
+  {
+    "question": "GET 方法的作用是什么",
+    "expected_chunks": ["retrieving resources", "without side effects"]
+  },
+  {
+    "question": "RFC 7231 定义了哪些HTTP方法",
+    "expected_chunks": ["GET", "POST", "PUT", "DELETE"]
+  },
+  {
+    "question": "Docker 容器有什么特点",
+    "expected_chunks": ["lightweight", "isolated"]
+  },
+  {
+    "question": "Python 支持哪些编程范式",
+    "expected_chunks": ["procedural", "object-oriented", "functional"]
+  },
+  {
+    "question": "Docker Compose 的作用是什么",
+    "expected_chunks": ["multi-container", "YAML"]
+  }
+]

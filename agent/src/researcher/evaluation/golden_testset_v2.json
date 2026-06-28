@@ -1,0 +1,142 @@
+[
+  {
+    "type": "simple",
+    "question": "Python 是谁创建的",
+    "expected_docs": ["doc1.txt"],
+    "expected_chunks": ["Guido van Rossum"],
+    "ground_truth": "Guido van Rossum"
+  },
+  {
+    "type": "simple",
+    "question": "Python 什么时候发布的",
+    "expected_docs": ["doc1.txt"],
+    "expected_chunks": ["1991"],
+    "ground_truth": "1991年"
+  },
+  {
+    "type": "simple",
+    "question": "Linux 内核是谁创建的",
+    "expected_docs": ["doc4.txt"],
+    "expected_chunks": ["Linus Torvalds"],
+    "ground_truth": "Linus Torvalds"
+  },
+  {
+    "type": "simple",
+    "question": "Docker 容器有什么特点",
+    "expected_docs": ["doc3.txt"],
+    "expected_chunks": ["lightweight", "isolated"],
+    "ground_truth": "轻量级、隔离的环境"
+  },
+  {
+    "type": "simple",
+    "question": "Git 是什么时候创建的",
+    "expected_docs": ["doc5.txt"],
+    "expected_chunks": ["2005"],
+    "ground_truth": "2005年"
+  },
+  {
+    "type": "multi_doc",
+    "question": "Linus Torvalds 创建了哪些项目",
+    "expected_docs": ["doc4.txt", "doc5.txt"],
+    "expected_chunks": ["Linux", "Git"],
+    "ground_truth": "Linux 内核和 Git 版本控制系统"
+  },
+  {
+    "type": "multi_doc",
+    "question": "1991年诞生了哪些技术",
+    "expected_docs": ["doc1.txt", "doc4.txt"],
+    "expected_chunks": ["Python", "Linux"],
+    "ground_truth": "Python 和 Linux"
+  },
+  {
+    "type": "multi_doc",
+    "question": "Python 和 Docker 有什么共同特点",
+    "expected_docs": ["doc1.txt", "doc3.txt"],
+    "expected_chunks": ["application", "development"],
+    "ground_truth": "都用于应用开发和部署"
+  },
+  {
+    "type": "multi_doc",
+    "question": "Git 和 Linux 有什么关系",
+    "expected_docs": ["doc4.txt", "doc5.txt"],
+    "expected_chunks": ["Linus Torvalds"],
+    "ground_truth": "都是 Linus Torvalds 创建的"
+  },
+  {
+    "type": "precision",
+    "question": "RFC 7231 定义的状态码有哪些",
+    "expected_docs": ["doc2.txt"],
+    "expected_chunks": ["200", "404", "500"],
+    "ground_truth": "200 OK, 404 Not Found, 500 Internal Server Error"
+  },
+  {
+    "type": "precision",
+    "question": "RFC 7231 中 GET 方法的特点",
+    "expected_docs": ["doc2.txt"],
+    "expected_chunks": ["retrieving resources", "without side effects"],
+    "ground_truth": "用于获取资源，无副作用"
+  },
+  {
+    "type": "precision",
+    "question": "Docker Compose 的配置文件格式",
+    "expected_docs": ["doc3.txt"],
+    "expected_chunks": ["YAML"],
+    "ground_truth": "YAML 格式"
+  },
+  {
+    "type": "no_answer",
+    "question": "Java 是什么时候创建的",
+    "expected_docs": [],
+    "expected_chunks": ["未找到"],
+    "ground_truth": null
+  },
+  {
+    "type": "no_answer",
+    "question": "Kubernetes 的架构是怎样的",
+    "expected_docs": ["doc3.txt"],
+    "expected_chunks": [],
+    "ground_truth": null
+  },
+  {
+    "type": "no_answer",
+    "question": "比特币的创始人是",
+    "expected_docs": [],
+    "expected_chunks": ["未找到"],
+    "ground_truth": null
+  },
+  {
+    "type": "no_answer",
+    "question": "JavaScript 的运行环境",
+    "expected_docs": [],
+    "expected_chunks": ["未找到"],
+    "ground_truth": null
+  },
+  {
+    "type": "colloquial",
+    "question": "怎么搭建一个容器应用",
+    "expected_docs": ["doc3.txt"],
+    "expected_chunks": ["Docker", "container"],
+    "ground_truth": "使用 Docker 通过 Dockerfile 构建镜像并运行容器"
+  },
+  {
+    "type": "colloquial",
+    "question": "怎么管理代码版本",
+    "expected_docs": ["doc5.txt"],
+    "expected_chunks": ["Git", "commit", "branch"],
+    "ground_truth": "使用 Git 通过 commit、branch、merge 管理代码版本"
+  },
+  {
+    "type": "colloquial",
+    "question": "Python 都能用来干啥",
+    "expected_docs": ["doc1.txt"],
+    "expected_chunks": ["artificial intelligence", "machine learning", "data science", "web"],
+    "ground_truth": "AI、机器学习、数据科学、Web 开发、自动化"
+  },
+  {
+    "type": "colloquial",
+    "question": "怎么让多个容器一起跑起来",
+    "expected_docs": ["doc3.txt"],
+    "expected_chunks": ["Docker Compose", "YAML"],
+    "ground_truth": "使用 Docker Compose 在 YAML 文件中定义多容器应用"
+  }
+]

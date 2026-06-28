@@ -22,7 +22,13 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function kbUserId() {
-    return username.value || 'default'
+    // 从 JWT payload 解析 subject（数字 ID），和 Java extractUserId 保持一致
+    try {
+      const payload = JSON.parse(atob(token.value.split('.')[1]))
+      return payload.sub || username.value || 'default'
+    } catch {
+      return username.value || 'default'
+    }
   }
 
   return { token, username, isLoggedIn, login, logout, kbUserId }
