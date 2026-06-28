@@ -120,11 +120,11 @@ public class SessionService {
         });
     }
 
-    /** 定时清理：最后活动超过 30 分钟仍为 running 的会话标记为 error。 */
-    @org.springframework.scheduling.annotation.Scheduled(fixedRate = 600000)
+    /** 定时清理：最后活动超过 10 分钟仍为 running 的会话标记为 error。AsyncOpenAI 后 L3/4 通常 5 分钟内完成。 */
+    @org.springframework.scheduling.annotation.Scheduled(fixedRate = 300000)
     public void cleanupStaleSessions() {
         List<SessionEntity> all = repo.findAll();
-        LocalDateTime cutoff = LocalDateTime.now().minusMinutes(30);
+        LocalDateTime cutoff = LocalDateTime.now().minusMinutes(10);
         for (SessionEntity s : all) {
             if ("running".equals(s.getStatus()) && s.getUpdatedAt() != null && s.getUpdatedAt().isBefore(cutoff)) {
                 s.setStatus("error");

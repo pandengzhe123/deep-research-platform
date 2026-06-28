@@ -14,7 +14,7 @@ RUN pip install --default-timeout=100 --no-cache-dir -e . && \
     pip install --default-timeout=100 --no-cache-dir \
         fastapi uvicorn sse-starlette chromadb sentence-transformers openai \
         tavily-python python-dotenv httpx beautifulsoup4 markdownify pydantic \
-        ddgs scikit-learn pymupdf python-multipart
+        ddgs scikit-learn pymupdf python-multipart python-docx
 
 # 预下载 Embedding 模型，打进镜像（~120MB），运行时无需联网
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')"

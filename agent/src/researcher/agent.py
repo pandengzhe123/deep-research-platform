@@ -546,13 +546,18 @@ class Level2Agent:
 
         print(f"\n[压缩] 整理搜索结果...")
         self.emit({"step": "reporting", "message": "正在压缩整理搜索结果..."})
-        compressed = await self.llm.chat(
-            system_prompt=COMPRESS_PROMPT.format(date=self._today()),
-            user_message=COMPRESS_USER_MESSAGE.format(
-                question=question,
-                raw_results=raw_text,
-            ),
-        )
+        try:
+            compressed = await self.llm.chat(
+                system_prompt=COMPRESS_PROMPT.format(date=self._today()),
+                user_message=COMPRESS_USER_MESSAGE.format(
+                    question=question,
+                    raw_results=raw_text,
+                ),
+            )
+        except Exception as e:
+            print(f"  ⚠️ 压缩失败，跳过压缩直接使用原始结果: {e}")
+            self.emit({"step": "reporting", "message": "搜索结果压缩失败，报告质量可能下降"})
+            compressed = raw_text  # 降级：用未压缩的原始搜索结果
 
         # 生成最终报告
         print(f"\n[最终] 生成报告...")
@@ -688,14 +693,19 @@ class Level3Agent:
             f"## 子课题{i+1}: {topic}\n\n{downgrade(report)}"
             for i, (_, topic, report) in enumerate(valid)
         )
-        final_report = await self.llm.chat(
-            system_prompt="你是专业的深度研究报告汇总专家。",
-            user_message=MERGE_PROMPT.format(
-                question=question,
-                reports=merged,
-            ),
-        )
-        return final_report
+        try:
+            final_report = await self.llm.chat(
+                system_prompt="你是专业的深度研究报告汇总专家。",
+                user_message=MERGE_PROMPT.format(
+                    question=question,
+                    reports=merged,
+                ),
+            )
+            return final_report
+        except Exception as e:
+            print(f"  汇总超时，回退到直接拼接: {e}")
+            self.emit({"step": "reporting", "message": "LLM 汇总失败，回退到直接拼接子报告"})
+            return "# " + question + "\n\n" + merged
 
 
 # ============================================================

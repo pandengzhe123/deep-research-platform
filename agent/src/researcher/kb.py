@@ -59,6 +59,11 @@ def read_file(file_path: Path) -> str:
         doc = fitz.open(str(file_path))
         return "\n\n".join(page.get_text() for page in doc)
 
+    elif suffix == ".docx":
+        from docx import Document
+        doc = Document(str(file_path))
+        return "\n\n".join(para.text for para in doc.paragraphs)
+
     elif suffix in (".txt", ".md"):
         return file_path.read_text(encoding="utf-8", errors="ignore")
 

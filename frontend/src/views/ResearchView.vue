@@ -105,7 +105,7 @@
       <div class="kb-header">知识库</div>
       <div class="kb-body">
         <label class="kb-upload-btn">
-          <input type="file" ref="fileInput" accept=".txt,.md,.pdf" @change="uploadFile" hidden />
+          <input type="file" ref="fileInput" accept=".txt,.md,.pdf,.docx" @change="uploadFile" hidden />
           ＋ 上传文件
         </label>
         <div v-if="kbMsg" class="kb-msg">{{ kbMsg }}</div>

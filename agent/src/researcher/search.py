@@ -72,6 +72,7 @@ class SearchTool:
                 lambda: list(DDGS().text(query, max_results=max_results))
             )
         except Exception:
+            print(f"  ⚠️ DuckDuckGo 搜索失败: {query[:50]}...")
             return {"results": [], "query": query}
 
         tavily_format = []

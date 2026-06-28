@@ -308,7 +308,7 @@ from pathlib import Path
 async def kb_upload(file: UploadFile, user_id: str = "default"):
     """上传文档到用户的知识库。支持 PDF/TXT/MD。"""
     suffix = Path(file.filename or "unknown").suffix.lower()
-    if suffix not in (".pdf", ".txt", ".md"):
+    if suffix not in (".pdf", ".txt", ".md", ".docx"):
         raise HTTPException(status_code=400, detail=f"不支持的文件类型: {suffix}")
 
     try:
