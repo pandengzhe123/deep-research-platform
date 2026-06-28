@@ -164,7 +164,7 @@ class KnowledgeBase:
     def _get_v2_docs(self, user_id: str) -> list[dict]:
         """从 v2 collection 获取所有文档。"""
         try:
-            coll = chromadb.PersistentClient(path=self._persist_dir).get_or_create_collection(
+            coll = self._client.get_or_create_collection(
                 self._v2_collection_name(user_id)
             )
             raw = coll.get()
@@ -180,12 +180,12 @@ class KnowledgeBase:
         embedder = self._get_v2_embedder()
         query_emb = embedder.embed_one(query)
 
-        where = None
+        where = {"user_id": user_id} if doc_ids else None
         if doc_ids:
-            where = {"doc_id": {"$in": doc_ids}}
+            where["doc_id"] = {"$in": doc_ids}
 
         try:
-            coll = chromadb.PersistentClient(path=self._persist_dir).get_or_create_collection(
+            coll = self._client.get_or_create_collection(
                 self._v2_collection_name(user_id)
             )
             result = coll.query(query_embeddings=[query_emb], n_results=k, where=where)
@@ -200,7 +200,6 @@ class KnowledgeBase:
         ):
             docs.append({"content": doc, "meta": meta or {}, "distance": dist})
         return docs
-        return []
 
     def _fmt(self, docs: list[dict], label: str = "") -> str:
         """格式化检索结果。"""
@@ -282,7 +281,7 @@ class KnowledgeBase:
 
         coll_name = self._v2_collection_name(user_id)
         try:
-            client = chromadb.PersistentClient(path=self._persist_dir)
+            client = self._client
             coll = client.get_or_create_collection(coll_name)
             try:
                 old = coll.get(where={"doc_id": doc_id})
@@ -375,7 +374,12 @@ class KnowledgeBase:
         except Exception:
             variants = [query]
 
-        # 2. 每个变体向量搜索，合并去重
+        # 2. 每个变体：向量 + BM25 双路，合并去重
+        from .retrievers.bm25_retriever import build_bm25_retriever
+        all_v2_docs = self._get_v2_docs(user_id)
+        bm_docs = [{"page_content": d["content"], "metadata": d["meta"]} for d in all_v2_docs]
+        bm25 = build_bm25_retriever(bm_docs, k=10)
+
         all_docs = []
         seen = set()
         for v in variants:
@@ -384,6 +388,12 @@ class KnowledgeBase:
                 if key not in seen:
                     seen.add(key)
                     all_docs.append(d)
+            for d in bm25.invoke(v):
+                c = d["page_content"]
+                key = c[:200]
+                if key not in seen:
+                    seen.add(key)
+                    all_docs.append({"content": c, "meta": d.get("metadata", {})})
 
         if not all_docs:
             return "知识库中未找到相关信息。"
@@ -458,7 +468,7 @@ class KnowledgeBase:
         seen, docs = set(), []
         for coll_name in [self._collection_name(user_id), self._v2_collection_name(user_id)]:
             try:
-                client = chromadb.PersistentClient(path=self._persist_dir)
+                client = self._client
                 results = client.get_or_create_collection(coll_name).get(where={"user_id": user_id})
                 for m in results.get("metadatas", []):
                     did = m.get("doc_id", "")
@@ -472,7 +482,7 @@ class KnowledgeBase:
     def delete_doc(self, doc_id: str, user_id: str = "default") -> dict:
         """删除文档（旧版 + v2 collection 都删）。"""
         total = 0
-        client = chromadb.PersistentClient(path=self._persist_dir)
+        client = self._client
         for coll_name in [self._collection_name(user_id), self._v2_collection_name(user_id)]:
             try:
                 coll = client.get_or_create_collection(coll_name)

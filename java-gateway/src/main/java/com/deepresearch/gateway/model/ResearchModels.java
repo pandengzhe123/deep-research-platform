@@ -58,19 +58,22 @@ public class ResearchModels {
     // ========== 会话 ==========
 
     /**
-     * 网关内部使用的研究会话。
+     * API 响应用研究会话（不可变，仅展示）。
+     * 数据来源是 {@link SessionEntity.toPojo()}。
      */
     public static class ResearchSession {
         private final String id;
         private final String userId;
         private final String question;
-        private String report = "";
-        private String status = "running"; // running | done | error
+        private final String report;
+        private final String status;
 
-        public ResearchSession(String id, String userId, String question) {
+        public ResearchSession(String id, String userId, String question, String report, String status) {
             this.id = id;
             this.userId = userId;
             this.question = question;
+            this.report = report != null ? report : "";
+            this.status = status != null ? status : "running";
         }
 
         public String getId() { return id; }
@@ -78,8 +81,5 @@ public class ResearchModels {
         public String getQuestion() { return question; }
         public String getReport() { return report; }
         public String getStatus() { return status; }
-
-        public void setReport(String report) { this.report = report; }
-        public void setStatus(String status) { this.status = status; }
     }
 }

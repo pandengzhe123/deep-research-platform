@@ -27,7 +27,8 @@ public class SecurityConfig {
     public SecurityWebFilterChain filterChain(ServerHttpSecurity http) {
         return http
                 .authorizeExchange(ex -> ex
-                        .anyExchange().permitAll()  // 全部放行，JWT 过滤器解析 user_id。强制认证等前端适配完再加
+                        .pathMatchers("/api/auth/**", "/api/health").permitAll()
+                        .anyExchange().authenticated()
                 )
                 .csrf(csrf -> csrf.disable())
                 .httpBasic(basic -> basic.disable())
@@ -36,7 +37,7 @@ public class SecurityConfig {
     }
 
     /**
-     * JWT 认证过滤器（已实现，暂不生效——等所有接口 ready 后把 authorizeExchange 改为 authenticated）。
+     * JWT 认证过滤器——从 Authorization 头解析 userId 注入安全上下文。
      */
     @Bean
     WebFilter jwtFilter() {

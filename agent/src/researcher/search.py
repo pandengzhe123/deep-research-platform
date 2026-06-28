@@ -12,35 +12,6 @@ from tavily import AsyncTavilyClient
 from .config import config
 from .llm import LLMClient
 
-SUMMARY_PROMPT = """你是一个网页内容摘要助手。请对以下网页内容做摘要，保留关键信息。
-
-要求：
-- 保留核心事实、数据、时间、人名
-- 保留原文中的关键引述
-- 长度控制在原文的 25-30%
-- 用中文写摘要
-
-网页内容：
-{content}
-
-请返回 JSON：
-{{"summary": "摘要内容", "key_facts": ["事实1", "事实2", "事实3"]}}
-"""
-
-SUMMARY_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "summary": {"type": "string"},
-        "key_facts": {
-            "type": "array",
-            "items": {"type": "string"},
-        },
-    },
-    "required": ["summary", "key_facts"],
-    "additionalProperties": False,
-}
-
-
 class SearchTool:
     """封装搜索 + 网页抓取 + LLM 摘要的完整流水线。"""
 
@@ -53,12 +24,21 @@ class SearchTool:
         self._cache_hits = 0
         self._cache_misses = 0
         self.emit = on_progress or (lambda e: None)
+        from ddgs import DDGS
+        self._ddgs = DDGS()
+        self._http = httpx.AsyncClient(timeout=15, headers={"User-Agent": "Mozilla/5.0 (compatible; DeepResearch/1.0)"})
 
     async def _safe_tavily_search(self, query: str, max_results: int, include_raw: bool, retries: int = 2):
-        """带重试的 Tavily 搜索。"""
+        """带重试的 Tavily 搜索。4xx 不重试（Key 错/权限等永久性错误）。"""
         for attempt in range(retries):
             try:
                 return await self.tavily.search(query, max_results=max_results, include_raw_content=include_raw)
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code < 500:  # 4xx → 永久错误，不重试
+                    print(f"  ⚠️ Tavily API 错误 {e.response.status_code}，不重试")
+                    return {"results": [], "query": query}
+                if attempt < retries - 1:
+                    await asyncio.sleep(2)
             except Exception:
                 if attempt < retries - 1:
                     await asyncio.sleep(2)
@@ -66,10 +46,9 @@ class SearchTool:
 
     async def _ddg_search(self, query: str, max_results: int = 5) -> dict:
         """DuckDuckGo 搜索（免费、不需要 API Key），返回 Tavily 兼容格式。"""
-        from ddgs import DDGS
         try:
             results = await asyncio.to_thread(
-                lambda: list(DDGS().text(query, max_results=max_results))
+                lambda: list(self._ddgs.text(query, max_results=max_results))
             )
         except Exception:
             print(f"  ⚠️ DuckDuckGo 搜索失败: {query[:50]}...")
@@ -274,15 +253,10 @@ class SearchTool:
     async def _fetch_url(self, url: str) -> str:
         """抓取网页 HTML 并转成 markdown 文本。"""
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.get(
-                    url,
-                    headers={"User-Agent": "Mozilla/5.0 (compatible; DeepResearch/1.0)"},
-                )
-                soup = BeautifulSoup(resp.text, "html.parser")
-                # 去掉 script/style
-                for tag in soup(["script", "style", "nav", "footer"]):
-                    tag.decompose()
-                return md(str(soup.body or soup))
+            resp = await self._http.get(url)
+            soup = BeautifulSoup(resp.text, "html.parser")
+            for tag in soup(["script", "style", "nav", "footer"]):
+                tag.decompose()
+            return md(str(soup.body or soup))
         except Exception:
             return ""

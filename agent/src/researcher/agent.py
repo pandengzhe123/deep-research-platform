@@ -15,6 +15,10 @@ from .config import config
 from .llm import LLMClient
 from .search import SearchTool
 
+
+def _today_str() -> str:
+    return datetime.now().strftime("%Y年%m月%d日")
+
 # ============================================================
 # Prompt 模板
 # ============================================================
@@ -234,9 +238,9 @@ class FastLevel1Agent:
     """极速 Level 1: 跳过 LLM 规划 + 跳过 LLM 摘要 → 全程只 1 次 LLM 调用。"""
 
     def __init__(self, on_progress=None, kb_enabled=False, user_id: str = "default", rag_doc_ids: list[str] = None):
+        self.emit = on_progress or (lambda e: None)
         self.llm = LLMClient()
         self.search = SearchTool(on_progress=self.emit)
-        self.emit = on_progress or (lambda e: None)
         self.kb_enabled = kb_enabled
         self.user_id = user_id
         self.rag_doc_ids = rag_doc_ids or []
@@ -277,9 +281,6 @@ class FastLevel1Agent:
         """异步知识库检索，在线程池中执行避免阻塞事件循环。"""
         return await asyncio.to_thread(lambda: self.kb.search(query, user_id=self.user_id, doc_ids=self.rag_doc_ids or None, mode="v2"))
 
-    @staticmethod
-    def _today() -> str:
-        return datetime.now().strftime("%Y年%m月%d日")
 
 
 class Level1Agent:
@@ -298,7 +299,7 @@ class Level1Agent:
         print("\n[1/3] 分析问题，规划搜索...")
         plan = await self.llm.structured_output(
             system_prompt=PLAN_PROMPT,
-            user_message=f"用户问题：{question}\n\n今天日期：{self._today()}",
+            user_message=f"用户问题：{question}\n\n今天日期：{_today_str()}",
             schema=PLAN_SCHEMA,
         )
         queries = plan.get("search_queries", [question])
@@ -321,9 +322,6 @@ class Level1Agent:
         )
         return report
 
-    @staticmethod
-    def _today() -> str:
-        return datetime.now().strftime("%Y年%m月%d日")
 
 
 # ============================================================
@@ -354,6 +352,49 @@ AGENT_SYSTEM = """你是一个研究助手。你可以使用以下工具：
 - 已找到 3+ 个相关来源
 - 已达搜索轮次上限
 """
+
+
+def _assistant_msg(msg):
+    """组装 assistant 消息（含 tool_calls）。"""
+    return {
+        "role": "assistant",
+        "content": msg.content or "",
+        "tool_calls": [
+            {"id": tc.id, "type": "function",
+             "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+            for tc in msg.tool_calls
+        ],
+    }
+
+
+async def _truncate_context(messages: list[dict], total_chars: int, max_chars: int,
+                             llm, emit, round_num: int, context_warned: bool) -> tuple[list[dict], bool]:
+    """上下文超限保护：80% 预警 + LLM 压缩 + 硬截断。返回 (新 messages, 新 context_warned)。"""
+    if not context_warned and total_chars > max_chars * 0.8:
+        context_warned = True
+        emit({"step": "thinking", "message": f"上下文已用 {total_chars * 100 // max_chars}%，继续追问可能丢失早期内容，建议开新会话"})
+
+    if total_chars > max_chars:
+        print(f"  ⚠️ 历史过长 ({total_chars} 字符)，压缩旧内容")
+        emit({"step": "thinking", "message": "上下文已满，正在压缩早期对话以保留关键信息...", "round": round_num})
+        try:
+            old_msgs = messages[1:-5]
+            if old_msgs:
+                raw = "\n".join(str(m) for m in old_msgs)
+                summary = await llm.chat(
+                    system_prompt="你是一个对话压缩助手。将对话历史压缩为简洁摘要，保留关键事实、数据、用户约束条件和研究方向。丢弃搜索细节和冗长报告正文。用中文。",
+                    user_message=f"请压缩以下对话，保留关键信息：\n\n{raw}",
+                )
+                if summary:
+                    messages = [messages[0], {"role": "system", "content": f"[早期对话摘要] {summary}"}] + messages[-5:]
+        except Exception:
+            pass
+        if sum(len(str(m)) for m in messages) > max_chars:
+            messages = [messages[0]] + messages[-5:]
+        emit({"step": "thinking", "message": f"早期对话已压缩（上下文已用 {sum(len(str(m)) for m in messages) * 100 // max_chars}%）。建议开新会话以保证研究质量", "round": round_num})
+
+    return messages, context_warned
+
 
 RAG_ONLY_SYSTEM = """你是一个研究助手。当前模式：**仅知识库检索**——你只能使用 search_kb 工具搜索本地文档，不能使用 search 工具联网。
 
@@ -417,7 +458,7 @@ class Level2Agent:
         print(f"{'='*60}")
 
         messages: list[dict] = [
-            {"role": "user", "content": f"请研究以下问题，并在信息充分时给出报告：\n\n{question}\n\n当前日期：{self._today()}"}
+            {"role": "user", "content": f"请研究以下问题，并在信息充分时给出报告：\n\n{question}\n\n当前日期：{_today_str()}"}
         ]
 
         all_search_results: list[str] = []
@@ -436,31 +477,9 @@ class Level2Agent:
         for round_num in range(1, self.max_rounds + 1):
             # Token 超限保护
             total_chars = sum(len(str(m)) for m in messages)
-
-            # 80% 预警：上下文快满了，建议开新会话
-            if not context_warned and total_chars > MAX_HISTORY_CHARS * 0.8:
-                context_warned = True
-                self.emit({"step": "thinking", "message": f"上下文已用 {total_chars * 100 // MAX_HISTORY_CHARS}%，继续追问可能丢失早期内容，建议开新会话"})
-
-            # 100% 截断：先压缩旧消息再截断，保留关键约束不被丢弃
-            if total_chars > MAX_HISTORY_CHARS:
-                print(f"  ⚠️ 历史过长 ({total_chars} 字符)，压缩旧内容")
-                self.emit({"step": "thinking", "message": "上下文已满，正在压缩早期对话以保留关键信息...", "round": round_num})
-                try:
-                    old_msgs = messages[1:-5]  # 中间要被丢弃的部分
-                    if old_msgs:
-                        raw = "\n".join(str(m) for m in old_msgs)
-                        summary = await self.llm.chat(
-                            system_prompt="你是一个对话压缩助手。将对话历史压缩为简洁摘要，保留关键事实、数据、用户约束条件和研究方向。丢弃搜索细节和冗长报告正文。用中文。",
-                            user_message=f"请压缩以下对话，保留关键信息：\n\n{raw}",
-                        )
-                        if summary:
-                            messages = [messages[0], {"role": "system", "content": f"[早期对话摘要] {summary}"}] + messages[-5:]
-                except Exception:
-                    pass  # 压缩失败 → 降级为原截断方案
-                if total_chars > MAX_HISTORY_CHARS:  # 压缩后仍超限 → 硬截断兜底
-                    messages = [messages[0]] + messages[-5:]
-                self.emit({"step": "thinking", "message": f"早期对话已压缩（上下文已用 {sum(len(str(m)) for m in messages) * 100 // MAX_HISTORY_CHARS}%）。建议开新会话以保证研究质量", "round": round_num})
+            messages, context_warned = await _truncate_context(
+                messages, total_chars, MAX_HISTORY_CHARS, self.llm, self.emit, round_num, context_warned
+            )
 
             print(f"\n--- 第 {round_num}/{self.max_rounds} 轮 ---")
             self.emit({"step": "thinking", "message": f"第 {round_num}/{self.max_rounds} 轮决策中...", "round": round_num})
@@ -478,18 +497,7 @@ class Level2Agent:
                     messages.append({"role": "assistant", "content": msg.content or "信息已足够，现在可以写报告。"})
                     break
 
-                messages.append({
-                    "role": "assistant",
-                    "content": msg.content or "",
-                    "tool_calls": [
-                        {
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                        }
-                        for tc in msg.tool_calls
-                    ],
-                })
+                messages.append(_assistant_msg(msg))
 
                 round_results: list[str] = []
                 for tc in msg.tool_calls:
@@ -595,7 +603,7 @@ class Level2Agent:
         self.emit({"step": "reporting", "message": "正在压缩整理搜索结果..."})
         try:
             compressed = await self.llm.chat(
-                system_prompt=COMPRESS_PROMPT.format(date=self._today()),
+                system_prompt=COMPRESS_PROMPT.format(date=_today_str()),
                 user_message=COMPRESS_USER_MESSAGE.format(
                     question=question,
                     raw_results=raw_text,
@@ -618,9 +626,6 @@ class Level2Agent:
         )
         return report
 
-    @staticmethod
-    def _today() -> str:
-        return datetime.now().strftime("%Y年%m月%d日")
 
 
 # ============================================================
@@ -713,18 +718,23 @@ class Level3Agent:
         for i, t in enumerate(sub_topics):
             self.emit({"step": "searching", "message": f"研究员 #{i+1}/{len(sub_topics)} 启动: {t[:50]}..."})
 
-        async def safe_run(topic, idx):
+        async def safe_run(topic):
             try:
                 agent = Level2Agent(on_progress=self.emit, kb_enabled=self.kb_enabled, user_id=self.user_id, llm=self.llm, rag_doc_ids=self.rag_doc_ids, search_mode=self.search_mode)
-                return (idx, topic, await agent.run(topic))
+                return (await agent.run(topic), None)
             except Exception as e:
-                print(f"    子课题 {idx} 失败 ({topic[:40]}...): {e}")
-                self.emit({"step": "searching", "message": f"子课题 {idx+1}「{topic[:30]}...」失败，跳过"})
-                return (idx, topic, None)  # None 报告不进入汇总，避免污染
+                print(f"    研究员失败: {topic[:40]}... error={e}")
+                self.emit({"step": "searching", "message": f"子课题「{topic[:30]}...」失败，跳过"})
+                return (None, str(e))
 
-        results = await asyncio.gather(*[safe_run(t, i) for i, t in enumerate(sub_topics)])
-        # 过滤失败的子课题，保持 (idx, topic, report) 对齐
-        valid = [(idx, topic, report) for idx, topic, report in results if report is not None]
+        raw = await asyncio.gather(*[safe_run(t) for t in sub_topics])
+        # 过滤失败项，按原始顺序重新编号
+        valid = []
+        for i, (report, error) in enumerate(raw):
+            if report is not None:
+                valid.append((i, sub_topics[i], report))
+            else:
+                self.emit({"step": "searching", "message": f"子课题 {i+1}「{sub_topics[i][:30]}...」失败: {error}"})
         failed = len(sub_topics) - len(valid)
         print(f"   全部完成，共 {len(valid)} 份子报告" + (f"，{failed} 份失败" if failed else ""))
 
@@ -882,23 +892,9 @@ class Level4Agent:
                 self.emit({"step": "thinking", "message": f"上下文已用 {total_chars * 100 // MAX_HISTORY_CHARS}%，继续追问可能丢失早期内容，建议开新会话"})
 
             if total_chars > MAX_HISTORY_CHARS:
-                print(f"  ⚠️ Supervisor 历史过长 ({total_chars} 字符)，压缩旧内容")
-                self.emit({"step": "thinking", "message": "上下文已满，正在压缩早期对话以保留关键信息...", "round": round_num})
-                try:
-                    old_msgs = messages[1:-5]
-                    if old_msgs:
-                        raw = "\n".join(str(m) for m in old_msgs)
-                        summary = await self.llm.chat(
-                            system_prompt="你是一个对话压缩助手。将对话历史压缩为简洁摘要，保留关键事实、数据、用户约束条件和研究方向。丢弃搜索细节和冗长报告正文。用中文。",
-                            user_message=f"请压缩以下对话，保留关键信息：\n\n{raw}",
-                        )
-                        if summary:
-                            messages = [messages[0], {"role": "system", "content": f"[早期对话摘要] {summary}"}] + messages[-5:]
-                except Exception:
-                    pass
-                if total_chars > MAX_HISTORY_CHARS:
-                    messages = [messages[0]] + messages[-5:]
-                self.emit({"step": "thinking", "message": f"早期对话已压缩（上下文已用 {sum(len(str(m)) for m in messages) * 100 // MAX_HISTORY_CHARS}%）。建议开新会话以保证研究质量", "round": round_num})
+                messages, _ = await _truncate_context(
+                    messages, total_chars, MAX_HISTORY_CHARS, self.llm, self.emit, round_num, context_warned
+                )
 
             print(f"\n{'='*40}")
             print(f"  Supervisor 第 {round_num}/{self.max_rounds} 轮决策")
@@ -916,15 +912,7 @@ class Level4Agent:
                 print("  Supervisor: 信息足够，ResearchComplete")
                 break
 
-            messages.append({
-                "role": "assistant",
-                "content": msg.content or "",
-                "tool_calls": [
-                    {"id": tc.id, "type": "function",
-                     "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
-                    for tc in msg.tool_calls
-                ],
-            })
+            messages.append(_assistant_msg(msg))
 
             # 优先检测 ResearchComplete，跳过所有工具执行直接结束
             if any(tc.function.name == "ResearchComplete" for tc in msg.tool_calls):
@@ -1034,7 +1022,6 @@ async def main():
 
     # 澄清判断（Level 2/3/4 默认开启，Level 1 跳过保持极速）
     if level != 1:
-        from researcher.agent import ClarifyHelper  # noqa
         clarify = ClarifyHelper()
         check = await clarify.check(question)
         if check.get("need_clarify"):

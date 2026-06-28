@@ -31,13 +31,17 @@ class HybridRetriever:
         vec_docs = vec_docs[:fetch_n]
         bm_docs = bm_docs[:fetch_n]
 
+        # 统一提取文本的工具函数（兼容 dict 和 object）
+        def _text(doc) -> str:
+            return doc["page_content"] if isinstance(doc, dict) else getattr(doc, "page_content", "")
+
         # RRF 打分
         scores: dict[str, tuple[float, object]] = {}
         for rank, doc in enumerate(vec_docs):
-            key = doc.page_content[:200]  # 用前 200 字符做指纹
+            key = _text(doc)[:200]
             scores[key] = (scores.get(key, (0, doc))[0] + 1.0 / (self.rrf_k + rank + 1), doc)
         for rank, doc in enumerate(bm_docs):
-            key = doc.page_content[:200]
+            key = _text(doc)[:200]
             scores[key] = (scores.get(key, (0, doc))[0] + 1.0 / (self.rrf_k + rank + 1), doc)
 
         # 按 RRF 分数降序，返回 Top N

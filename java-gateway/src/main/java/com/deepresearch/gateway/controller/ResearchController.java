@@ -19,16 +19,19 @@ import org.springframework.security.core.context.ReactiveSecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executors;
 
 @RestController
 @RequestMapping("/api")
 public class ResearchController {
 
     private static final Logger log = LoggerFactory.getLogger(ResearchController.class);
+    private static final Scheduler VIRTUAL = Schedulers.fromExecutor(Executors.newVirtualThreadPerTaskExecutor());
 
     private final AgentClient agentClient;
     private final SessionService sessionService;
@@ -114,7 +117,7 @@ public class ResearchController {
                     resp.report(), resp.language(), resp.needClarify(),
                     resp.question(), session.getId()
             );
-        }).subscribeOn(Schedulers.boundedElastic());
+        }).subscribeOn(VIRTUAL);
     }
 
     /**

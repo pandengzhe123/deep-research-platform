@@ -262,10 +262,8 @@ public class SessionService {
     }
 
     private ResearchSession toPojo(SessionEntity e) {
-        ResearchSession s = new ResearchSession(e.getId(), e.getUserId(), e.getQuestion());
-        s.setReport(getLatestReport(e.getId()));
-        s.setStatus(e.getStatus());
-        return s;
+        return new ResearchSession(e.getId(), e.getUserId(), e.getQuestion(),
+                getLatestReport(e.getId()), e.getStatus());
     }
 
     /** 构建结构化消息对象 */

@@ -30,7 +30,14 @@ app = FastAPI(title="Deep Researcher Agent", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:80",
+        "http://127.0.0.1:80",
+        os.getenv("EXTRA_CORS_ORIGIN", ""),
+    ],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -218,23 +225,20 @@ async def health():
 async def research_sync(req: ResearchRequest):
     """同步接口 —— 收集 SSE 事件，等 done 后返回 JSON。"""
     cancel = aio.Event()
-    try:
-        result = []
-        async for event in run_agent_with_sse(
-            question=req.question, level=req.level,
-            max_rounds=req.max_rounds, language=req.language,
-            context=req.context, kb_enabled=req.kb_enabled, user_id=req.user_id,
-            rag_doc_ids=req.rag_doc_ids, search_mode=req.search_mode, cancel=cancel,
-        ):
-            if event["event"] == "done":
-                result.append(json.loads(event["data"]))
-            elif event["event"] == "error":
-                raise HTTPException(status_code=500, detail=json.loads(event["data"]))
-        if not result:
-            raise HTTPException(status_code=500, detail="无结果")
-        return JSONResponse(content=result[0])
-    finally:
-        pass
+    result = []
+    async for event in run_agent_with_sse(
+        question=req.question, level=req.level,
+        max_rounds=req.max_rounds, language=req.language,
+        context=req.context, kb_enabled=req.kb_enabled, user_id=req.user_id,
+        rag_doc_ids=req.rag_doc_ids, search_mode=req.search_mode, cancel=cancel,
+    ):
+        if event["event"] == "done":
+            result.append(json.loads(event["data"]))
+        elif event["event"] == "error":
+            raise HTTPException(status_code=500, detail=json.loads(event["data"]))
+    if not result:
+        raise HTTPException(status_code=500, detail="无结果")
+    return JSONResponse(content=result[0])
 
 
 @app.post("/research/stream")
@@ -288,7 +292,7 @@ async def compress_history(req: dict):
     try:
         llm = LLMClient()
         raw = "\n".join(str(m) for m in messages)
-        summary = llm.chat(
+        summary = await llm.chat(
             system_prompt=COMPRESS_HISTORY_PROMPT,
             user_message=f"请压缩以下对话历史（保留关键信息，丢弃搜索细节和冗长报告）：\n\n{raw}",
         )
