@@ -9,7 +9,10 @@ import org.springframework.security.config.web.server.SecurityWebFiltersOrder;
 import org.springframework.security.config.web.server.ServerHttpSecurity;
 import org.springframework.security.core.context.ReactiveSecurityContextHolder;
 import org.springframework.security.web.server.SecurityWebFilterChain;
+import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.WebFilter;
+import org.springframework.web.server.WebFilterChain;
+import reactor.core.publisher.Mono;
 
 import java.util.Collections;
 
@@ -30,6 +33,7 @@ public class SecurityConfig {
                         .pathMatchers("/api/auth/**", "/api/health").permitAll()
                         .anyExchange().authenticated()
                 )
+                .addFilterAt(jwtFilter(), SecurityWebFiltersOrder.AUTHENTICATION)
                 .csrf(csrf -> csrf.disable())
                 .httpBasic(basic -> basic.disable())
                 .formLogin(form -> form.disable())
@@ -37,11 +41,12 @@ public class SecurityConfig {
     }
 
     /**
-     * JWT 认证过滤器——从 Authorization 头解析 userId 注入安全上下文。
+     * JWT 认证过滤器 —— 从 Authorization: Bearer <token> 解析 userId，
+     * 注入 SecurityContext。通过 addFilterAt 放在 Security 链的 AUTHENTICATION
+     * 位置，确保鉴权之前执行。
      */
-    @Bean
-    WebFilter jwtFilter() {
-        return (exchange, chain) -> {
+    private WebFilter jwtFilter() {
+        return (ServerWebExchange exchange, WebFilterChain chain) -> {
             String auth = exchange.getRequest().getHeaders().getFirst("Authorization");
             if (auth != null && auth.startsWith("Bearer ") && jwt.validateToken(auth.substring(7))) {
                 String userId = jwt.getUserId(auth.substring(7));

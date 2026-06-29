@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio as aio
 import json
 import logging
+import os
 import traceback
 import uuid
 from typing import AsyncGenerator
@@ -114,7 +115,9 @@ async def run_agent_with_sse(
             on_progress({"step": "planned", "message": f"需求明确: {check.get('summary', '')}"})
 
         # ---- 创建 Agent（走 agent.py 的真 Agent） ----
-        _kw = dict(on_progress=on_progress, kb_enabled=kb_enabled, user_id=user_id, rag_doc_ids=rag_doc_ids, search_mode=search_mode)
+        # 从 search_mode 推导 kb_enabled（前端不再传 kb_enabled 旧字段）
+        _kb = kb_enabled or (search_mode in ("hybrid", "rag_only"))
+        _kw = dict(on_progress=on_progress, kb_enabled=_kb, user_id=user_id, rag_doc_ids=rag_doc_ids, search_mode=search_mode)
         if level == 1:
             agent = FastLevel1Agent(**_kw)
         elif level == 3:

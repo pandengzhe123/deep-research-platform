@@ -180,9 +180,10 @@ class KnowledgeBase:
         embedder = self._get_v2_embedder()
         query_emb = embedder.embed_one(query)
 
-        where = {"user_id": user_id} if doc_ids else None
         if doc_ids:
-            where["doc_id"] = {"$in": doc_ids}
+            where = {"$and": [{"user_id": user_id}, {"doc_id": {"$in": doc_ids}}]}
+        else:
+            where = {"user_id": user_id}
 
         try:
             coll = self._client.get_or_create_collection(
