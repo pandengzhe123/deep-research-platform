@@ -465,8 +465,8 @@ class Level2Agent:
         ]
 
         all_search_results: list[str] = []
-        MAX_RESULTS_CHARS = 300000  # 单个搜索结果最大 30 万字符，防止 OOM
-        MAX_ROUND_RESULTS = 3       # 只保留最近 3 轮（每轮合并后的结果）
+        MAX_RESULTS_CHARS = config.max_results_chars   # 可配置
+        MAX_ROUND_RESULTS = config.max_round_results
         # 根据搜索模式选择 System Prompt
         if self.search_mode == "rag_only":
             system = RAG_ONLY_SYSTEM.format(max_rounds=self.max_rounds)
@@ -474,7 +474,7 @@ class Level2Agent:
             system = WEB_ONLY_SYSTEM.format(max_rounds=self.max_rounds)
         else:
             system = AGENT_SYSTEM.format(max_rounds=self.max_rounds)
-        MAX_HISTORY_CHARS = 500000
+        MAX_HISTORY_CHARS = config.max_history_chars
         context_warned = False      # 预警只发一次
 
         for round_num in range(1, self.max_rounds + 1):
@@ -883,7 +883,7 @@ class Level4Agent:
             max_parallel=self.max_parallel,
         )
 
-        MAX_HISTORY_CHARS = 500000
+        MAX_HISTORY_CHARS = config.max_history_chars
         context_warned = False
 
         for round_num in range(1, self.max_rounds + 1):

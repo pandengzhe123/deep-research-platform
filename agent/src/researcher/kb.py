@@ -14,7 +14,7 @@ import chromadb
 # 切块策略
 # ============================================================
 
-def chunk_text(text: str, chunk_size: int = 500, overlap: int = 100, min_size: int = 100) -> list[str]:
+def chunk_text(text: str, chunk_size: int = 500, overlap: int = 100, min_size: int = 300) -> list[str]:
     """段落优先 → 句子 → 字符，逐级降级切分。太短的 chunk 合并到前一个。"""
     chunks: list[str] = []
 

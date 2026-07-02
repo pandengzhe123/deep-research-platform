@@ -32,6 +32,15 @@ class Config:
     max_supervisor_rounds: int = int(os.getenv("MAX_SUPERVISOR_ROUNDS", "3"))
     max_parallel_researchers: int = int(os.getenv("MAX_PARALLEL_RESEARCHERS", "3"))
 
+    # ---- 上下文 ----
+    # 对话历史字符数上限。DeepSeek V4 Flash 有 1M token 上下文，
+    # 中文约 2 chars/token，留一半给当前轮次搜索和 prompt → 默认 1M 字符
+    max_history_chars: int = int(os.getenv("MAX_HISTORY_CHARS", "1000000"))
+    # 单个搜索结果最大字符数，防止搜索结果 OOM
+    max_results_chars: int = int(os.getenv("MAX_RESULTS_CHARS", "300000"))
+    # 保留最近几轮合并后的搜索结果
+    max_round_results: int = int(os.getenv("MAX_ROUND_RESULTS", "3"))
+
 
 # 全局单例
 config = Config()
