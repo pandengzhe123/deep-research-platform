@@ -205,48 +205,79 @@ class SearchTool:
             return None
 
     async def _batch_summarize(self, items: list[tuple[str, dict, str]]) -> list[dict]:
-        """批量摘要：一次 LLM 调用处理多个网页，减少串行等待。"""
-        # 构建批量 prompt
+        """批量摘要：一次 LLM 调用处理多个网页，structured_output 强制 JSON。"""
+        # 构建批量 prompt —— 对标 open_deep_research summarize_webpage_prompt
         parts = []
         for i, (url, r, content) in enumerate(items):
             truncated = content[:config.max_content_length]
-            parts.append(f"=== 网页 {i+1}: {r.get('title', url)} ===\n{truncated}\n")
+            parts.append(
+                f"<网页 {i+1}>\n"
+                f"标题: {r.get('title', url)}\n"
+                f"内容: {truncated}\n"
+                f"</网页 {i+1}>"
+            )
 
-        batch_prompt = (
-            "对以下网页内容分别做摘要。每个网页独立摘要，保留核心事实、数据、时间、人名。\n\n"
+        BATCH_SUMMARY_PROMPT = (
+            "你是一个搜索结果摘要助手。对以下每个网页内容分别做摘要。\n\n"
+            "指导原则：\n"
+            "- 识别并保留网页的核心主题或目的\n"
+            "- 保留关键事实、统计数据、数据点和核心论点\n"
+            "- 保留可信来源或专家的引用\n"
+            "- 时间敏感或历史性的内容应保留时间线\n"
+            "- 保留所有重要的日期、人名、地名\n"
+            "- 根据不同内容类型调整摘要方式：\n"
+            "  新闻：关注 who/what/when/where/why/how\n"
+            "  科学内容：保留方法、结果、结论\n"
+            "  观点文章：保留主论点和支撑论据\n"
+            "  产品页面：保留关键特性、规格、独特卖点\n\n"
+            "摘要应比原文短但信息完整——大致保留原文 25-30% 的关键信息量。\n\n"
             + "\n".join(parts)
-            + "\n请返回 JSON 数组，每个元素对应一个网页：\n"
-            '[{"summary": "摘要", "key_facts": ["事实1", "事实2"]}, ...]'
         )
 
+        BATCH_SUMMARY_SCHEMA = {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "summary": {"type": "string", "description": "网页内容摘要"},
+                            "key_excerpts": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "原文中的关键引述或重要句子",
+                                "maxItems": 5,
+                            },
+                        },
+                        "required": ["summary"],
+                    },
+                },
+            },
+            "required": ["items"],
+        }
+
         try:
-            import json
-            resp = await self.llm.chat(
-                system_prompt="你是网页内容摘要助手。只返回 JSON 数组，不加任何解释。",
-                user_message=batch_prompt,
+            data = await self.llm.structured_output(
+                system_prompt="你是网页内容摘要助手。只返回 JSON，不加任何解释。",
+                user_message=BATCH_SUMMARY_PROMPT,
+                schema=BATCH_SUMMARY_SCHEMA,
             )
-            # 提取 JSON 数组
-            text = resp.strip()
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-            data = json.loads(text)
-            if not isinstance(data, list):
-                data = [data]
+            summaries = data.get("items", []) if isinstance(data, dict) else []
         except Exception:
-            # 解析失败回退：用原始 snippet 作为摘要，通知上层质量下降
-            print(f"  ⚠️ 批量摘要解析失败，降级为原始 snippet——报告质量可能下降")
+            print(f"  ⚠️ 批量摘要失败，降级为原始 snippet——报告质量可能下降")
             self.emit({"step": "searching", "message": "部分搜索结果未能摘要，报告质量可能下降"})
-            data = [{"summary": items[i][1].get("content", ""), "key_facts": []} for i in range(len(items))]
+            summaries = [{"summary": items[i][1].get("content", ""), "key_excerpts": []} for i in range(len(items))]
 
         # 组装返回结果
         results = []
         for i, (url, r, _) in enumerate(items):
-            entry = data[i] if i < len(data) else {}
+            entry = summaries[i] if i < len(summaries) else {}
             results.append({
                 "title": r.get("title", url),
                 "url": url,
                 "summary": entry.get("summary", r.get("content", "")),
-                "key_facts": entry.get("key_facts", []),
+                "key_facts": entry.get("key_excerpts", []),
             })
         return results
 

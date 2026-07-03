@@ -28,9 +28,9 @@ class Config:
     max_content_length: int = int(os.getenv("MAX_CONTENT_LENGTH", "20000"))
 
     # ---- 循环控制 ----
-    max_search_rounds: int = int(os.getenv("MAX_SEARCH_ROUNDS", "5"))
-    max_supervisor_rounds: int = int(os.getenv("MAX_SUPERVISOR_ROUNDS", "3"))
-    max_parallel_researchers: int = int(os.getenv("MAX_PARALLEL_RESEARCHERS", "3"))
+    max_search_rounds: int = int(os.getenv("MAX_SEARCH_ROUNDS", "10"))
+    max_supervisor_rounds: int = int(os.getenv("MAX_SUPERVISOR_ROUNDS", "6"))
+    max_parallel_researchers: int = int(os.getenv("MAX_PARALLEL_RESEARCHERS", "5"))
 
     # ---- 上下文 ----
     # 对话历史字符数上限。DeepSeek V4 Flash 有 1M token 上下文，

@@ -194,12 +194,18 @@ class KnowledgeBase:
         except Exception:
             return []
 
+        # 最低相似度阈值：距离 > threshold 的结果视为不相关，过滤掉
+        # text-embedding-v4 余弦距离：<0.4 高度相关，0.4-0.6 一般，>0.6 基本不相关
+        MIN_SIM_THRESHOLD = float(os.getenv("KB_MIN_SIMILARITY", "0.4"))
         docs = []
         for doc, meta, dist in zip(
             result.get("documents", [[]])[0],
             result.get("metadatas", [[]])[0],
             result.get("distances", [[]])[0],
         ):
+            similarity = max(0, 1 - dist)
+            if similarity < MIN_SIM_THRESHOLD:
+                continue  # 相似度太低，不纳入结果
             docs.append({"content": doc, "meta": meta or {}, "distance": dist})
         return docs
 
