@@ -282,7 +282,7 @@ class FastLevel1Agent:
 
     async def _kb_search(self, query: str) -> str:
         """异步知识库检索，在线程池中执行避免阻塞事件循环。"""
-        return await asyncio.to_thread(lambda: self.kb.search(query, user_id=self.user_id, doc_ids=self.rag_doc_ids or None, mode="v2"))
+        return await asyncio.to_thread(lambda: self.kb.search(query, user_id=self.user_id, doc_ids=self.rag_doc_ids or None, mode="full"))
 
 
 
@@ -544,7 +544,7 @@ class Level2Agent:
                             print(f"  知识库检索: {query}")
                             self.emit({"step": "kb_searching", "message": f"知识库检索: {query}", "round": round_num})
                             if self.search_mode in ("hybrid", "rag_only"):
-                                result = await asyncio.to_thread(lambda: self.kb.search(query, user_id=self.user_id, doc_ids=self.rag_doc_ids or None, mode="v2"))
+                                result = await asyncio.to_thread(lambda: self.kb.search(query, user_id=self.user_id, doc_ids=self.rag_doc_ids or None, mode="full"))
                             else:
                                 result = "知识库未启用。"
                             if self.search_mode == "rag_only" and "未找到相关信息" in result:

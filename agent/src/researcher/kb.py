@@ -7,6 +7,7 @@ import uuid
 from pathlib import Path
 
 os.environ["HF_HUB_DISABLE_SSL_VERIFY"] = "1"
+os.environ["HF_HUB_OFFLINE"] = "1"  # 不从 HuggingFace 联网检查更新，加速启动
 
 import chromadb
 
@@ -369,41 +370,58 @@ class KnowledgeBase:
         from .retrievers.reranker import build_reranker
 
         # 1. 查询改写
+        print(f"  [full] ① 查询改写...")
         try:
+            t0 = __import__('time').time()
             rw = QueryRewriter()
             variants = rw.rewrite(query)
-        except Exception:
+            print(f"  [full] ① 查询改写 ✅  → {len(variants)} 个变体 ({__import__('time').time() - t0:.1f}s)")
+        except Exception as e:
+            print(f"  [full] ① 查询改写 ❌  → 回退原始查询 ({e})")
             variants = [query]
 
-        # 2. 每个变体：向量 + BM25 双路，合并去重
+        # 2. 向量 + BM25 双路
         from .retrievers.bm25_retriever import build_bm25_retriever
+        t0 = __import__('time').time()
         all_v2_docs = self._get_v2_docs(user_id)
         bm_docs = [{"page_content": d["content"], "metadata": d["meta"]} for d in all_v2_docs]
         bm25 = build_bm25_retriever(bm_docs, k=10)
+        print(f"  [full] ② BM25 索引就绪 ({len(bm_docs)} 篇文档, {__import__('time').time() - t0:.1f}s)")
 
+        t0 = __import__('time').time()
         all_docs = []
         seen = set()
         for v in variants:
+            vec_hits = 0
             for d in self._v2_vector_search(v, user_id, doc_ids, k=20):
                 key = d["content"][:200]
                 if key not in seen:
                     seen.add(key)
                     all_docs.append(d)
+                    vec_hits += 1
+            bm_hits = 0
             for d in bm25.invoke(v):
                 c = d["page_content"]
                 key = c[:200]
                 if key not in seen:
                     seen.add(key)
                     all_docs.append({"content": c, "meta": d.get("metadata", {})})
+                    bm_hits += 1
+        print(f"  [full] ② 双路召回 ✅  → 去重后 {len(all_docs)} 条 ({__import__('time').time() - t0:.1f}s)")
 
         if not all_docs:
+            print(f"  [full] ③ 粗召回为空，跳过精排")
             return "知识库中未找到相关信息。"
 
         # 3. 精排
+        print(f"  [full] ③ Cross-Encoder 精排 (从 {len(all_docs)} 条 → Top {n_results})...")
         try:
+            t0 = __import__('time').time()
             reranker = build_reranker()
             all_docs = reranker.rerank(query, all_docs, top_n=n_results)
-        except Exception:
+            print(f"  [full] ③ 精排 ✅  ({__import__('time').time() - t0:.1f}s)")
+        except Exception as e:
+            print(f"  [full] ③ 精排 ❌  → 回退粗排取前 {n_results} ({e})")
             all_docs = all_docs[:n_results]
 
         for d in all_docs:

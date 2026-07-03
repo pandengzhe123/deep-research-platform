@@ -20,6 +20,8 @@ RUN pip install --default-timeout=100 --no-cache-dir -e . && \
 
 # 预下载 Embedding 模型，打进镜像（~120MB），运行时无需联网
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')"
+# 预下载 Cross-Encoder 精排模型（~700MB）
+RUN python -c "from sentence_transformers import CrossEncoder; CrossEncoder('BAAI/bge-reranker-base')"
 
 COPY .env .env
 
