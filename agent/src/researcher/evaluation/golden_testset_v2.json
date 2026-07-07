@@ -138,5 +138,145 @@
     "expected_docs": ["doc3.txt"],
     "expected_chunks": ["Docker Compose", "YAML"],
     "ground_truth": "使用 Docker Compose 在 YAML 文件中定义多容器应用"
+  },
+  {
+    "type": "simple",
+    "question": "Redis 是谁创建的",
+    "expected_docs": ["doc6_redis.txt"],
+    "expected_chunks": ["Salvatore Sanfilippo"],
+    "ground_truth": "Salvatore Sanfilippo"
+  },
+  {
+    "type": "simple",
+    "question": "Redis 的默认端口是多少",
+    "expected_docs": ["doc6_redis.txt"],
+    "expected_chunks": ["6379"],
+    "ground_truth": "6379"
+  },
+  {
+    "type": "simple",
+    "question": "Kafka 是哪家公司开发的",
+    "expected_docs": ["doc7_kafka.txt"],
+    "expected_chunks": ["LinkedIn"],
+    "ground_truth": "LinkedIn"
+  },
+  {
+    "type": "simple",
+    "question": "Kubernetes 的简称是什么",
+    "expected_docs": ["doc8_k8s.txt"],
+    "expected_chunks": ["K8s"],
+    "ground_truth": "K8s"
+  },
+  {
+    "type": "simple",
+    "question": "向量数据库用什么算法加速检索",
+    "expected_docs": ["doc9_vectordb.txt"],
+    "expected_chunks": ["HNSW"],
+    "ground_truth": "HNSW 算法"
+  },
+  {
+    "type": "precision",
+    "question": "Redis 提供哪两种持久化方式",
+    "expected_docs": ["doc6_redis.txt"],
+    "expected_chunks": ["RDB", "AOF"],
+    "ground_truth": "RDB 快照和 AOF 日志"
+  },
+  {
+    "type": "precision",
+    "question": "Kafka 从哪个版本开始引入 KRaft 模式",
+    "expected_docs": ["doc7_kafka.txt"],
+    "expected_chunks": ["2.8"],
+    "ground_truth": "2.8 版本"
+  },
+  {
+    "type": "precision",
+    "question": "Kubernetes 中最小的调度单位是什么",
+    "expected_docs": ["doc8_k8s.txt"],
+    "expected_chunks": ["Pod"],
+    "ground_truth": "Pod"
+  },
+  {
+    "type": "precision",
+    "question": "Kubernetes 用什么组件保存集群配置数据",
+    "expected_docs": ["doc8_k8s.txt"],
+    "expected_chunks": ["etcd"],
+    "ground_truth": "etcd（分布式键值存储）"
+  },
+  {
+    "type": "multi_doc",
+    "question": "Redis 和 Kafka 都能用来做消息队列吗",
+    "expected_docs": ["doc6_redis.txt", "doc7_kafka.txt"],
+    "expected_chunks": ["消息队列", "消息"],
+    "ground_truth": "都可以，Redis 可作消息中间件/消息队列，Kafka 是专门的消息系统"
+  },
+  {
+    "type": "multi_doc",
+    "question": "Kubernetes 和 Docker 是什么关系",
+    "expected_docs": ["doc8_k8s.txt", "doc3.txt"],
+    "expected_chunks": ["Docker", "编排"],
+    "ground_truth": "Docker 负责容器化，Kubernetes 负责编排调度，两者配合使用"
+  },
+  {
+    "type": "multi_doc",
+    "question": "向量数据库和 Chroma 是什么关系",
+    "expected_docs": ["doc9_vectordb.txt"],
+    "expected_chunks": ["Chroma", "开源"],
+    "ground_truth": "Chroma 是一种轻量级的开源向量数据库"
+  },
+  {
+    "type": "colloquial",
+    "question": "Redis 为什么这么快",
+    "expected_docs": ["doc6_redis.txt"],
+    "expected_chunks": ["内存"],
+    "ground_truth": "因为数据都存储在内存中，读写速度极快"
+  },
+  {
+    "type": "colloquial",
+    "question": "怎么让 Kafka 处理更多消息",
+    "expected_docs": ["doc7_kafka.txt"],
+    "expected_chunks": ["分区"],
+    "ground_truth": "通过增加分区实现并行处理和水平扩展"
+  },
+  {
+    "type": "colloquial",
+    "question": "K8s 怎么自动增减服务器上的应用数量",
+    "expected_docs": ["doc8_k8s.txt"],
+    "expected_chunks": ["自动扩缩容", "CPU"],
+    "ground_truth": "通过水平自动扩缩容，根据 CPU 使用率或自定义指标调整 Pod 数量"
+  },
+  {
+    "type": "colloquial",
+    "question": "RAG 系统里向量数据库是干嘛用的",
+    "expected_docs": ["doc9_vectordb.txt"],
+    "expected_chunks": ["检索", "文档"],
+    "ground_truth": "存储文档切块的向量，检索时找到与用户问题最相关的文档片段"
+  },
+  {
+    "type": "no_answer",
+    "question": "MongoDB 是什么时候创建的",
+    "expected_docs": [],
+    "expected_chunks": ["未找到"],
+    "ground_truth": null
+  },
+  {
+    "type": "no_answer",
+    "question": "Redis 的作者现在在哪家公司工作",
+    "expected_docs": ["doc6_redis.txt"],
+    "expected_chunks": [],
+    "ground_truth": null
+  },
+  {
+    "type": "no_answer",
+    "question": "Kafka 和 RabbitMQ 哪个性能更好",
+    "expected_docs": ["doc7_kafka.txt"],
+    "expected_chunks": [],
+    "ground_truth": null
+  },
+  {
+    "type": "no_answer",
+    "question": "Elasticsearch 支持向量检索吗",
+    "expected_docs": [],
+    "expected_chunks": ["未找到"],
+    "ground_truth": null
   }
 ]

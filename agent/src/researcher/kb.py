@@ -194,18 +194,19 @@ class KnowledgeBase:
         except Exception:
             return []
 
-        # 最低相似度阈值：距离 > threshold 的结果视为不相关，过滤掉
-        # text-embedding-v4 余弦距离：<0.4 高度相关，0.4-0.6 一般，>0.6 基本不相关
-        MIN_SIM_THRESHOLD = float(os.getenv("KB_MIN_SIMILARITY", "0.4"))
+        # 最低相似度阈值：过滤明显不相关的结果，防止 LLM 拿到垃圾编造。
+        # ChromaDB 余弦距离范围 0-2（0=完全相同, 1=正交, 2=完全相反）。
+        # text-embedding-v4 实测：相关文档 distance 约 0.7-0.85，不相关约 1.3+。
+        # 用 distance 阈值（默认 1.0）而非 1-dist，后者在余弦距离下会变负数。
+        MAX_DISTANCE = float(os.getenv("KB_MAX_DISTANCE", "1.0"))
         docs = []
         for doc, meta, dist in zip(
             result.get("documents", [[]])[0],
             result.get("metadatas", [[]])[0],
             result.get("distances", [[]])[0],
         ):
-            similarity = max(0, 1 - dist)
-            if similarity < MIN_SIM_THRESHOLD:
-                continue  # 相似度太低，不纳入结果
+            if dist > MAX_DISTANCE:
+                continue  # 距离太大 = 不相关，过滤掉
             docs.append({"content": doc, "meta": meta or {}, "distance": dist})
         return docs
 
