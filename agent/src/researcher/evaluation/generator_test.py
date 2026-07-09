@@ -139,7 +139,8 @@ def print_report(results, faith_result, docs):
         print(f"  GT: {gt}\n")
 
     # save
-    out = os.path.join(os.path.dirname(__file__), "results", "generator_results.json")
+    from researcher.evaluation._results import run_dir_for
+    out = os.path.join(run_dir_for("rag"), "generator_results.json")
     with open(out, "w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
     print(f"  Results saved: {out}")

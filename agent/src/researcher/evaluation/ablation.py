@@ -68,7 +68,8 @@ def print_ablation_table(results: dict):
     print("=" * 70)
 
     # 保存结果
-    out_path = os.path.join(os.path.dirname(__file__), "results", "ablation_results.json")
+    from researcher.evaluation._results import run_dir_for
+    out_path = os.path.join(run_dir_for("rag"), "ablation_results.json")
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
     print(f"\n  结果已保存: {out_path}")

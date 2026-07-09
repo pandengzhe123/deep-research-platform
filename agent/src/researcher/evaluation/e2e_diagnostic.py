@@ -127,19 +127,22 @@ if __name__ == "__main__":
 
     retriever_stats = summarize_retriever(testset, search_fn)
 
-    # 加载 Generator 结果（如果有的话，否则用空）
-    gen_path = os.path.join(os.path.dirname(__file__), "results", "generator_results.json")
+    # 加载 Generator 结果（从最近一次 rag 评测目录找，否则用空）
+    from researcher.evaluation._results import run_dir_for, latest_run_dir
     gen_results = []
-    if os.path.exists(gen_path):
-        with open(gen_path, encoding="utf-8") as f:
-            gen_results = json.load(f)
+    _latest = latest_run_dir("rag")
+    if _latest:
+        gen_path = os.path.join(_latest, "generator_results.json")
+        if os.path.exists(gen_path):
+            with open(gen_path, encoding="utf-8") as f:
+                gen_results = json.load(f)
 
     generator_stats = summarize_generator(gen_results)
 
     diagnostic_matrix(testset, retriever_stats, generator_stats)
 
-    # 保存 Retriever 统计
-    out_path = os.path.join(os.path.dirname(__file__), "results", "retriever_stats.json")
+    # 保存 Retriever 统计（与本批 rag 评测同目录）
+    out_path = os.path.join(run_dir_for("rag"), "retriever_stats.json")
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(retriever_stats, f, ensure_ascii=False, indent=2)
     print(f"\n  Retriever 统计已保存: {out_path}")

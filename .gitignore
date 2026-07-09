@@ -44,3 +44,6 @@ INTERVIEW.md
 
 # 生成的报告（测试产出物）
 agent/reports/
+
+# 评测运行产物（报告、judge 结果等，不进仓库）
+agent/src/researcher/evaluation/results/

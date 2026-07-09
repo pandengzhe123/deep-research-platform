@@ -26,6 +26,7 @@ from researcher.evaluation.answer_relevance import AnswerRelevanceEvaluator
 from researcher.evaluation.context_relevance import ContextRelevanceEvaluator
 from researcher.evaluation.answer_correctness import AnswerCorrectnessEvaluator
 from researcher.evaluation.judge import ReportJudge
+from researcher.evaluation._results import run_dir_for as _run_dir_for
 
 TESTSET = os.path.join(os.path.dirname(__file__), "golden_testset_v2.json")
 DOC_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "..", "eval")
@@ -131,7 +132,7 @@ def _print_rag_table(rows):
     print(f"  {'平均':<26} {avg('faith'):>7.2f} {avg('ans_rel'):>7.2f} {avg('ctx_rel'):>7.2f} {avg('ans_corr'):>8.2f}")
     print("=" * 78)
 
-    out = os.path.join(os.path.dirname(__file__), "results", "run_eval_rag.json")
+    out = os.path.join(_run_dir_for("rag"), "run_eval_rag.json")
     with open(out, "w", encoding="utf-8") as f:
         json.dump(rows, f, ensure_ascii=False, indent=2)
     print(f"  结果已保存: {out}")
@@ -195,7 +196,7 @@ def _print_report_table(rows, level):
         print(f"  {'平均总分':<26} {'':>27} {avg:>6.2f}")
     print("=" * 82)
 
-    out = os.path.join(os.path.dirname(__file__), "results", "run_eval_report.json")
+    out = os.path.join(_run_dir_for("rag"), "run_eval_report.json")
     with open(out, "w", encoding="utf-8") as f:
         json.dump(rows, f, ensure_ascii=False, indent=2)
     print(f"  结果已保存: {out}")
