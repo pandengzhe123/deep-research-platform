@@ -72,10 +72,11 @@ class LLMClient:
         system_prompt: str,
         user_message: str,
         temperature: float = 0.1,
+        max_tokens: int | None = None,
     ) -> str:
         """发送一条 system + user 消息，返回文本回复。"""
         async def _call():
-            resp = await self.client.chat.completions.create(
+            kwargs: dict = dict(
                 model=self.model,
                 temperature=temperature,
                 extra_body=self._extra_body(),
@@ -84,6 +85,9 @@ class LLMClient:
                     {"role": "user", "content": user_message},
                 ],
             )
+            if max_tokens is not None:
+                kwargs["max_tokens"] = max_tokens
+            resp = await self.client.chat.completions.create(**kwargs)
             return resp.choices[0].message.content or ""
 
         return await self._call_with_retry(_call)

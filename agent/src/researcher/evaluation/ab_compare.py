@@ -158,6 +158,8 @@ def cmd_judge(run_id: str, judge_runs: int = 5):
             "new": new_s["overall"], "new_std": new_s["std"],
             "delta": round(new_s["overall"] - old_s["overall"], 2),
             "old_dims": old_s["dimensions"], "new_dims": new_s["dimensions"],
+            "old_summary": old_s.get("summary", ""),
+            "new_summary": new_s.get("summary", ""),
         })
 
     _print_and_save(rows, run_dir, judge_runs, _WEIGHTS)
@@ -187,6 +189,12 @@ def _print_and_save(rows, run_dir, judge_runs, weights):
         d_old = sum(r["old_dims"].get(dim, {}).get("score", 0) for r in rows) / len(rows) if rows else 0
         d_new = sum(r["new_dims"].get(dim, {}).get("score", 0) for r in rows) / len(rows) if rows else 0
         print(f"    {dim:<14} {d_old:.2f} → {d_new:.2f}  ({d_new-d_old:+.2f})")
+    # Judge 总结（每份新版报告一句话评价）
+    print(f"\n  Judge 对新版报告的一两句话总结（每题的首次评价）：")
+    for r in rows:
+        s = r.get("new_summary", "")
+        if s:
+            print(f"  [{r['question']}] {s}")
     print("=" * 74)
 
     out = os.path.join(run_dir, f"judge_{_ts()}.json")
