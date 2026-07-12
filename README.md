@@ -1,8 +1,8 @@
 # Deep Research Platform
 
-> 全栈深度研究 AI Agent 平台 | 零框架手写 | Python + Java + Vue + Docker
+> 全栈深度研究 AI Agent 平台 | 零框架手写 | Python + Java + Vue + Docker | 完整评测体系
 
-输入问题 → Agent 自主搜索网络 → SSE 实时推送进度 → 生成带引用的深度研究报告。
+输入问题 → Agent 自主搜索网络+知识库 → SSE 实时推送进度 → 生成带编号引用的深度研究报告。自建完整 RAG 评测体系（4核心指标+A/B对照+LLM-as-Judge），数据驱动优化。
 
 ---
 
@@ -67,10 +67,18 @@ docker compose up
 - **SSE 三层穿透**：Python yield → Java `Flux<ServerSentEvent>` → 前端 `ReadableStream`，实时推送研究进度。nginx 关 buffering，30 分钟全链路超时统一
 - **Queue + create_task 模式**：Agent 后台跑（create_task），进度通过回调塞进 asyncio.Queue，主循环取事件 yield 给前端，客户端断开时 task.cancel 停止消耗 token
 - **回调解耦**：`self.emit = on_progress or (lambda e: None)`，同一 Agent 类同时支持 SSE 流式、同步接口、命令行测试
-- **搜索优化**：Tavily 优先 → DuckDuckGo 降级、跨轮 URL 去重、批量 LLM 摘要（5 次 → 1 次）、5 分钟搜索缓存
-- **记忆机制**：PostgreSQL JSONB 存完整对话历史（含报告全文），report JSONB 数组存所有报告不覆盖，50 条上限 + 50 万字符截断 + 80%/100% 两级预警
-- **并发控制**：Java Semaphore 限 20 并发、L3/4 LLMClient 共享复用连接池、asyncio.gather 并行搜索
-- **容错三层**：LLM 重试（指数退避）→ Tavily→DDG 降级 → Agent 循环 try/except 兜底
+- **搜索优化**：Tavily 优先 → DuckDuckGo 降级、跨轮 URL 去重、批量 LLM 摘要（5次合1次）、5 分钟搜索缓存、`structured_output` 强制 JSON
+- **记忆机制**：PostgreSQL JSONB 存完整对话历史（含报告全文），超 40 条自动 LLM 压缩，100 万字符三级保护（80%预警→LLM压缩→硬截断）
+- **并发控制**：Java Virtual Threads + Semaphore、L3/4 LLMClient 共享复用连接池
+- **容错三层**：LLM 重试（429/5xx 指数退避，4xx 不重试）→ Tavily→DDG 自动降级 → Agent 单轮异常跳过继续
+
+### RAG 知识库
+
+自建 ChromaDB 向量检索，5 种检索模式 —— 阿里云 text-embedding-v4 + jieba BM25 + Cross-Encoder 精排 + RRF 混合检索 + LLM 查询改写。双 embedding 管线共存，按 mode 参数切换，每层独立降级。
+
+### 评测体系
+
+完整 RAGAS 四大核心指标自实现（Faithfulness / Answer Relevance / Context Relevance / Answer Correctness），三层评测框架（Retriever 单独测 → Generator 单独测 → E2E 诊断矩阵），LLM-as-Judge 5维10分制打分 + std 噪音判定，40 题黄金测试集（6 种题型中英文）。A/B 对照框架支持 git 版本切换对比，报告一次存档后 judge 无限次免费复用。
 
 ---
 
@@ -78,26 +86,29 @@ docker compose up
 
 | 子项目 | 语言 | 行数 |
 |--------|------|:---:|
-| Python Agent | Python | ~2,000 |
-| Java 网关 | Java 21 | ~700 |
-| Vue 前端 | Vue 3 | ~700 |
-| **合计** | | **~3,400** |
+| Python Agent + RAG + 评测 | Python | ~3,100 |
+| Java 网关 | Java 21 | ~1,200 |
+| Vue 前端 | Vue 3 | ~900 |
+| **合计** | | **~5,200** |
 
 ### 核心文件
 
 ```
 agent/src/researcher/
-├── agent.py     四级 Agent + TOOLS + Prompt（~990 行）
-├── server.py    FastAPI + run_agent_with_sse()（~310 行）
-├── search.py    Tavily + DDG + 批量摘要 + 去重缓存（~260 行）
-├── kb.py        Chroma + embedding + 三级切块（~260 行）
-├── llm.py       OpenAI SDK 封装 + 重试（~130 行）
-└── config.py    环境变量（~40 行）
+├── agent.py          四级 Agent + 12 Prompt（~1,100 行）
+├── kb.py             Chroma + 5 种检索模式 + embedding（~500 行）
+├── server.py         FastAPI + run_agent_with_sse()（~360 行）
+├── search.py         Tavily + DDG + 批量摘要 + 缓存（~260 行）
+├── llm.py            AsyncOpenAI + 重试（~130 行）
+├── config.py         环境变量（~50 行）
+├── retrievers/       BM25 + RRF + CrossEncoder + 查询改写（~190 行）
+└── evaluation/       4 核心指标 + Judge + A/B 框架 + 主控（~700 行）
 
 java-gateway/.../
-├── ResearchController.java   SSE 透传 + 会话管理
-├── AgentClient.java          HTTP 调 Python
-├── SessionService.java       会话 CRUD + 僵尸清理 + 上下文压缩
+├── ResearchController.java   SSE 透传 + 会话管理 + JWT
+├── AgentClient.java          HTTP 调 Python + 流式 SSE
+├── SessionService.java       会话 CRUD + 自动压缩 + 僵尸清理
+├── SecurityConfig.java       WebFlux Security + JWT Filter
 └── JwtTokenProvider.java     JWT 签发/验证
 ```
 
