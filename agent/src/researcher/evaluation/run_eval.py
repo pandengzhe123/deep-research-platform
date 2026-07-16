@@ -28,7 +28,7 @@ from researcher.evaluation.answer_correctness import AnswerCorrectnessEvaluator
 from researcher.evaluation.judge import ReportJudge
 from researcher.evaluation._results import run_dir_for as _run_dir_for
 
-TESTSET = os.path.join(os.path.dirname(__file__), "golden_testset_v2.json")
+TESTSET = os.path.join(os.path.dirname(__file__), "golden_testset_v4.json")
 DOC_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "..", "eval")
 
 

@@ -1239,7 +1239,8 @@ class Level4Agent:
 
             if total_chars > MAX_HISTORY_CHARS:
                 messages, _ = await _truncate_context(
-                    messages, total_chars, MAX_HISTORY_CHARS, self.llm, self.emit, round_num, context_warned
+                    messages, total_chars, MAX_HISTORY_CHARS, self.llm, self.emit, round_num, context_warned,
+                    compressed_summaries=self._compressed_summaries,
                 )
 
             print(f"\n{'='*40}")
