@@ -89,7 +89,7 @@ def _embed_semantic(texts: list[str]) -> list[list[float]]:
             print(f"  ⚠️ Embedding 模型未缓存，正在下载 {_EMBED_MODEL_NAME}（约 120MB，仅首次）...")
             try:
                 _embed_semantic._model = SentenceTransformer(_EMBED_MODEL_NAME)
-                print(f"  ✅ 模型下载完成，后续启动将使用本地缓存")
+                print(f"  [OK] 模型下载完成，后续启动将使用本地缓存")
             except Exception as e:
                 raise RuntimeError(
                     f"Embedding 模型加载失败: {e}\n"
@@ -382,9 +382,9 @@ class KnowledgeBase:
             t0 = __import__('time').time()
             rw = QueryRewriter()
             variants = rw.rewrite(query)
-            print(f"  [full] ① 查询改写 ✅  → {len(variants)} 个变体 ({__import__('time').time() - t0:.1f}s)")
+            print(f"  [full] ① 查询改写 [OK]  → {len(variants)} 个变体 ({__import__('time').time() - t0:.1f}s)")
         except Exception as e:
-            print(f"  [full] ① 查询改写 ❌  → 回退原始查询 ({e})")
+            print(f"  [full] ① 查询改写 [FAIL]  → 回退原始查询 ({e})")
             variants = [query]
 
         # 2. 向量 + BM25 双路
@@ -414,7 +414,7 @@ class KnowledgeBase:
                     seen.add(key)
                     all_docs.append({"content": c, "meta": d.get("metadata", {})})
                     bm_hits += 1
-        print(f"  [full] ② 双路召回 ✅  → 去重后 {len(all_docs)} 条 ({__import__('time').time() - t0:.1f}s)")
+        print(f"  [full] ② 双路召回 [OK]  → 去重后 {len(all_docs)} 条 ({__import__('time').time() - t0:.1f}s)")
 
         if not all_docs:
             print(f"  [full] ③ 粗召回为空，跳过精排")
@@ -426,9 +426,9 @@ class KnowledgeBase:
             t0 = __import__('time').time()
             reranker = build_reranker()
             all_docs = reranker.rerank(query, all_docs, top_n=n_results)
-            print(f"  [full] ③ 精排 ✅  ({__import__('time').time() - t0:.1f}s)")
+            print(f"  [full] ③ 精排 [OK]  ({__import__('time').time() - t0:.1f}s)")
         except Exception as e:
-            print(f"  [full] ③ 精排 ❌  → 回退粗排取前 {n_results} ({e})")
+            print(f"  [full] ③ 精排 [FAIL]  → 回退粗排取前 {n_results} ({e})")
             all_docs = all_docs[:n_results]
 
         for d in all_docs:

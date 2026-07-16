@@ -1,0 +1,57 @@
+name: 回归测试
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+  # 允许手动触发
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '回归模式'
+        required: false
+        default: 'retriever'
+        type: choice
+        options: ['retriever', 'format', 'all']
+
+jobs:
+  unit-tests:
+    name: 单元测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: 安装依赖
+        run: |
+          pip install openai httpx python-dotenv pydantic chromadb
+      - name: 语法检查
+        run: |
+          python -m py_compile agent/src/researcher/trace.py
+          python -m py_compile agent/src/researcher/evaluation/run_regression.py
+          python -m py_compile agent/src/researcher/evaluation/judge.py
+          python -m py_compile agent/src/researcher/evaluation/faithfulness.py
+          echo "Syntax OK"
+
+  # 检索回归需要 ChromaDB 数据和 Embedding API Key，CI 环境中暂不可用
+  # 本地运行: python -m researcher.evaluation.run_regression --mode retriever
+  regression-retriever:
+    name: 检索回归 (本地运行)
+    runs-on: ubuntu-latest
+    if: false  # 禁止自动运行，本地手动跑
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: 安装依赖
+        run: pip install openai httpx python-dotenv pydantic chromadb jieba rank-bm25
+      - name: 检索回归 (v2)
+        env:
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          EMBED_MODEL: text-embedding-v4
+        run: |
+          cd agent
+          python -m src.researcher.evaluation.run_regression --mode retriever --retrieval-mode v2

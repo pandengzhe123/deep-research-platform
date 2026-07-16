@@ -1,0 +1,11 @@
+{
+  "retriever_hit_rate": 0.875,
+  "retriever_v2_hit_rate": 0.875,
+  "retriever_v2_mrr": 0.9033,
+  "retriever_hybrid_hit_rate": 0.8571428571428571,
+  "retriever_hybrid_mrr": 0.8817,
+  "retriever_rerank_hit_rate": 0.875,
+  "retriever_rerank_mrr": 0.9137,
+  "retriever_full_hit_rate": 0.8571428571428571,
+  "retriever_full_mrr": 0.9152
+}
