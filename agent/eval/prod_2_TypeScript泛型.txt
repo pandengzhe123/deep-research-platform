@@ -1,0 +1,5 @@
+# TypeScript泛型
+
+TypeScript 的泛型(Generics)允许在定义函数、接口和类时延迟指定类型。使用尖括号语法<T>声明类型参数。泛型约束(extends)限制类型参数必须满足特定接口。条件类型(Conditional Types)根据类型关系选择不同分支。映射类型(Mapped Types)基于已有类型创建新类型。
+
+分类: 编程语言

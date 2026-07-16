@@ -12,6 +12,8 @@ import logging
 import os
 import traceback
 import uuid
+from datetime import datetime
+from pathlib import Path
 from typing import AsyncGenerator
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile
@@ -24,6 +26,7 @@ from .agent import ClarifyHelper, FastLevel1Agent, Level2Agent, Level3Agent, Lev
 from .config import config
 from .kb import kb
 from .llm import LLMClient
+from .trace import TraceRun
 
 log = logging.getLogger(__name__)
 
@@ -114,10 +117,19 @@ async def run_agent_with_sse(
                 return
             on_progress({"step": "planned", "message": f"需求明确: {check.get('summary', '')}"})
 
-        # ---- 创建 Agent（走 agent.py 的真 Agent） ----
+        # ---- 创建 TraceRun + Agent（走 agent.py 的真 Agent） ----
         # 从 search_mode 推导 kb_enabled（前端不再传 kb_enabled 旧字段）
+        reports_dir = Path(__file__).parent.parent.parent / "reports" / datetime.now().strftime("%Y%m%d_%H%M%S")
+        reports_dir.mkdir(parents=True, exist_ok=True)
+
+        trace = TraceRun(
+            question=question, output_dir=str(reports_dir),
+            level=level, model=config.llm_model, search_mode=search_mode,
+        )
+        await trace.__aenter__()
+
         _kb = kb_enabled or (search_mode in ("hybrid", "rag_only"))
-        _kw = dict(on_progress=on_progress, kb_enabled=_kb, user_id=user_id, rag_doc_ids=rag_doc_ids, search_mode=search_mode)
+        _kw = dict(on_progress=on_progress, kb_enabled=_kb, user_id=user_id, rag_doc_ids=rag_doc_ids, search_mode=search_mode, trace=trace)
         if level == 1:
             agent = FastLevel1Agent(**_kw)
         elif level == 3:
@@ -197,9 +209,12 @@ async def run_agent_with_sse(
                     await task
                 except (aio.CancelledError, Exception):
                     pass
+            # 确保 trace 被 flush（即使客户端断开也保存）
+            await trace.__aexit__(None, None, None)
 
     except Exception as e:
         log.exception("run_agent_with_sse 异常")
+        await trace.__aexit__(type(e), e, e.__traceback__)
         yield {"event": "error", "data": json.dumps({
             "message": str(e), "traceback": traceback.format_exc(),
         })}

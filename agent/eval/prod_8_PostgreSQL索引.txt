@@ -1,0 +1,5 @@
+# PostgreSQL索引
+
+PostgreSQL 支持 B-tree（默认）、Hash、GiST、GIN、SP-GiST 和 BRIN 索引。B-tree 适合等值和范围查询。GIN 倒排索引加速全文搜索和 JSONB 键存在查询。BRIN 块范围索引适合超大表的自然排序列。部分索引(Partial Index)只索引满足条件的行。表达式索引基于函数结果创建索引。
+
+分类: 数据库

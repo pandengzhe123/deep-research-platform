@@ -1,0 +1,5 @@
+# Feed 流设计
+
+社交媒体 Feed 流的核心挑战是读取延迟和写扩散的平衡。Pull 模式(读扩散)——用户刷 Feed 时实时拉取所有关注者的最新帖子并合并排序。适合粉丝数少的用户但大 V 的关注者拉取成本高。Push 模式(写扩散)——用户发帖时写入所有粉丝的收件箱(Timeline)，粉丝读自己收件箱即可。适合大 V 但存储成本高。Push-Pull 混合——普通用户 Push，大 V Pull。Redis Sorted Set 存储 Timelines，ZREVRANGE 按时间降序读取。Fanout Service 负责将新帖子推送到粉丝收件箱。
+
+分类: System Design

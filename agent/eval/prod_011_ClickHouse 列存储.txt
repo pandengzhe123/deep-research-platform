@@ -1,0 +1,5 @@
+# ClickHouse 列存储
+
+ClickHouse 是 Yandex 开源的面向 OLAP 的列式数据库。MergeTree 引擎族——ReplacingMergeTree、SummingMergeTree、AggregatingMergeTree。数据按排序键分区——ORDER BY (timestamp, user_id)。后台合并(Merge)通过多线程异步进行。向量化执行引擎——一次处理整个列块而非逐行。PREWHERE 优化——先过滤轻量列再读取重量列。物化视图自动预聚合。字典(Dictionary)映射外部 CSV/MySQL 数据源为内存哈希表。
+
+分类: 数据库

@@ -18,6 +18,7 @@ class SearchTool:
     def __init__(self, on_progress=None):
         self.tavily = AsyncTavilyClient(api_key=config.tavily_api_key)
         self.llm = LLMClient()
+        self.trace = None  # TraceRun 实例，由 Agent 在构造后设置
         self._seen_urls: set[str] = set()  # 跨轮 URL 去重，避免重复摘要
         self._search_cache: dict[str, tuple[float, dict]] = {}  # key → (timestamp, result)
         self._cache_ttl = int(os.getenv("SEARCH_CACHE_TTL", "300"))  # 缓存秒数，默认 5 分钟
@@ -110,6 +111,7 @@ class SearchTool:
         max_results: int = 5,
     ) -> str:
         """执行搜索、抓取网页、摘要，返回格式化结果。"""
+        t0 = time.time()
         # 1. 并行搜索（Tavily 优先，失败自动降级 DDG）
         tasks = [
             self._do_search(q, max_results, True)
@@ -142,6 +144,12 @@ class SearchTool:
         # 4. 批量 LLM 摘要（一次调用处理所有网页，大幅减少耗时）
         valid = [(url, r, c) for (url, r), c in zip(items, contents) if c]
         if not valid:
+            if self.trace:
+                await self.trace.record_search(
+                    queries=queries, result_count=0, deduped_count=skipped,
+                    total_duration_ms=int((time.time() - t0) * 1000),
+                    success=True,
+                )
             return "未找到相关结果。"
 
         summaries = await self._batch_summarize(valid)
@@ -158,7 +166,16 @@ class SearchTool:
                 output_parts.append(f"\n关键事实: {'; '.join(s['key_facts'])}")
             output_parts.append("\n" + "-" * 60)
 
-        return "\n".join(output_parts) if len(output_parts) > 1 else "未找到相关结果。"
+        result = "\n".join(output_parts) if len(output_parts) > 1 else "未找到相关结果。"
+        if self.trace:
+            await self.trace.record_search(
+                queries=queries,
+                result_count=len(summaries),
+                deduped_count=skipped,
+                total_duration_ms=int((time.time() - t0) * 1000),
+                success=True,
+            )
+        return result
 
     async def search_fast(
         self,
@@ -166,6 +183,7 @@ class SearchTool:
         max_results: int = 3,
     ) -> str:
         """快速搜索 —— 跳过 LLM 摘要，Tavily 优先，失败降级 DDG。"""
+        t0 = time.time()
         tasks = [
             self._do_search(q, max_results, False)
             for q in queries
@@ -192,7 +210,16 @@ class SearchTool:
             output_parts.append(f"\n{content}")
             output_parts.append("\n" + "-" * 60)
 
-        return "\n".join(output_parts) if len(output_parts) > 1 else "未找到相关结果。"
+        result = "\n".join(output_parts) if len(output_parts) > 1 else "未找到相关结果。"
+        if self.trace:
+            await self.trace.record_search(
+                queries=queries,
+                result_count=len(seen),
+                deduped_count=0,
+                total_duration_ms=int((time.time() - t0) * 1000),
+                success=True,
+            )
+        return result
 
     async def _fetch_content(self, url: str, result: dict) -> str | None:
         """抓取网页内容（优先用 Tavily raw_content，否则 HTTP 抓取）。"""

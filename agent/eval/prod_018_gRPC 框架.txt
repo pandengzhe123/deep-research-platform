@@ -1,0 +1,5 @@
+# gRPC 框架
+
+gRPC 是 Google 的远程过程调用框架。使用 Protocol Buffers(proto3) 定义服务接口和消息格式——IDL 编译生成客户端/服务端代码。HTTP/2 传输层支持多路复用和头部压缩。四种服务类型——Unary(单请求单响应)、Server Streaming、Client Streaming、Bidirectional Streaming。拦截器(Interceptor)在请求前后插入逻辑——认证、日志、限流。Deadline/Timeout 防止请求无限等待。负载均衡——客户端负载均衡通过 DNS 解析多个后端。
+
+分类: 网络

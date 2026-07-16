@@ -1,0 +1,5 @@
+# HTTP/3 协议
+
+HTTP/3 基于 QUIC 协议而非 TCP。QUIC 基于 UDP——0-RTT 握手减少连接延迟，多路复用在传输层消除 HTTP/2 的队头阻塞。连接迁移(Connection Migration)支持客户端 IP 切换不断连。QPACK 替代 HPACK 做头部压缩——单流阻塞不再影响其他流。TLS 1.3 内置在 QUIC 中——所有数据默认加密。Alt-Svc 头部告知客户端服务器支持 HTTP/3。
+
+分类: 网络

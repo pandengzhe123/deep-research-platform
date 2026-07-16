@@ -1,0 +1,9 @@
+MySQL 关系型数据库
+
+MySQL 是一个开源的关系型数据库管理系统（RDBMS），由瑞典公司 MySQL AB 开发，后被 Oracle 收购。它使用 SQL（Structured Query Language）作为查询语言，支持 ACID 事务特性。
+
+MySQL 的核心存储引擎是 InnoDB，从 5.5 版本开始成为默认引擎。InnoDB 支持行级锁、外键约束和崩溃恢复。它的 B+ 树索引结构使得范围查询非常高效。另一个常用引擎是 MyISAM，特点是读速度快但不支持事务。
+
+MySQL 的主从复制（Master-Slave Replication）是实现高可用和读写分离的基础。主库记录 binlog，从库通过 I/O 线程拉取 binlog 并在本地重放。半同步复制（Semi-Sync Replication）确保至少一个从库收到 binlog 后才返回客户端，兼顾性能和数据安全。
+
+查询优化方面，EXPLAIN 命令可以分析 SQL 执行计划，帮助定位全表扫描和索引失效问题。联合索引遵循最左前缀原则——查询条件必须包含索引的第一列才能利用索引。慢查询日志（Slow Query Log）记录执行时间超过 long_query_time 阈值的 SQL，是性能调优的起点。

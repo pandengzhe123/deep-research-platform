@@ -1,0 +1,9 @@
+Go 编程语言
+
+Go（又称 Golang）是由 Google 的 Robert Griesemer、Rob Pike 和 Ken Thompson 于 2009 年发布的开源编程语言。设计目标是简洁、高效、并发能力强，适合构建网络服务和系统工具。
+
+Go 的并发模型基于 CSP（Communicating Sequential Processes）理论，核心原语是 goroutine 和 channel。goroutine 是轻量级协程——启动一个 goroutine 只需 2KB 栈空间，一个程序可以运行数十万个。channel 用于 goroutine 间的通信和同步，遵循"不要通过共享内存来通信，而通过通信来共享内存"的设计哲学。go 关键字启动 goroutine，<- 操作符从 channel 收发数据。
+
+Go 的语法简洁——没有类继承，通过 struct 组合和 interface 实现多态。interface 是隐式实现的，不需要显式声明"implements"。错误处理通过返回 error 值而非异常，defer 关键字确保资源释放。内置的 gofmt 工具统一代码格式。标准库丰富——net/http 构建 HTTP 服务，database/sql 操作数据库，encoding/json 处理 JSON。
+
+Docker、Kubernetes、Prometheus、Etcd 等重要基础设施项目都是用 Go 编写的。Go 编译为单个静态二进制文件，无需运行时依赖，容器化部署非常友好。模块系统从 1.11 版本引入 go.mod 文件管理依赖。

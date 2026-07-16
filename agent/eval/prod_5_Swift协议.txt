@@ -1,0 +1,5 @@
+# Swift协议
+
+Swift 的协议(Protocol)定义一组方法和属性的蓝图。结构体和类可以通过遵循协议来提供具体实现。协议扩展(Protocol Extension)为协议提供默认实现。关联类型(associatedtype)使协议支持泛型。@objc 协议兼容 Objective-C 运行时。
+
+分类: 编程语言

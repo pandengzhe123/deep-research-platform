@@ -1,0 +1,5 @@
+# DynamoDB设计
+
+Amazon DynamoDB 是全托管 NoSQL 键值数据库。主键由分区键(Hash Key)和可选的排序键(Range Key)组成。读写容量可配置按需或预置模式。GSI(全局二级索引)支持不同分区键的查询。DynamoDB Streams 捕获数据变更事件。DAX 缓存集群提供微秒级读取。
+
+分类: 数据库

@@ -1,0 +1,5 @@
+# CNI 网络插件
+
+Kubernetes 网络通过 CNI(Container Network Interface) 插件实现。Calico 使用 BGP 协议在各节点间分发路由——纯三层路由无 Overlay 封装。Flannel 支持多种后端——VXLAN 创建 L2 Overlay、host-gw 直接路由。Cilium 基于 eBPF 在内核层面处理网络和负载均衡——XDP 程序在网卡驱动层丢弃 DDoS 攻击包。NetworkPolicy 实现微分段——只允许特定标签的 Pod 间通信。
+
+分类: 容器与编排

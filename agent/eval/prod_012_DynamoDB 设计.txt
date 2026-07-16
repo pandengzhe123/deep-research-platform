@@ -1,0 +1,5 @@
+# DynamoDB 设计
+
+Amazon DynamoDB 是全托管 NoSQL。主键——分区键(Hash Key)决定数据所在分区，可选的排序键(Range Key)在同分区内排序。RCU(读容量单位)每 4KB 一次强一致性读，WCU(写容量单位)每 1KB 一次写。自适应容量(Adaptive Capacity)自动将热分区的流量分散。GSI(全局二级索引)可用不同分区键查询，LSI(本地二级索引)共享分区键不同排序键。DynamoDB Streams 捕获数据变更——24 小时窗口内可重放。TTL 自动删除过期项。
+
+分类: 数据库

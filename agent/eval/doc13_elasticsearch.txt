@@ -1,0 +1,9 @@
+Elasticsearch 全文搜索引擎
+
+Elasticsearch 是一个基于 Lucene 的分布式搜索和分析引擎，由 Shay Banon 于 2010 年发布。它提供近实时（Near Real-Time）的搜索能力——文档索引后通常在 1 秒内就可被搜索到。
+
+核心概念：索引（Index）类似数据库的表，文档（Document）是一行记录，字段（Field）是一列。倒排索引（Inverted Index）是其快速搜索的关键——将文档中的词映射到包含该词的文档列表，搜索时直接查词表而非逐篇扫描。分词器（Analyzer）负责将文本切分为词项，中文常用 IK 分词器处理复杂的中文分词。
+
+Elasticsearch 天然支持分布式集群。索引被拆分为多个分片（Shard），每个分片可以有副本（Replica）。主分片负责写入，副本分片提供读取和故障转移。集群通过 Zen Discovery 协议自动发现节点，选举 Master 节点管理集群状态。
+
+查询 DSL 基于 JSON，支持全文搜索（match）、精确匹配（term）、范围查询（range）、布尔组合（bool must/should/must_not）。聚合（Aggregation）功能可以对搜索结果进行统计分析——计算平均值、分组计数、日期直方图等，相当于 SQL 的 GROUP BY。ES 常与 Logstash（数据采集）和 Kibana（可视化）组合，称为 ELK Stack，用于日志分析和监控。

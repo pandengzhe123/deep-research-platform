@@ -1,0 +1,5 @@
+# Scala隐式转换
+
+Scala 的隐式转换(implicit)在编译期自动插入类型转换。隐式参数自动从上下文中查找匹配值。隐式类为已有类型扩展方法。given/using 语法在 Scala 3 中取代 implicit，提供更清晰的语义。类型类(Type Class)模式通过隐式实现特设多态。
+
+分类: 编程语言

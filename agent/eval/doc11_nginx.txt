@@ -1,0 +1,9 @@
+Nginx 是一个高性能的 HTTP 服务器和反向代理服务器，由俄罗斯工程师 Igor Sysoev 于 2004 年发布。它采用事件驱动（event-driven）架构和异步非阻塞 I/O 模型，单机可以处理数万并发连接，"C10K 问题"的解决方案之一。
+
+反向代理模式下，Nginx 接收客户端请求后转发给上游服务器（如 Python FastAPI、Java Spring Boot），再将响应返回客户端。这个过程对客户端透明——客户端只知道 Nginx 的地址，不知道后端服务的存在。
+
+负载均衡是 Nginx 的核心功能。支持的策略包括：轮询（round-robin，默认）、加权轮询（weighted round-robin）、IP 哈希（ip_hash，同一客户端固定路由到同一后端）、最少连接（least_conn）。健康检查通过 proxy_next_upstream 和 max_fails 参数实现——连续失败一定次数后自动将故障节点摘除。
+
+Nginx 的配置使用声明式语法，核心文件是 nginx.conf。http 块定义全局 HTTP 设置，server 块定义虚拟主机，location 块匹配 URL 路径并指定处理规则。proxy_pass 指令将请求转发到后端，proxy_set_header 可以传递客户端真实 IP 等请求头。gzip 压缩默认开启，能减少 60%-80% 的文本传输量。
+
+对于 SSE（Server-Sent Events）流式推送，Nginx 需要关闭代理缓冲：proxy_buffering off、chunked_transfer_encoding on，确保后端每推送一个事件就立刻转发，而不是等缓冲区满了才发送。

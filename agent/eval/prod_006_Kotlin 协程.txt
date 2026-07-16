@@ -1,0 +1,5 @@
+# Kotlin 协程
+
+Kotlin 协程在 JVM 上实现轻量级并发。suspend 函数挂起时不阻塞线程——编译器生成状态机自动管理挂起点。launch 启动不返回结果的协程，async 返回 Deferred<T>。CoroutineContext 包含 Job 和 Dispatcher——Dispatchers.IO 用于网络操作，Dispatchers.Default 用于 CPU 密集型。结构化并发 Structured Concurrency——父协程等待所有子协程完成。Channel 用于协程间通信，Flow 是冷流、StateFlow 是热流。
+
+分类: 编程语言

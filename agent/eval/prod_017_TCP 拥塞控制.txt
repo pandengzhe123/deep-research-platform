@@ -1,0 +1,5 @@
+# TCP 拥塞控制
+
+TCP 拥塞控制算法——Reno(快速重传+快速恢复)、CUBIC(Linux 默认,三次函数增长窗口)、BBR(Google 提出,基于带宽和 RTT 而非丢包)。拥塞窗口(CWND)限制未确认数据量。慢启动阶段每 RTT CWND 翻倍直到达到 ssthresh。Reno 遇到丢包 CWND 减半，CUBIC 不依赖丢包信号。显式拥塞通知(ECN)由路由器标记而非丢包。QUIC 也在传输层实现对等拥塞控制。
+
+分类: 网络

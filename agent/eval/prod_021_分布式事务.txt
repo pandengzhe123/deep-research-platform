@@ -1,0 +1,5 @@
+# 分布式事务
+
+分布式事务协议——Two-Phase Commit(2PC) Coordinator 先 Prepare 再 Commit/Abort。Participant 在 Prepare 后锁定资源直到收到最终决定——可能出现阻塞。Three-Phase Commit(3PC) 引入 PreCommit 阶段降低阻塞概率但不消除。Saga 模式——长事务拆分成多个本地事务和补偿操作。TCC(Try-Confirm-Cancel) 三阶段——Try 预留资源，Confirm 确认，Cancel 释放。Seata 框架实现了 AT/TCC/Saga 多种模式。
+
+分类: 分布式系统

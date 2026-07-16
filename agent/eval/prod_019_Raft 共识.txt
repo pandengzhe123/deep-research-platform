@@ -1,0 +1,5 @@
+# Raft 共识
+
+Raft 将共识问题分解为三部分——Leader Election、Log Replication、Safety。任期(Term)单调递增标识 Leader 周期。心跳(Heartbeat)维持 Leader 权威。日志条目先复制到多数 Follower 才提交——COMMITTED 状态保证不丢失。Leader 日志总是领先，Follower 冲突日志被覆盖——安全性由 Leader Append-Only 保证。使用 Raft 的系统——Etcd(Kubernetes)、Consul(HashiCorp)、TiKV(PingCAP)。
+
+分类: 分布式系统

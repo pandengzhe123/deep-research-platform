@@ -1,0 +1,902 @@
+[
+  {
+    "type": "simple",
+    "question": "Python 是谁创建的",
+    "expected_docs": [
+      "doc1.txt"
+    ],
+    "expected_chunks": [
+      "Guido van Rossum"
+    ],
+    "ground_truth": "Guido van Rossum"
+  },
+  {
+    "type": "simple",
+    "question": "Python 什么时候发布的",
+    "expected_docs": [
+      "doc1.txt"
+    ],
+    "expected_chunks": [
+      "1991"
+    ],
+    "ground_truth": "1991年"
+  },
+  {
+    "type": "simple",
+    "question": "Linux 内核是谁创建的",
+    "expected_docs": [
+      "doc4.txt"
+    ],
+    "expected_chunks": [
+      "Linus Torvalds"
+    ],
+    "ground_truth": "Linus Torvalds"
+  },
+  {
+    "type": "simple",
+    "question": "Docker 容器有什么特点",
+    "expected_docs": [
+      "doc3.txt"
+    ],
+    "expected_chunks": [
+      "lightweight",
+      "isolated"
+    ],
+    "ground_truth": "轻量级、隔离的环境"
+  },
+  {
+    "type": "simple",
+    "question": "Git 是什么时候创建的",
+    "expected_docs": [
+      "doc5.txt"
+    ],
+    "expected_chunks": [
+      "2005"
+    ],
+    "ground_truth": "2005年"
+  },
+  {
+    "type": "multi_doc",
+    "question": "Linus Torvalds 创建了哪些项目",
+    "expected_docs": [
+      "doc4.txt",
+      "doc5.txt"
+    ],
+    "expected_chunks": [
+      "Linux",
+      "Git"
+    ],
+    "ground_truth": "Linux 内核和 Git 版本控制系统"
+  },
+  {
+    "type": "multi_doc",
+    "question": "1991年诞生了哪些技术",
+    "expected_docs": [
+      "doc1.txt",
+      "doc4.txt"
+    ],
+    "expected_chunks": [
+      "Python",
+      "Linux"
+    ],
+    "ground_truth": "Python 和 Linux"
+  },
+  {
+    "type": "multi_doc",
+    "question": "Python 和 Docker 有什么共同特点",
+    "expected_docs": [
+      "doc1.txt",
+      "doc3.txt"
+    ],
+    "expected_chunks": [
+      "application",
+      "development"
+    ],
+    "ground_truth": "都用于应用开发和部署"
+  },
+  {
+    "type": "multi_doc",
+    "question": "Git 和 Linux 有什么关系",
+    "expected_docs": [
+      "doc4.txt",
+      "doc5.txt"
+    ],
+    "expected_chunks": [
+      "Linus Torvalds"
+    ],
+    "ground_truth": "都是 Linus Torvalds 创建的"
+  },
+  {
+    "type": "precision",
+    "question": "RFC 7231 定义的状态码有哪些",
+    "expected_docs": [
+      "doc2.txt"
+    ],
+    "expected_chunks": [
+      "200",
+      "404",
+      "500"
+    ],
+    "ground_truth": "200 OK, 404 Not Found, 500 Internal Server Error"
+  },
+  {
+    "type": "precision",
+    "question": "RFC 7231 中 GET 方法的特点",
+    "expected_docs": [
+      "doc2.txt"
+    ],
+    "expected_chunks": [
+      "retrieving resources",
+      "without side effects"
+    ],
+    "ground_truth": "用于获取资源，无副作用"
+  },
+  {
+    "type": "precision",
+    "question": "Docker Compose 的配置文件格式",
+    "expected_docs": [
+      "doc3.txt"
+    ],
+    "expected_chunks": [
+      "YAML"
+    ],
+    "ground_truth": "YAML 格式"
+  },
+  {
+    "type": "no_answer",
+    "question": "Java 是什么时候创建的",
+    "expected_docs": [],
+    "expected_chunks": [
+      "未找到"
+    ],
+    "ground_truth": null
+  },
+  {
+    "type": "no_answer",
+    "question": "Kubernetes 的架构是怎样的",
+    "expected_docs": [
+      "doc3.txt"
+    ],
+    "expected_chunks": [],
+    "ground_truth": null
+  },
+  {
+    "type": "no_answer",
+    "question": "比特币的创始人是",
+    "expected_docs": [],
+    "expected_chunks": [
+      "未找到"
+    ],
+    "ground_truth": null
+  },
+  {
+    "type": "no_answer",
+    "question": "JavaScript 的运行环境",
+    "expected_docs": [],
+    "expected_chunks": [
+      "未找到"
+    ],
+    "ground_truth": null
+  },
+  {
+    "type": "colloquial",
+    "question": "怎么搭建一个容器应用",
+    "expected_docs": [
+      "doc3.txt"
+    ],
+    "expected_chunks": [
+      "Docker",
+      "container"
+    ],
+    "ground_truth": "使用 Docker 通过 Dockerfile 构建镜像并运行容器"
+  },
+  {
+    "type": "colloquial",
+    "question": "怎么管理代码版本",
+    "expected_docs": [
+      "doc5.txt"
+    ],
+    "expected_chunks": [
+      "Git",
+      "commit",
+      "branch"
+    ],
+    "ground_truth": "使用 Git 通过 commit、branch、merge 管理代码版本"
+  },
+  {
+    "type": "colloquial",
+    "question": "Python 都能用来干啥",
+    "expected_docs": [
+      "doc1.txt"
+    ],
+    "expected_chunks": [
+      "artificial intelligence",
+      "machine learning",
+      "data science",
+      "web"
+    ],
+    "ground_truth": "AI、机器学习、数据科学、Web 开发、自动化"
+  },
+  {
+    "type": "colloquial",
+    "question": "怎么让多个容器一起跑起来",
+    "expected_docs": [
+      "doc3.txt"
+    ],
+    "expected_chunks": [
+      "Docker Compose",
+      "YAML"
+    ],
+    "ground_truth": "使用 Docker Compose 在 YAML 文件中定义多容器应用"
+  },
+  {
+    "type": "simple",
+    "question": "Redis 是谁创建的",
+    "expected_docs": [
+      "doc6_redis.txt"
+    ],
+    "expected_chunks": [
+      "Salvatore Sanfilippo"
+    ],
+    "ground_truth": "Salvatore Sanfilippo"
+  },
+  {
+    "type": "simple",
+    "question": "Redis 的默认端口是多少",
+    "expected_docs": [
+      "doc6_redis.txt"
+    ],
+    "expected_chunks": [
+      "6379"
+    ],
+    "ground_truth": "6379"
+  },
+  {
+    "type": "simple",
+    "question": "Kafka 是哪家公司开发的",
+    "expected_docs": [
+      "doc7_kafka.txt"
+    ],
+    "expected_chunks": [
+      "LinkedIn"
+    ],
+    "ground_truth": "LinkedIn"
+  },
+  {
+    "type": "simple",
+    "question": "Kubernetes 的简称是什么",
+    "expected_docs": [
+      "doc8_k8s.txt"
+    ],
+    "expected_chunks": [
+      "K8s"
+    ],
+    "ground_truth": "K8s"
+  },
+  {
+    "type": "simple",
+    "question": "向量数据库用什么算法加速检索",
+    "expected_docs": [
+      "doc9_vectordb.txt"
+    ],
+    "expected_chunks": [
+      "HNSW"
+    ],
+    "ground_truth": "HNSW 算法"
+  },
+  {
+    "type": "precision",
+    "question": "Redis 提供哪两种持久化方式",
+    "expected_docs": [
+      "doc6_redis.txt"
+    ],
+    "expected_chunks": [
+      "RDB",
+      "AOF"
+    ],
+    "ground_truth": "RDB 快照和 AOF 日志"
+  },
+  {
+    "type": "precision",
+    "question": "Kafka 从哪个版本开始引入 KRaft 模式",
+    "expected_docs": [
+      "doc7_kafka.txt"
+    ],
+    "expected_chunks": [
+      "2.8"
+    ],
+    "ground_truth": "2.8 版本"
+  },
+  {
+    "type": "precision",
+    "question": "Kubernetes 中最小的调度单位是什么",
+    "expected_docs": [
+      "doc8_k8s.txt"
+    ],
+    "expected_chunks": [
+      "Pod"
+    ],
+    "ground_truth": "Pod"
+  },
+  {
+    "type": "precision",
+    "question": "Kubernetes 用什么组件保存集群配置数据",
+    "expected_docs": [
+      "doc8_k8s.txt"
+    ],
+    "expected_chunks": [
+      "etcd"
+    ],
+    "ground_truth": "etcd（分布式键值存储）"
+  },
+  {
+    "type": "multi_doc",
+    "question": "Redis 和 Kafka 都能用来做消息队列吗",
+    "expected_docs": [
+      "doc6_redis.txt",
+      "doc7_kafka.txt"
+    ],
+    "expected_chunks": [
+      "消息队列",
+      "消息"
+    ],
+    "ground_truth": "都可以，Redis 可作消息中间件/消息队列，Kafka 是专门的消息系统"
+  },
+  {
+    "type": "multi_doc",
+    "question": "Kubernetes 和 Docker 是什么关系",
+    "expected_docs": [
+      "doc8_k8s.txt",
+      "doc3.txt"
+    ],
+    "expected_chunks": [
+      "Docker",
+      "编排"
+    ],
+    "ground_truth": "Docker 负责容器化，Kubernetes 负责编排调度，两者配合使用"
+  },
+  {
+    "type": "multi_doc",
+    "question": "向量数据库和 Chroma 是什么关系",
+    "expected_docs": [
+      "doc9_vectordb.txt"
+    ],
+    "expected_chunks": [
+      "Chroma",
+      "开源"
+    ],
+    "ground_truth": "Chroma 是一种轻量级的开源向量数据库"
+  },
+  {
+    "type": "colloquial",
+    "question": "Redis 为什么这么快",
+    "expected_docs": [
+      "doc6_redis.txt"
+    ],
+    "expected_chunks": [
+      "内存"
+    ],
+    "ground_truth": "因为数据都存储在内存中，读写速度极快"
+  },
+  {
+    "type": "colloquial",
+    "question": "怎么让 Kafka 处理更多消息",
+    "expected_docs": [
+      "doc7_kafka.txt"
+    ],
+    "expected_chunks": [
+      "分区"
+    ],
+    "ground_truth": "通过增加分区实现并行处理和水平扩展"
+  },
+  {
+    "type": "colloquial",
+    "question": "K8s 怎么自动增减服务器上的应用数量",
+    "expected_docs": [
+      "doc8_k8s.txt"
+    ],
+    "expected_chunks": [
+      "自动扩缩容",
+      "CPU"
+    ],
+    "ground_truth": "通过水平自动扩缩容，根据 CPU 使用率或自定义指标调整 Pod 数量"
+  },
+  {
+    "type": "colloquial",
+    "question": "RAG 系统里向量数据库是干嘛用的",
+    "expected_docs": [
+      "doc9_vectordb.txt"
+    ],
+    "expected_chunks": [
+      "检索",
+      "文档"
+    ],
+    "ground_truth": "存储文档切块的向量，检索时找到与用户问题最相关的文档片段"
+  },
+  {
+    "type": "no_answer",
+    "question": "MongoDB 是什么时候创建的",
+    "expected_docs": [],
+    "expected_chunks": [
+      "未找到"
+    ],
+    "ground_truth": null
+  },
+  {
+    "type": "no_answer",
+    "question": "Redis 的作者现在在哪家公司工作",
+    "expected_docs": [
+      "doc6_redis.txt"
+    ],
+    "expected_chunks": [],
+    "ground_truth": null
+  },
+  {
+    "type": "no_answer",
+    "question": "Kafka 和 RabbitMQ 哪个性能更好",
+    "expected_docs": [
+      "doc7_kafka.txt"
+    ],
+    "expected_chunks": [],
+    "ground_truth": null
+  },
+  {
+    "type": "no_answer",
+    "question": "Elasticsearch 支持向量检索吗",
+    "expected_docs": [],
+    "expected_chunks": [
+      "未找到"
+    ],
+    "ground_truth": null
+  },
+  {
+    "type": "simple",
+    "question": "MySQL 的默认存储引擎是什么",
+    "expected_docs": [
+      "doc10_mysql.txt"
+    ],
+    "expected_chunks": [
+      "InnoDB"
+    ],
+    "ground_truth": "InnoDB 是 MySQL 从 5.5 版本开始的默认存储引擎，支持行级锁、外键约束和崩溃恢复。"
+  },
+  {
+    "type": "simple",
+    "question": "MySQL 主从复制的原理是什么",
+    "expected_docs": [
+      "doc10_mysql.txt"
+    ],
+    "expected_chunks": [
+      "binlog",
+      "I/O 线程"
+    ],
+    "ground_truth": "主库记录 binlog，从库通过 I/O 线程拉取 binlog 并在本地重放。"
+  },
+  {
+    "type": "precision",
+    "question": "MySQL InnoDB 索引是什么数据结构",
+    "expected_docs": [
+      "doc10_mysql.txt"
+    ],
+    "expected_chunks": [
+      "B+ 树"
+    ],
+    "ground_truth": "InnoDB 使用 B+ 树索引结构。"
+  },
+  {
+    "type": "colloquial",
+    "question": "怎么查 MySQL 查询慢",
+    "expected_docs": [
+      "doc10_mysql.txt"
+    ],
+    "expected_chunks": [
+      "慢查询日志",
+      "EXPLAIN"
+    ],
+    "ground_truth": "使用 EXPLAIN 分析执行计划，开启慢查询日志记录耗时 SQL。"
+  },
+  {
+    "type": "simple",
+    "question": "Nginx 是谁创建的",
+    "expected_docs": [
+      "doc11_nginx.txt"
+    ],
+    "expected_chunks": [
+      "Igor Sysoev"
+    ],
+    "ground_truth": "Nginx 由俄罗斯工程师 Igor Sysoev 于 2004 年发布。"
+  },
+  {
+    "type": "precision",
+    "question": "Nginx 负载均衡有哪些策略",
+    "expected_docs": [
+      "doc11_nginx.txt"
+    ],
+    "expected_chunks": [
+      "轮询",
+      "IP 哈希",
+      "最少连接",
+      "加权轮询"
+    ],
+    "ground_truth": "Nginx 支持轮询、加权轮询、IP 哈希、最少连接等策略。"
+  },
+  {
+    "type": "colloquial",
+    "question": "Nginx 怎么配置 SSE 流式推送",
+    "expected_docs": [
+      "doc11_nginx.txt"
+    ],
+    "expected_chunks": [
+      "proxy_buffering off"
+    ],
+    "ground_truth": "关闭代理缓冲 proxy_buffering off 并开启 chunked_transfer_encoding on。"
+  },
+  {
+    "type": "simple",
+    "question": "Nginx 反向代理的核心指令是什么",
+    "expected_docs": [
+      "doc11_nginx.txt"
+    ],
+    "expected_chunks": [
+      "proxy_pass"
+    ],
+    "ground_truth": "proxy_pass 指令将请求转发到后端服务器。"
+  },
+  {
+    "type": "simple",
+    "question": "Git 是谁创建的",
+    "expected_docs": [
+      "doc12_git.txt"
+    ],
+    "expected_chunks": [
+      "Linus Torvalds",
+      "2005"
+    ],
+    "ground_truth": "Git 由 Linus Torvalds 于 2005 年创建。"
+  },
+  {
+    "type": "precision",
+    "question": "Git merge 和 rebase 的区别",
+    "expected_docs": [
+      "doc12_git.txt"
+    ],
+    "expected_chunks": [
+      "合并提交",
+      "线性历史"
+    ],
+    "ground_truth": "merge 产生合并提交保留分支脉络，rebase 改写历史为线性。不应 rebase 已推送的分支。"
+  },
+  {
+    "type": "colloquial",
+    "question": "Git 三个区是什么",
+    "expected_docs": [
+      "doc12_git.txt"
+    ],
+    "expected_chunks": [
+      "工作区",
+      "暂存区",
+      "本地仓库"
+    ],
+    "ground_truth": "工作区（Working Directory）、暂存区（Staging Area）、本地仓库（Local Repository）。"
+  },
+  {
+    "type": "multi_doc",
+    "question": "Git 和 Linux 的创建者分别是谁",
+    "expected_docs": [
+      "doc12_git.txt",
+      "doc4.txt"
+    ],
+    "expected_chunks": [
+      "Linus Torvalds"
+    ],
+    "ground_truth": "Git 和 Linux 都由 Linus Torvalds 创建。"
+  },
+  {
+    "type": "simple",
+    "question": "Elasticsearch 的核心搜索原理是什么",
+    "expected_docs": [
+      "doc13_elasticsearch.txt"
+    ],
+    "expected_chunks": [
+      "倒排索引"
+    ],
+    "ground_truth": "Elasticsearch 基于 Lucene 的倒排索引——将词映射到包含该词的文档列表。"
+  },
+  {
+    "type": "precision",
+    "question": "Elasticsearch 集群的分片和副本是什么",
+    "expected_docs": [
+      "doc13_elasticsearch.txt"
+    ],
+    "expected_chunks": [
+      "Shard",
+      "Replica"
+    ],
+    "ground_truth": "索引拆为多个分片（Shard），每个分片可以有副本（Replica）。主分片负责写入，副本提供读取和故障转移。"
+  },
+  {
+    "type": "colloquial",
+    "question": "ES 怎么查日志",
+    "expected_docs": [
+      "doc13_elasticsearch.txt"
+    ],
+    "expected_chunks": [
+      "ELK Stack",
+      "Logstash",
+      "Kibana"
+    ],
+    "ground_truth": "ELK Stack——Logstash 采集日志、Elasticsearch 存储和搜索、Kibana 可视化。"
+  },
+  {
+    "type": "simple",
+    "question": "MongoDB 的数据存储格式是什么",
+    "expected_docs": [
+      "doc14_mongodb.txt"
+    ],
+    "expected_chunks": [
+      "BSON"
+    ],
+    "ground_truth": "MongoDB 使用类似 JSON 的 BSON 格式存储数据。"
+  },
+  {
+    "type": "precision",
+    "question": "MongoDB 副本集如何实现故障转移",
+    "expected_docs": [
+      "doc14_mongodb.txt"
+    ],
+    "expected_chunks": [
+      "Raft",
+      "Primary",
+      "Secondary"
+    ],
+    "ground_truth": "Primary 故障时剩余 Secondary 通过 Raft 协议选举新 Primary，10-30 秒完成。"
+  },
+  {
+    "type": "colloquial",
+    "question": "MongoDB 怎么实现 JOIN",
+    "expected_docs": [
+      "doc14_mongodb.txt"
+    ],
+    "expected_chunks": [
+      "$lookup",
+      "聚合管道"
+    ],
+    "ground_truth": "聚合管道的 $lookup Stage 实现跨集合关联查询，类似 SQL JOIN。"
+  },
+  {
+    "type": "simple",
+    "question": "微服务架构的核心优势是什么",
+    "expected_docs": [
+      "doc15_microservices.txt"
+    ],
+    "expected_chunks": [
+      "独立部署",
+      "技术异构",
+      "故障隔离"
+    ],
+    "ground_truth": "独立部署、技术异构、故障隔离、团队自治。"
+  },
+  {
+    "type": "precision",
+    "question": "RabbitMQ 和 Kafka 的应用场景区别",
+    "expected_docs": [
+      "doc15_microservices.txt"
+    ],
+    "expected_chunks": [
+      "消息确认",
+      "流处理"
+    ],
+    "ground_truth": "RabbitMQ 适合需要保证单条消息可靠投递，Kafka 适合高吞吐流处理和事件溯源。"
+  },
+  {
+    "type": "colloquial",
+    "question": "微服务怎么找到对方",
+    "expected_docs": [
+      "doc15_microservices.txt"
+    ],
+    "expected_chunks": [
+      "服务发现",
+      "注册中心",
+      "Consul"
+    ],
+    "ground_truth": "通过服务发现机制——客户端或服务端从注册中心（Consul/Nacos）查询可用实例。"
+  },
+  {
+    "type": "simple",
+    "question": "Go 语言的并发模型基于什么理论",
+    "expected_docs": [
+      "doc16_go.txt"
+    ],
+    "expected_chunks": [
+      "CSP",
+      "goroutine",
+      "channel"
+    ],
+    "ground_truth": "基于 CSP 理论，核心原语是 goroutine 和 channel。"
+  },
+  {
+    "type": "precision",
+    "question": "Go 的 goroutine 有什么特点",
+    "expected_docs": [
+      "doc16_go.txt"
+    ],
+    "expected_chunks": [
+      "2KB",
+      "轻量级"
+    ],
+    "ground_truth": "goroutine 是轻量级协程，启动仅需 2KB 栈空间，可运行数十万个。"
+  },
+  {
+    "type": "multi_doc",
+    "question": "Go 语言和 Docker 是什么关系",
+    "expected_docs": [
+      "doc16_go.txt",
+      "doc3.txt"
+    ],
+    "expected_chunks": [
+      "Go",
+      "Docker"
+    ],
+    "ground_truth": "Docker 是用 Go 语言编写的，Go 编译为单二进制文件的特性使其适合容器化部署。"
+  },
+  {
+    "type": "simple",
+    "question": "JWT 由哪三部分组成",
+    "expected_docs": [
+      "doc17_jwt.txt"
+    ],
+    "expected_chunks": [
+      "Header",
+      "Payload",
+      "Signature"
+    ],
+    "ground_truth": "JWT 由 Header、Payload、Signature 三部分组成，用点号分隔。"
+  },
+  {
+    "type": "precision",
+    "question": "JWT 的 Access Token 和 Refresh Token 有什么区别",
+    "expected_docs": [
+      "doc17_jwt.txt"
+    ],
+    "expected_chunks": [
+      "15分钟",
+      "无状态",
+      "可被撤销"
+    ],
+    "ground_truth": "Access Token 短期有效（15-30分钟）无状态不可撤销，Refresh Token 长期有效（7-30天）可撤销。"
+  },
+  {
+    "type": "colloquial",
+    "question": "JWT 安全怎么保证",
+    "expected_docs": [
+      "doc17_jwt.txt"
+    ],
+    "expected_chunks": [
+      "httpOnly cookie",
+      "HTTPS",
+      "32 字节"
+    ],
+    "ground_truth": "密钥至少 32 字节随机字符串，使用 HTTPS 传输，httpOnly cookie 存储防 XSS。"
+  },
+  {
+    "type": "no_answer",
+    "question": "JWT 签名用 RS256 比 HS256 快多少",
+    "expected_docs": [],
+    "expected_chunks": [],
+    "ground_truth": "知识库中未涉及 RS256 和 HS256 的性能对比数据。"
+  },
+  {
+    "type": "simple",
+    "question": "Redis 有哪些数据类型",
+    "expected_docs": [
+      "doc18_redis2.txt"
+    ],
+    "expected_chunks": [
+      "String",
+      "Hash",
+      "List",
+      "Set",
+      "ZSet"
+    ],
+    "ground_truth": "String、Hash、List、Set、ZSet（有序集合）五种核心数据类型。"
+  },
+  {
+    "type": "precision",
+    "question": "Redis ZSet 适合什么场景",
+    "expected_docs": [
+      "doc18_redis2.txt"
+    ],
+    "expected_chunks": [
+      "排行榜",
+      "延迟队列",
+      "score"
+    ],
+    "ground_truth": "ZSet 适合排行榜（按 score 排序）、延迟队列、滑动窗口限流。"
+  },
+  {
+    "type": "multi_doc",
+    "question": "Redis 的分布式锁和主从复制分别怎么实现",
+    "expected_docs": [
+      "doc18_redis2.txt",
+      "doc10_mysql.txt",
+      "doc19_distributed_lock.txt"
+    ],
+    "expected_chunks": [
+      "Redlock",
+      "SETNX"
+    ],
+    "ground_truth": "分布式锁用 SETNX 或 Redlock 算法，主从复制通过 binlog 实现。"
+  },
+  {
+    "type": "simple",
+    "question": "分布式锁有哪几种常见实现方式",
+    "expected_docs": [
+      "doc19_distributed_lock.txt"
+    ],
+    "expected_chunks": [
+      "Redis",
+      "ZooKeeper",
+      "MySQL"
+    ],
+    "ground_truth": "基于 Redis、ZooKeeper、MySQL 三种主流实现方式。"
+  },
+  {
+    "type": "precision",
+    "question": "Redlock 算法如何获取锁",
+    "expected_docs": [
+      "doc19_distributed_lock.txt"
+    ],
+    "expected_chunks": [
+      "多数节点",
+      "N/2+1"
+    ],
+    "ground_truth": "向 N 个独立 Redis 节点请求锁，在多数节点（N/2+1）上成功获取则锁获取成功。"
+  },
+  {
+    "type": "colloquial",
+    "question": "分布式锁防止别人删我的锁怎么办",
+    "expected_docs": [
+      "doc19_distributed_lock.txt"
+    ],
+    "expected_chunks": [
+      "value 匹配",
+      "Lua 脚本"
+    ],
+    "ground_truth": "释放锁前用 Lua 脚本验证 value 是否匹配，防止误删其他客户端的锁。"
+  },
+  {
+    "type": "no_answer",
+    "question": "分布式锁的最佳超时时间设多少",
+    "expected_docs": [],
+    "expected_chunks": [],
+    "ground_truth": "没有固定值——取决于业务操作的最大耗时，通常设业务操作耗时 3-5 倍的冗余。"
+  },
+  {
+    "type": "multi_doc",
+    "question": "MySQL、MongoDB 和 Redis 的数据模型有什么区别",
+    "expected_docs": [
+      "doc10_mysql.txt",
+      "doc14_mongodb.txt",
+      "doc18_redis2.txt"
+    ],
+    "expected_chunks": [
+      "关系型",
+      "文档",
+      "key-value"
+    ],
+    "ground_truth": "MySQL 关系型表格模型，MongoDB 文档 BSON 模型，Redis key-value 多数据类型。"
+  },
+  {
+    "type": "multi_doc",
+    "question": "消息队列在哪些场景被使用",
+    "expected_docs": [
+      "doc7_kafka.txt",
+      "doc15_microservices.txt"
+    ],
+    "expected_chunks": [
+      "Kafka",
+      "异步通信"
+    ],
+    "ground_truth": "Kafka 在微服务异步通信、流处理、日志收集等场景使用。"
+  }
+]

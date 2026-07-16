@@ -1,0 +1,5 @@
+# 限流算法
+
+限流(Rate Limiting)保护 API 免于过载。Token Bucket——桶按固定速率填充 token，请求消耗 token，token 不足拒绝。Leaky Bucket——请求入队列，按固定速率处理，队列满拒绝。Fixed Window——时间窗口(如 1 分钟)内计数，简单但边界双倍问题严重。Sliding Window Log——记录每次请求时间戳，检查窗口内的数量。Sliding Window Counter——结合固定窗口的效率和滑动窗口的平滑。分布式限流——Redis INCR+EXPIRE 原子操作，或 Redis Sorted Set ZREMRANGEBYSCORE 清理过期记录。
+
+分类: System Design

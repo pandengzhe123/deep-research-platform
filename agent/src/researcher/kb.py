@@ -198,7 +198,7 @@ class KnowledgeBase:
         # ChromaDB 余弦距离范围 0-2（0=完全相同, 1=正交, 2=完全相反）。
         # text-embedding-v4 实测：相关文档 distance 约 0.7-0.85，不相关约 1.3+。
         # 用 distance 阈值（默认 1.0）而非 1-dist，后者在余弦距离下会变负数。
-        MAX_DISTANCE = float(os.getenv("KB_MAX_DISTANCE", "1.0"))
+        MAX_DISTANCE = float(os.getenv("KB_MAX_DISTANCE", "1.2"))
         docs = []
         for doc, meta, dist in zip(
             result.get("documents", [[]])[0],

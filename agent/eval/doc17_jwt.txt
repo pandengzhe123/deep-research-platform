@@ -1,0 +1,9 @@
+JWT 认证机制
+
+JWT（JSON Web Token）是一种基于 JSON 的开放标准（RFC 7519），用于在各方之间安全传输声明。广泛用于 Web 应用的认证和授权——用户登录后，服务端签发 JWT，客户端后续请求携带 JWT 以证明身份。
+
+JWT 由三部分组成，用点号分隔：Header.Payload.Signature。Header 声明算法类型（通常 HS256 或 RS256）。Payload 包含声明（Claims）——如 sub（用户 ID）、exp（过期时间）、iat（签发时间）。Signature 用 Header 指定的算法对前两部分签名：HMACSHA256(base64UrlEncode(header) + "." + base64UrlEncode(payload), secret)。签名确保 Token 未被篡改——任何对 Header 或 Payload 的修改都会导致签名验证失败。
+
+Access Token 和 Refresh Token 是常见的双 Token 策略。Access Token 有效期短（通常 15-30 分钟），直接用于 API 认证。Refresh Token 有效期长（通常 7-30 天），用于获取新的 Access Token 而不需要用户重新登录。Refresh Token 存在服务端可被撤销，Access Token 是无状态的。
+
+JWT 的安全注意事项：密钥（secret）必须足够长且保密——生产环境建议至少 32 字节随机字符串。不要将敏感信息（如密码）放在 Payload 中——Payload 仅 Base64 编码而非加密，任何人可解码。尽量使用 HTTPS 防止 Token 被中间人截获。token 存储在客户端时，httpOnly cookie 比 localStorage 更安全——前者不被 JavaScript 读取，抵御 XSS 攻击。

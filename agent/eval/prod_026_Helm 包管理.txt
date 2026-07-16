@@ -1,0 +1,5 @@
+# Helm 包管理
+
+Helm 是 Kubernetes 的包管理器。Chart 是应用的打包格式——Chart.yaml(元数据)+values.yaml(默认配置)+templates/(模板)。模板使用 Go template 语法——{{ .Values.image.tag }} 引用配置值。Release 是 Chart 在集群中的实例——每安装一次生成一个 Release。helm upgrade --install 自动回滚失败的升级。Chart Repository 存储和分发 Chart——OCI 注册表支持(ghcr.io)。子 Chart 管理依赖关系。
+
+分类: 容器与编排

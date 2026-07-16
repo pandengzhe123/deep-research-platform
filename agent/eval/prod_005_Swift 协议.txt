@@ -1,0 +1,5 @@
+# Swift 协议
+
+Swift 的 Protocol 定义方法和属性的契约。结构体和类通过遵循协议提供实现。协议扩展(Protocol Extension)提供默认实现——无需修改遵循类型。关联类型 associatedtype 使协议支持泛型。Opaque Return Types——some View 语法隐藏具体返回类型。@objc 标记使协议兼容 Objective-C 运行时。@MainActor 确保 UI 更新在主线程执行——这是 Swift Concurrency 的核心。Actor 类型自动序列化对其状态的访问防止 data race。
+
+分类: 编程语言

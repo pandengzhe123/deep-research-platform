@@ -1,0 +1,5 @@
+# WebSocket 协议
+
+WebSocket(RFC 6455)提供全双工通信。HTTP Upgrade 头将连接从 HTTP 升级为 WS。101 Switching Protocols 确认升级。帧格式——opcode(文本/二进制/ping/pong/close)、掩码位(客户端->服务端必须掩码)。Ping/Pong 心跳保持连接存活。wss:// 使用 TLS 加密。与 Server-Sent Events 对比——SSE 单向推送自动重连，WebSocket 双向但需要自己处理重连。
+
+分类: 网络

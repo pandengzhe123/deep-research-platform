@@ -1,0 +1,5 @@
+# TLS 握手
+
+TLS 1.3 握手简化为一轮往返(1-RTT)。Client Hello——支持的密码套件(AES-GCM/ChaCha20)+密钥共享(ECDHE 公钥)+Server Name Indication(SNI)。Server Hello——选择密码套件+密钥共享+Certificate(Certificate 消息中包含完整证书链)+CertificateVerify(用证书私钥签名握手内容签名)。Finish——双方用协商的密钥加密 Finished 消息。0-RTT 重连——客户端用存储的 pre_shared_key 在第一条消息就发送加密数据。
+
+分类: 安全

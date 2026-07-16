@@ -1,0 +1,5 @@
+# OAuth 2.0 流程
+
+OAuth 2.0 授权框架有四种授权模式。Authorization Code——用于有后端的应用，先获取临时 code，再凭 client_secret 换取 token。Implicit(已废弃)——token 直接在浏览器 URL 中返回。Resource Owner Password——用户直接提供凭据给客户端(仅信任应用)。Client Credentials——服务间通信用 client_id+client_secret 直接获取 token。PKCE(Proof Key for Code Exchange)——为移动和 SPA 应用加强 Authorization Code 安全性，用 code_challenge 和 code_verifier 防止授权码被截获重用。
+
+分类: 安全

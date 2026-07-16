@@ -1,0 +1,5 @@
+# Python协程
+
+Python 的 asyncio 库提供协程支持。async/await 语法在 3.5 版本引入。事件循环(Event Loop)是协程调度的核心，负责在多个协程之间切换。协程在 IO 等待时让出控制权，不阻塞线程。asyncio.gather 可以并行运行多个协程，asyncio.create_task 创建后台任务。Semaphore 限制并发数，Queue 用于协程间通信。
+
+分类: 编程语言

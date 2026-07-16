@@ -77,7 +77,7 @@ def print_ablation_table(results: dict):
 
 if __name__ == "__main__":
     # 加载测试集
-    testset_path = os.path.join(os.path.dirname(__file__), "golden_testset.json")
+    testset_path = os.path.join(os.path.dirname(__file__), "golden_testset_v4.json")
     try:
         with open(testset_path, "r", encoding="utf-8") as f:
             testset = json.load(f)

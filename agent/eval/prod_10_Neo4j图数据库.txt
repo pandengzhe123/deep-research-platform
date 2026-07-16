@@ -1,0 +1,5 @@
+# Neo4j图数据库
+
+Neo4j 是原生图数据库，数据模型为节点(Node)、关系(Relationship)和属性(Property)。Cypher 查询语言使用 ASCII 艺术风格语法——(a:User)-[:FOLLOWS]->(b:User) 表示用户间的关注关系。图算法库包含最短路径、PageRank、社区发现。ACID 事务保证强一致性。
+
+分类: 数据库

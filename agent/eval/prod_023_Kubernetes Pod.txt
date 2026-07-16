@@ -1,0 +1,5 @@
+# Kubernetes Pod
+
+Pod 是 Kubernetes 最小的调度单元——共享网络命名空间和 IPC 命名空间。同一 Pod 内容器通过 localhost 通信。Pause 容器创建网络命名空间，其他容器加入。Init Container 在主容器启动前按顺序运行完成——常用于初始化数据库 Schema。Sidecar 模式——日志收集、服务网格代理(Envoy)与应用并置。Lifecycle Hook——postStart 和 preStop 在容器生命周期节点执行自定义操作。
+
+分类: 容器与编排

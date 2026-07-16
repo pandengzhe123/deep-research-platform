@@ -35,6 +35,7 @@ agent/chroma_test/
 test_rag.txt
 test2.txt
 *.txt
+!agent/eval/*.txt
 
 # 个人文档（全部 docs 本地保留，不上传）
 docs/

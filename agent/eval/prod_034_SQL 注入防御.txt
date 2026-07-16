@@ -1,0 +1,5 @@
+# SQL 注入防御
+
+SQL 注入是最常见的 Web 安全漏洞。参数化查询(PreparedStatement)将 SQL 结构与参数分离——SELECT * FROM users WHERE id = ? 中 ? 的值不会被解析为 SQL。ORM(如 SQLAlchemy/Hibernate)内置参数化查询减少手工拼接。存储过程虽然预编译但内部拼接字符串仍然危险。输入验证作为纵深防护——白名单允许期望的输入格式。数据库权限最小化——应用账户不应有 DROP TABLE 权限。WAF 可检测常见的注入模式但不完全可靠。
+
+分类: 安全

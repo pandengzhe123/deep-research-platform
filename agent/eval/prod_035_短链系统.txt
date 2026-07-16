@@ -1,0 +1,5 @@
+# 短链系统
+
+短链服务(如 bit.ly)的核心是 URL 缩短和 302 重定向。ID 生成——62 进制编码(big.Int→a-zA-Z0-9, 7 位覆盖千亿级)。Snowflake ID——41 位毫秒时间戳+10 位机器 ID+12 位序列号保证全局唯一。Base62 encoding 将数字 ID 转为短字符串。缓存策略——Redis 存储 short→long 映射，CDN 边缘节点也可缓存。限流——基于用户或 IP 限制创建频率。分析——记录每次访问的地理位置/设备/来源。
+
+分类: System Design

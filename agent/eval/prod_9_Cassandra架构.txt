@@ -1,0 +1,5 @@
+# Cassandra架构
+
+Apache Cassandra 是去中心化的宽列存储。数据按分区键(Partition Key)哈希分布到各节点。一致性哈希环确定数据归属。Gossip 协议传播集群状态。写操作先写入 CommitLog 再写入 MemTable，达到阈值刷入 SSTable。读修复(Read Repair)在读取时检测并修复不一致。
+
+分类: 数据库

@@ -1,0 +1,5 @@
+# CockroachDB 事务
+
+CockroachDB 兼容 PostgreSQL 协议。Range——数据按主键范围切分为 ~512MB 的 Range。每个 Range 通过 Raft 共识复制 3 份（可配）。分布式事务用并行提交(Parallel Commit)——先写临时记录再通知协调者提交。HLC 混合逻辑时钟混合 Wall Time 和 Logical Counter 提供全局偏序。Follower Reads——副本在保证时间戳安全时直接返回数据无需询问 Leader。多区域——ZONE SURVIVAL 策略允许单区域故障无中断。
+
+分类: 数据库

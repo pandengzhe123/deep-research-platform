@@ -1,0 +1,5 @@
+# Scala 隐式
+
+Scala 的隐式系统提供编译期代码生成。隐式参数(implicit parameters)自动从上下文解析。隐式转换(implicit conversions)自动插入类型转换——需要 import 才能生效。Scala 3 用 given/using 替代 implicit——given 定义隐式值，using 声明隐式参数。类型类(Type Class)模式——定义 trait + 提供 given 实例。Extension 方法为已有类型添加方法无需修改源码。Context Function 类型表示依赖隐式参数的函数。
+
+分类: 编程语言

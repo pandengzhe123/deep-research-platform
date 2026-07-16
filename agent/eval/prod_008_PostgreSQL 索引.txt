@@ -1,0 +1,5 @@
+# PostgreSQL 索引
+
+PostgreSQL 支持 B-tree（默认，适合=><= BETWEEN）、Hash（仅=）、GiST（几何/全文）、GIN（数组/JSONB 键存在/全文倒排）、SP-GiST（分区搜索）和 BRIN（块范围索引，极低空间成本）共六种索引。部分索引 WHERE 子句只索引满足条件的行——CREATE INDEX ON orders (status) WHERE status = 'pending'。表达式索引基于函数结果——CREATE INDEX ON users (lower(email))。并行索引扫描 parallel index scan 加速大表。
+
+分类: 数据库

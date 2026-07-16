@@ -1,0 +1,9 @@
+MongoDB NoSQL 文档数据库
+
+MongoDB 是一个面向文档的 NoSQL 数据库，使用类似 JSON 的 BSON 格式存储数据。由 Dwight Merriman 和 Eliot Horowitz 于 2007 年创立。数据以集合（Collection）组织，每个集合包含多个文档（Document），文档之间可以有嵌套结构。
+
+与关系型数据库不同，MongoDB 没有固定的表结构，同一集合内的文档可以有不同的字段。这种灵活的 Schema 适合快速迭代和数据模型多变的场景。MongoDB 支持丰富的查询语法——find() 按条件查询、$gt/$lt 范围比较、$in/$nin 集合匹配、$regex 正则匹配。支持创建索引来加速查询，默认使用 B-tree 索引。
+
+MongoDB 的副本集（Replica Set）提供高可用——一个 Primary 节点处理所有写入，多个 Secondary 节点异步复制数据。Primary 故障时，剩余的 Secondary 通过 Raft 协议选举新的 Primary，实现自动故障转移，通常在 10-30 秒内完成。分片集群（Sharded Cluster）将数据按分片键分散在多个分片上，支持水平扩展。
+
+聚合管道（Aggregation Pipeline）是 MongoDB 的数据处理利器——多个 Stage 按顺序执行，每个 Stage 对文档进行过滤、分组、排序、投影等操作。常用 Stage 包括：$match（过滤）、$group（分组聚合）、$sort（排序）、$project（字段投影）、$lookup（跨集合关联查询，类似 SQL JOIN）。

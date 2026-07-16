@@ -1,0 +1,5 @@
+# Neo4j 图数据库
+
+Neo4j 的原生图存储将节点和关系存储在独立的 store 文件中——NodeStore 存储每个节点的首关系 ID 和属性 ID，RelationshipStore 存储起始节点、结束节点以及前后关系指针实现双向链表遍历。Cypher 查询语言——(p:Person {name:'Alice'})-[:KNOWS]->(f:Person) MATCH 模式匹配。Neo4j 5 引入 Autonomous Clustering——Raft 协议选主，Secondary 节点可处理读请求。Graph Data Science 库——PageRank、Louvain 社区发现、节点嵌入。
+
+分类: 数据库

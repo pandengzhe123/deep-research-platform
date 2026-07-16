@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 from typing import Any
 
 from openai import AsyncOpenAI, APIError, APIConnectionError, APITimeoutError, RateLimitError
@@ -13,6 +14,7 @@ class LLMClient:
     """封装 LLM 调用，全异步，支持并发请求。"""
 
     def __init__(self):
+        self.trace = None  # TraceRun 实例，由 Agent 在构造后设置
         self.client = AsyncOpenAI(
             api_key=config.llm_api_key,
             base_url=config.llm_base_url,
@@ -75,6 +77,7 @@ class LLMClient:
         max_tokens: int | None = None,
     ) -> str:
         """发送一条 system + user 消息，返回文本回复。"""
+        t0 = time.time()
         async def _call():
             kwargs: dict = dict(
                 model=self.model,
@@ -88,9 +91,20 @@ class LLMClient:
             if max_tokens is not None:
                 kwargs["max_tokens"] = max_tokens
             resp = await self.client.chat.completions.create(**kwargs)
-            return resp.choices[0].message.content or ""
+            return resp, resp.choices[0].message.content or ""
 
-        return await self._call_with_retry(_call)
+        resp, result = await self._call_with_retry(_call)
+        if self.trace:
+            await self.trace.record_llm(
+                method="chat",
+                model=getattr(resp, "model", self.model),
+                usage=resp.usage.to_dict() if getattr(resp, "usage", None) else None,
+                duration_ms=int((time.time() - t0) * 1000),
+                request_id=getattr(resp, "id", ""),
+                success=True,
+                purpose=system_prompt[:120],
+            )
+        return result
 
     async def chat_with_tools(
         self,
@@ -99,15 +113,28 @@ class LLMClient:
         tools: list[dict],
     ) -> Any:
         """发送多轮对话 + 工具定义，返回 OpenAI 消息对象。"""
+        t0 = time.time()
         async def _call():
-            return (await self.client.chat.completions.create(
+            resp = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[{"role": "system", "content": system_prompt}] + messages,
                 tools=tools,
                 extra_body=self._extra_body(),
-            )).choices[0].message
+            )
+            return resp, resp.choices[0].message
 
-        return await self._call_with_retry(_call)
+        resp, msg = await self._call_with_retry(_call)
+        if self.trace:
+            await self.trace.record_llm(
+                method="chat_with_tools",
+                model=getattr(resp, "model", self.model),
+                usage=resp.usage.to_dict() if getattr(resp, "usage", None) else None,
+                duration_ms=int((time.time() - t0) * 1000),
+                request_id=getattr(resp, "id", ""),
+                success=True,
+                purpose=system_prompt[:120],
+            )
+        return msg
 
     async def structured_output(self, system_prompt: str, user_message: str, schema: dict) -> dict:
         """强制 LLM 以指定 JSON 结构返回结果。"""
@@ -118,6 +145,7 @@ class LLMClient:
             f"```json\n{schema_text}\n```"
         )
 
+        t0 = time.time()
         async def _call():
             resp = await self.client.chat.completions.create(
                 model=self.model,
@@ -129,6 +157,17 @@ class LLMClient:
                 ],
                 response_format={"type": "json_object"},
             )
-            return json.loads(resp.choices[0].message.content or "{}")
+            return resp, json.loads(resp.choices[0].message.content or "{}")
 
-        return await self._call_with_retry(_call)
+        resp, result = await self._call_with_retry(_call)
+        if self.trace:
+            await self.trace.record_llm(
+                method="structured_output",
+                model=getattr(resp, "model", self.model),
+                usage=resp.usage.to_dict() if getattr(resp, "usage", None) else None,
+                duration_ms=int((time.time() - t0) * 1000),
+                request_id=getattr(resp, "id", ""),
+                success=True,
+                purpose=system_prompt[:120],
+            )
+        return result

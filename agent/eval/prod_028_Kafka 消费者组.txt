@@ -1,0 +1,5 @@
+# Kafka 消费者组
+
+Kafka 消费者组实现并行消费——同一 Group 内每个 Consumer 负责 Topic 的不同 Partition。Rebalance 协议——新消费者加入或旧消费者离开时触发 Partition 重新分配。Coordinator(Group Coordinator)管理消费者组成员和偏移量。RangeAssignor 按连续分区段分配，RoundRobinAssignor 轮询分配，StickyAssignor 尽量保留现有分配。__consumer_offsets 主题存储消费偏移量——enable.auto.commit 默认 5 秒自动提交。
+
+分类: 消息队列

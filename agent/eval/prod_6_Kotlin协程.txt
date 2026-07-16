@@ -1,0 +1,5 @@
+# Kotlin协程
+
+Kotlin 协程是轻量级并发框架。suspend 函数可在不阻塞线程的情况下挂起。launch 启动不返回结果的协程，async 返回 Deferred 结果。协程上下文(CoroutineContext)包含调度器(Dispatcher)决定运行线程。结构化并发确保子协程在父协程完成前结束。
+
+分类: 编程语言

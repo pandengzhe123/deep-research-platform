@@ -1,0 +1,5 @@
+# RabbitMQ Exchange
+
+RabbitMQ 的 Exchange 决定消息路由规则。Direct Exchange——routing key 完全匹配队列绑定键。Fanout Exchange——忽略 routing key 广播到所有绑定队列。Topic Exchange——routing key 按.分隔的单词做通配符匹配(*匹配一个,#匹配零或多个)。Headers Exchange——按消息头属性匹配而非 routing key。Dead Letter Exchange——消息被拒绝或过期后转发到 DLX。Alternate Exchange 在消息无法路由到任何队列时接收消息。
+
+分类: 消息队列

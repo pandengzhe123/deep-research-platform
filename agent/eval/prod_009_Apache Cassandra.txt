@@ -1,0 +1,5 @@
+# Apache Cassandra
+
+Cassandra 是去中心化的宽列存储 NoSQL。数据按分区键哈希分布——Murmur3Partitioner 是默认分区器。一致性哈希环 (Consistent Hash Ring) 通过虚拟节点(vnodes, 默认 128) 均匀分布。Gossip 协议每秒钟在节点间同步集群元数据。写路径——CommitLog → MemTable → SSTable。读路径——Bloom Filter → Key Cache → Partition Summary → Partition Index → SSTable。读修复和提示移交(Hinted Handoff)处理短时故障。
+
+分类: 数据库

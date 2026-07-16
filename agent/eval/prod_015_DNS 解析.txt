@@ -1,0 +1,5 @@
+# DNS 解析
+
+DNS 域名解析——递归解析器(Recursive Resolver)从根域名服务器(.)开始迭代查询。根服务器返回 TLD 服务器(gTLD: .com/.org, ccTLD: .cn/.de)。TLD 返回权威域名服务器(Authoritative Name Server)地址。记录类型——A(IPv4)、AAAA(IPv6)、CNAME(别名)、MX(邮件)、TXT(文本,SPF/DKIM)、NS(权威服务器)、SOA(区域起始)。DNSSEC 用数字签名防止 DNS 缓存投毒——RSA/SHA256 算法。EDNS0 扩展支持更大的 UDP 包。
+
+分类: 网络

@@ -1,0 +1,5 @@
+# Paxos 算法
+
+Paxos 由 Leslie Lamport 在 1998 年发表。Basic Paxos——单个提案需要两轮通信 Prepare+Accept。Proposer 提出编号提案，Acceptor 接受更高编号的提案，Learner 学习已确定的决议。Multi-Paxos 为连续提案优化——同一个 Leader 跳过量 Prepare 阶段。EPaxos 针对广域网的优化——不依赖单一 Leader。Raft 因可理解性更好在实际工程中更流行，但 Paxos 是理论基础。
+
+分类: 分布式系统

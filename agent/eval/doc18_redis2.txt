@@ -1,0 +1,13 @@
+Redis 数据类型与应用场景
+
+Redis 支持多种数据类型，远超简单的 key-value 存储：
+
+String（字符串）：最基本类型，可以存文本、数字、序列化对象。支持原子操作如 INCR（自增）、DECR（自减）、SETNX（不存在时设置）。常用于计数器、分布式锁（SETNX + EXPIRE）、缓存序列化对象。
+
+Hash（哈希）：存储字段-值对，适合存储对象。如用户信息：HSET user:1001 name "张三" age 25。支持单字段读写和全量获取，比 String 存整个序列化对象更灵活。常用于购物车、用户资料缓存。
+
+List（列表）：双向链表，左右两端插入/弹出 O(1)。LPUSH + RPOP 可实现消息队列。LRANGE 可按索引范围获取元素，常用于最新动态列表。BLPOP 阻塞弹出可实现简单的工作队列。
+
+Set（集合）：无序、元素唯一。支持交并差集运算：SINTER（交集）可用于计算共同好友，SUNION（并集）合并多个集合，SDIFF（差集）找出差异。SISMEMBER O(1) 判断元素是否存在。
+
+ZSet（有序集合）：每个元素带 score，按 score 排序。ZADD 添加，ZRANGEBYSCORE 按分数范围查询。常用于排行榜（score=得分，member=用户ID）、延迟队列（score=执行时间戳）、滑动窗口限流（score=请求时间）。

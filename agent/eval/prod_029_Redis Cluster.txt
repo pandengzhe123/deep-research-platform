@@ -1,0 +1,5 @@
+# Redis Cluster
+
+Redis Cluster 实现水平分片。哈希槽(Hash Slot)——CRC16(key) mod 16384 映射到 16384 个槽。每个 Master 节点负责一部分槽。MOVED 重定向告知客户端数据所在节点。ASK 重定向用于槽迁移中——源节点还有数据但正在移除。Gossip 协议交换集群拓扑和节点状态。集群总线(Cluster Bus)是独立的 TCP 通道用于节点间通信。客户端库需支持集群模式——如 redis-py-cluster。
+
+分类: 缓存与存储

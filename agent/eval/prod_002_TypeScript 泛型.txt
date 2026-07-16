@@ -1,0 +1,5 @@
+# TypeScript 泛型
+
+TypeScript 的泛型系统允许在定义时不指定具体类型。使用尖括号语法<T>声明类型参数。泛型约束(extends)限制类型参数必须满足特定接口——<T extends HasId> 确保 T 有 id 属性。条件类型 Conditional Types 根据类型关系选择分支——T extends U ? X : Y。映射类型 Mapped Types 基于已有类型创建新类型——[K in keyof T]: Wrapped<T[K]>。模板字面量类型 Template Literal Types 组合字符串字面量。infer 关键字在条件类型中推断类型变量。
+
+分类: 编程语言

@@ -1,0 +1,5 @@
+# CockroachDB事务
+
+CockroachDB 是分布式 SQL 数据库，兼容 PostgreSQL 协议。数据按范围(Range)切分，每个 Range 通过 Raft 共识复制 3 份。分布式事务使用两阶段提交(2PC)和全局时钟。读写冲突通过 MVCC 时间戳排序解决。多区域部署支持就近路由和存活策略。
+
+分类: 数据库

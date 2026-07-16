@@ -1,0 +1,5 @@
+# CDN 缓存策略
+
+CDN 边缘节点缓存静态内容靠近用户。Cache-Control 头控制缓存行为——max-age(有效秒数)、s-maxage(仅 CDN 的有效期)、public/private(中间节点是否可缓存)、no-cache(需重新验证)、no-store(不缓存)。Vary 头区分缓存变体——Vary: Accept-Encoding 对 gzip 和 br 各存一份。Surrogate-Control 是 CDN 专属指令。Cache Key 由 URL + 请求头 + Cookie 决定。Purge(清除)和 Warm(预热)是运维常见操作。
+
+分类: 缓存与存储

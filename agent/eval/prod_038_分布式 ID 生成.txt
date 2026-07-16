@@ -1,0 +1,5 @@
+# 分布式 ID 生成
+
+Snowflake(Twitter)——64 位整数，1 位符号+41 位时间戳(毫秒,可用 69 年)+10 位工作机器 ID+12 位序列号(同毫秒 4096 个)。Leaf(美团)——Leaf-segment 模式从 DB 批量取号段(如 step=1000)在内存中分配+异步预取。Leaf-snowflake 模式用 ZooKeeper 持久顺序节点注册 Worker ID。UID Generator(百度)——兼容 Snowflake 的 64 位格式。时钟回拨问题——记录上次生成时间，检测到回拨时等待或抛异常。
+
+分类: System Design

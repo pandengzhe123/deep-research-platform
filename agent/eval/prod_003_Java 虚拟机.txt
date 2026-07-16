@@ -1,0 +1,5 @@
+# Java 虚拟机
+
+JVM 是 Java 字节码的运行环境。类加载器(ClassLoader)采用双亲委派模型——Bootstrap/Extension/Application 三层。JIT 编译器将热点代码编译为本地机器码——C1 编译器快速编译，C2 编译器深度优化。逃逸分析(Escape Analysis)判断对象是否可能在方法外使用。垃圾回收器——Serial/Parallel/CMS/G1/ZGC/Shenandoah 各有适用场景。G1 将堆划分为多个 Region 实现可预测暂停，ZGC 目标停顿 <1ms。
+
+分类: 编程语言

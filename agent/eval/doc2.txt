@@ -1,0 +1,1 @@
+The RFC 7231 document defines HTTP/1.1 semantics and content. It describes HTTP methods like GET, POST, PUT, and DELETE. GET is used for retrieving resources without side effects. POST creates new resources. PUT updates existing resources. DELETE removes resources. RFC 7231 also defines HTTP status codes such as 200 OK, 404 Not Found, and 500 Internal Server Error.

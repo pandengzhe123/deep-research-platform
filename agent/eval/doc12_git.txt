@@ -1,0 +1,9 @@
+Git 分布式版本控制系统
+
+Git 是由 Linus Torvalds 于 2005 年创建的分布式版本控制系统（DVCS），用于管理 Linux 内核开发。与 SVN 等集中式系统不同，Git 每个开发者本地都有完整的代码仓库副本和历史记录，离线也能提交和查看历史。
+
+Git 的核心数据模型是基于快照（snapshot）而非差异（delta）。每次 commit 保存的是整个文件系统的快照，通过 SHA-1 哈希值唯一标识。三个关键区域：工作区（Working Directory）、暂存区（Staging Area / Index）、本地仓库（Local Repository）。git add 将修改从工作区添加到暂存区，git commit 从暂存区提交到本地仓库。
+
+分支（branch）是 Git 最强大的特性。分支本质上是指向某个 commit 的指针，创建和切换非常轻量。git merge 合并分支，git rebase 将提交变基到另一个分支上保持线性历史。merge 产生合并提交保留分支脉络，rebase 改写历史更整洁。黄金规则：不要对已推送的分支执行 rebase。
+
+Git Flow 是经典的分支管理策略：main 分支存放生产代码，develop 分支作为开发主线，feature 分支开发新功能，release 分支准备发布，hotfix 分支紧急修复。GitHub Flow 更简化——只有 main 和 feature 分支，通过 Pull Request 合并。git cherry-pick 可以挑选特定 commit 应用到当前分支。git stash 暂存未完成的修改以便切换分支。
