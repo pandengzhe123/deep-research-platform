@@ -407,7 +407,8 @@ def _assistant_msg(msg):
 
 
 async def _truncate_context(messages: list[dict], total_chars: int, max_chars: int,
-                             llm, emit, round_num: int, context_warned: bool) -> tuple[list[dict], bool]:
+                             llm, emit, round_num: int, context_warned: bool,
+                             compressed_summaries: list[str] | None = None) -> tuple[list[dict], bool]:
     """上下文超限保护：80% 预警 + LLM 压缩 + 硬截断。返回 (新 messages, 新 context_warned)。"""
     if not context_warned and total_chars > max_chars * 0.8:
         context_warned = True
@@ -421,11 +422,40 @@ async def _truncate_context(messages: list[dict], total_chars: int, max_chars: i
             if old_msgs:
                 raw = "\n".join(str(m) for m in old_msgs)
                 summary = await llm.chat(
-                    system_prompt="你是一个对话压缩助手。将对话历史压缩为简洁摘要，保留关键事实、数据、用户约束条件和研究方向。丢弃搜索细节和冗长报告正文。用中文。",
+                    system_prompt="""你是一个对话压缩助手。将对话历史压缩为结构化摘要。
+
+严格按以下格式输出：
+
+## 研究方向
+用户的核心问题是什么（1 句）
+
+## 已确认的关键事实
+- 有明确来源的事实和数据
+- 多个来源交叉验证的结论
+
+## 用户约束与偏好
+- 用户明确提出的限制条件（预算、时间、范围等）
+- 用户表达过的偏好和侧重
+- 宁可多记不要漏——这是后续回答不能违反的
+
+## 已做的决策
+- 为什么选了 A 方向、为什么放弃了 B 方向
+- 每次重大决策的上下文
+
+## 待覆盖的方面
+- 还有哪些角度没有研究到
+- 哪些问题用户追问了但还没回答
+
+规则：
+- 丢弃：搜索结果全文、LLM 每轮思考过程、重复信息
+- 保留：事实 > 决策原因 > 约束条件 > 研究方向
+- 用中文，每条简明扼要""",
                     user_message=f"请压缩以下对话，保留关键信息：\n\n{raw}",
                 )
                 if summary:
                     messages = [messages[0], {"role": "system", "content": f"[早期对话摘要] {summary}"}] + messages[-5:]
+                    if compressed_summaries is not None:
+                        compressed_summaries.append(f"[第{round_num}轮压缩] {summary}")
         except Exception:
             pass
         if sum(len(str(m)) for m in messages) > max_chars:
@@ -527,6 +557,7 @@ class Level2Agent:
         self.rag_doc_ids = rag_doc_ids or []
         self.kb_enabled = kb_enabled
         self.search_mode = search_mode
+        self._compressed_summaries: list[str] = []  # 持久化压缩摘要，拼入报告随 PostgreSQL 存储
         if search_mode in ("hybrid", "rag_only"):
             from .kb import kb
             self.kb = kb
@@ -589,7 +620,8 @@ class Level2Agent:
             # Token 超限保护
             total_chars = sum(len(str(m)) for m in messages)
             messages, context_warned = await _truncate_context(
-                messages, total_chars, MAX_HISTORY_CHARS, self.llm, self.emit, round_num, context_warned
+                messages, total_chars, MAX_HISTORY_CHARS, self.llm, self.emit, round_num, context_warned,
+                compressed_summaries=self._compressed_summaries,
             )
 
             print(f"\n--- 第 {round_num}/{self.max_rounds} 轮 ---")
@@ -735,6 +767,9 @@ class Level2Agent:
                 search_results=compressed,
             ),
         )
+        if self._compressed_summaries:
+            prefix = "<!-- 上下文压缩记录 -->\n" + "\n".join(self._compressed_summaries)
+            report = prefix + "\n\n" + report
         return report
 
 
@@ -1136,6 +1171,7 @@ class Level4Agent:
         self.user_id = user_id
         self.rag_doc_ids = rag_doc_ids or []
         self.search_mode = search_mode
+        self._compressed_summaries: list[str] = []
 
     async def _generate_research_brief(self, question: str, context: str = "") -> str:
         """将用户问题转化为结构化研究简报，填±模糊维度，指导 Supervisor 决策。"""
@@ -1317,10 +1353,17 @@ class Level4Agent:
                     date=_today_str(),
                 ),
             )
+            if self._compressed_summaries:
+                prefix = "<!-- 上下文压缩记录 -->\n" + "\n".join(self._compressed_summaries)
+                final = prefix + "\n\n" + final
             return final
         except Exception as e:
             print(f"  汇总超时，回退到原始合并: {e}")
-            return "# " + question + "\n\n" + "\n\n---\n\n".join(raw_findings)
+            fallback = "# " + question + "\n\n" + "\n\n---\n\n".join(raw_findings)
+            if self._compressed_summaries:
+                prefix = "<!-- 上下文压缩记录 -->\n" + "\n".join(self._compressed_summaries)
+                fallback = prefix + "\n\n" + fallback
+            return fallback
 
 
 # ============================================================

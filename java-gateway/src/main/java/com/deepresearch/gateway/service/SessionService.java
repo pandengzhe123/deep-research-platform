@@ -163,6 +163,10 @@ public class SessionService {
                     List<Object> history = fromJson(entity.getHistory());
                     StringBuilder ctx = new StringBuilder();
 
+                    // 锚点：原始研究问题，永远不丢（独立字段，不受 history 截断影响）
+                    ctx.append("=== 研究主题 ===\n");
+                    ctx.append(entity.getQuestion()).append("\n\n");
+
                     // 格式化历史消息：角色 + 时间 + 内容
                     for (Object item : history) {
                         Map<String, Object> msg = toMsgObject(item);
@@ -184,7 +188,7 @@ public class SessionService {
 
                     String historyText = ctx.toString();
 
-                    // report 列兜底：只追加 history 中没出现的（截断时补回）
+                    // report 列兜底：补回 history 截断时丢失的报告，放在最前面（从旧到新）
                     List<String> reports = fromJsonStringList(entity.getReport());
                     List<String> missing = new ArrayList<>();
                     for (String report : reports) {
@@ -194,11 +198,14 @@ public class SessionService {
                         }
                     }
                     if (!missing.isEmpty()) {
-                        ctx.append("=== 历史报告（history 截断补回）===\n");
+                        StringBuilder prefix = new StringBuilder();
+                        prefix.append("=== 历史报告（history 截断补回）===\n");
                         for (int i = 0; i < missing.size(); i++) {
-                            ctx.append("\n--- 报告 ").append(i + 1).append(" ---\n");
-                            ctx.append(missing.get(i));
+                            prefix.append("\n--- 报告 ").append(i + 1).append(" ---\n");
+                            prefix.append(missing.get(i));
                         }
+                        prefix.append("\n\n");
+                        ctx.insert(0, prefix.toString());  // 插在最前面
                     }
                     return ctx.toString();
                 })
