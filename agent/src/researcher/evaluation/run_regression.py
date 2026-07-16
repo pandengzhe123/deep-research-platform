@@ -190,12 +190,13 @@ async def run_format_regression():
 
         # 逐条检查格式规则
         all_pass = True
-        for rule_name, (pattern, description) in FORMAT_RULES.items():
-            flags = 0
-            if len(pattern) == 3:  # (pattern, desc, flags)
-                pattern, description, flags = pattern, description, pattern if isinstance(description, int) else 0
-            # re.DOTALL 处理
-            regex_flags = re.DOTALL if rule_name == "min_length" else re.MULTILINE
+        for rule_name, rule_def in FORMAT_RULES.items():
+            if len(rule_def) == 3:
+                pattern, description, flags = rule_def
+            else:
+                pattern, description = rule_def
+                flags = 0
+            regex_flags = flags or (re.DOTALL if rule_name == "min_length" else re.MULTILINE)
             if re.search(pattern, report, regex_flags):
                 print(f"    [OK] {rule_name}")
             else:

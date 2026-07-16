@@ -414,7 +414,7 @@ async def _truncate_context(messages: list[dict], total_chars: int, max_chars: i
         emit({"step": "thinking", "message": f"上下文已用 {total_chars * 100 // max_chars}%，继续追问可能丢失早期内容，建议开新会话"})
 
     if total_chars > max_chars:
-        print(f"  ⚠️ 历史过长 ({total_chars} 字符)，压缩旧内容")
+        print(f"  [WARN] 历史过长 ({total_chars} 字符)，压缩旧内容")
         emit({"step": "thinking", "message": "上下文已满，正在压缩早期对话以保留关键信息...", "round": round_num})
         try:
             old_msgs = messages[1:-5]
@@ -623,7 +623,7 @@ class Level2Agent:
                         try:
                             args = json.loads(fixed)
                         except json.JSONDecodeError:
-                            print(f"  ⚠️ JSON 解析失败 (tc.id={tc.id}): {raw_args[:80]}...")
+                            print(f"  [WARN] JSON 解析失败 (tc.id={tc.id}): {raw_args[:80]}...")
                             messages.append({
                                 "role": "tool",
                                 "tool_call_id": tc.id,
@@ -677,7 +677,7 @@ class Level2Agent:
                             })
 
                     except Exception as e:
-                        print(f"  ⚠️ 工具 {name} 调用失败 (tc.id={tc.id}): {e}")
+                        print(f"  [WARN] 工具 {name} 调用失败 (tc.id={tc.id}): {e}")
                         messages.append({
                             "role": "tool",
                             "tool_call_id": tc.id,
@@ -691,7 +691,7 @@ class Level2Agent:
                         all_search_results = all_search_results[-MAX_ROUND_RESULTS:]
 
             except Exception as e:
-                print(f"  ⚠️ 第 {round_num} 轮 LLM 调用异常: {e}，跳过本轮继续")
+                print(f"  [WARN] 第 {round_num} 轮 LLM 调用异常: {e}，跳过本轮继续")
                 # LLM 调用本身失败，没有 tc，用 user 角色通知 Agent
                 messages.append({
                     "role": "user",
@@ -700,7 +700,7 @@ class Level2Agent:
 
         # 无结果兜底：避免用空字符串调 LLM 产生幻觉报告
         if not all_search_results:
-            print("  ⚠️ 无任何搜索结果，返回兜底提示")
+            print("  [WARN] 无任何搜索结果，返回兜底提示")
             self.emit({"step": "reporting", "message": "未获取到有效搜索结果"})
             return f"# 未找到相关信息\n\n关于「{question}」，未能在网络和知识库中找到有效信息。\n\n可能的原因：\n\n1. 搜索 API 暂时不可用\n2. 该问题目前没有公开资料\n3. 搜索关键词与问题不匹配\n\n建议：稍后重试，或尝试更具体的关键词。"
 
@@ -721,7 +721,7 @@ class Level2Agent:
                 ),
             )
         except Exception as e:
-            print(f"  ⚠️ 压缩失败，跳过压缩直接使用原始结果: {e}")
+            print(f"  [WARN] 压缩失败，跳过压缩直接使用原始结果: {e}")
             self.emit({"step": "reporting", "message": "搜索结果压缩失败，报告质量可能下降"})
             compressed = raw_text  # 降级：用未压缩的原始搜索结果
 
@@ -1235,7 +1235,7 @@ class Level4Agent:
                 try:
                     args = json.loads(tc.function.arguments)
                 except json.JSONDecodeError:
-                    print(f"  ⚠️ Supervisor JSON 解析失败，跳过")
+                    print(f"  [WARN] Supervisor JSON 解析失败，跳过")
                     continue
 
                 if name == "ConductResearch":
