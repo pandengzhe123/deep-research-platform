@@ -1,8 +1,8 @@
 # Deep Research Platform
 
-> Full-stack AI Agent for deep research | Zero-framework, hand-written | Python + Java + Vue + Docker
+> Full-stack AI Agent for deep research | Zero-framework, hand-written | Python + Java + Vue + Docker | Built-in evaluation system
 
-Ask a question → Agent autonomously searches the web → SSE real-time progress → cited research report.
+Ask a question → Agent autonomously searches the web + knowledge base → SSE real-time progress → cited research report. Self-built RAGAS metrics + A/B comparison + LLM-as-Judge + ablation + regression testing.
 
 ---
 
@@ -13,8 +13,9 @@ Ask a question → Agent autonomously searches the web → SSE real-time progres
 ```bash
 cp agent/.env.example agent/.env
 # Edit .env with your API keys:
-#   DEEPSEEK_API_KEY=sk-xxx
-#   TAVILY_API_KEY=tvly-xxx
+#   DEEPSEEK_API_KEY=sk-xxx        (LLM)
+#   TAVILY_API_KEY=tvly-xxx        (search)
+#   DASHSCOPE_API_KEY=sk-xxx       (Aliyun embedding)
 ```
 
 ### 2. Launch
@@ -26,9 +27,13 @@ docker compose up
 
 First launch downloads images and dependencies (~10 min). Subsequent launches take seconds.
 
-### 3. Use
+### 3. CLI (without Docker)
 
-Register → Enter a question → Choose Level → Send. Level 1 for simple queries (15-30s), Level 2-4 for deep research.
+```bash
+cd agent
+pip install -e .
+python -m src.researcher.agent "Impact of quantum computing on cryptography" 2
+```
 
 ---
 
@@ -43,7 +48,7 @@ Browser (Vue 3) → nginx (:80)
                      │
                      ▼
                Python Agent (FastAPI :8000)
-               Four-level Agent · RAG KB · Search tools
+               Four-level Agent · RAG KB · Search tools · Trace
                      │
                      ▼
           DeepSeek · Tavily/DuckDuckGo · Chroma · PostgreSQL
@@ -56,21 +61,80 @@ Browser (Vue 3) → nginx (:80)
 | Level | Architecture | LLM Calls | Best For |
 |:---:|------|:---:|------|
 | 1 | Search → Report (1 LLM call) | 1 | Simple fact queries, 15-30s |
-| 2 | ReAct loop (while + Function Calling) | 3-10 | General research, 1-3 min |
-| 3 | LLM decomposes → asyncio.gather N×L2 → merge | many | Multi-angle analysis, 2-5 min |
-| 4 | Supervisor dual-loop → batched L2 dispatch → ResearchComplete → merge | many | Complex deep research, 3-10 min |
+| 2 | ReAct loop (while + Function Calling) | 3-10 | General research |
+| 3 | LLM decomposes → asyncio.gather N×L2 → merge | many | Multi-angle analysis |
+| 4 | Supervisor dual-loop → batched L2 dispatch → ResearchComplete → merge | many | Complex deep research |
 
 ---
 
-## Key Engineering Practices
+## Key Features
 
-- **SSE three-layer streaming**: Python yield → Java `Flux<ServerSentEvent>` → browser `ReadableStream`. Real-time research progress. nginx buffering off, 30-min timeout unified across all layers
-- **Queue + create_task pattern**: Agent runs in background (create_task), progress events go through asyncio.Queue via callback, main loop polls queue and yields SSE. Client disconnect → task.cancel stops token consumption
-- **Callback decoupling**: `self.emit = on_progress or (lambda e: None)`. Same Agent class works for SSE streaming, sync API, and CLI testing — zero coupling
-- **Search optimization**: Tavily primary → DuckDuckGo fallback, cross-round URL dedup, batch LLM summarization (5 calls → 1), 5-minute search cache
-- **Memory system**: PostgreSQL JSONB stores full conversation history (including full reports), report JSONB array stores all reports without overwrite, 50-message cap + 500k char truncation + 80%/100% dual-threshold warnings
-- **Concurrency control**: Java Semaphore limits 20 concurrent studies, L3/L4 share a single LLMClient to reuse connection pool, asyncio.gather for parallel search
-- **Three-layer fault tolerance**: LLM retry (exponential backoff) → Tavily→DDG fallback → Agent loop try/except safety net
+### Agent Runtime
+
+- **Hand-written from protocol level**: while loop + OpenAI native tool_calls messaging, zero LangChain/LangGraph
+- **Callback decoupling**: `self.emit = on_progress or (lambda e: None)` — same Agent class for SSE streaming, sync API, and CLI
+- **Fully async**: AsyncOpenAI + asyncio.gather parallel + Queue + create_task background tasks
+- **Three-layer fault tolerance**: LLM retry (429/5xx exponential backoff, 4xx/timeout no retry) → Tavily→DDG fallback → Agent per-round try/except
+- **Context management**: Three-level protection (80% warning → LLM structured compression → hard truncation), original question anchor never lost via independent DB field
+- **Trace**: JSONL call-chain recording — token usage, timing, model, success/fail per LLM call; query count, dedup, timing per search
+
+### RAG Knowledge Base
+
+Five retrieval modes, independent degradation per layer:
+
+| Mode | Pipeline | Notes |
+|------|------|------|
+| v2 | Aliyun text-embedding-v4 pure vector | Baseline, 1024-dim, 0.22s |
+| hybrid | Vector + BM25 (jieba + RRF fusion) | Keyword complements semantics |
+| rerank | Vector coarse recall + CrossEncoder (bge-reranker-base) rerank | Ranking precision boost |
+| full | Query rewrite (LLM) → dual-path hybrid → CrossEncoder | Best quality, slowest |
+| default | MiniLM local 384-dim | Legacy compat, zero cost |
+
+Dual embedding pipelines (MiniLM + Aliyun), multi-tenant per-user Collection isolation.
+
+### Search Pipeline
+
+Tavily primary → DuckDuckGo fallback · Cross-round URL dedup · 5-min search cache · Batch LLM summarization (N→1 call)
+
+### Memory & Persistence
+
+PostgreSQL: history JSONB for conversation chain + report JSONB array for all reports (never truncated). Auto LLM compression at 40+ messages. Report array auto-fills truncated history on follow-up queries. Compressed summaries persisted with reports.
+
+---
+
+## Evaluation System
+
+### Three-Layer Framework
+
+| Layer | What it tests | Metrics | LLM involved |
+|------|--------------|--------|:--:|
+| Retriever | Can we find the right docs? | Precision@5 / Recall@5 / MRR | No |
+| Generator | Can the LLM generate well? (skip retrieval) | Faithfulness / Answer Relevance / Context Relevance / Answer Correctness | Yes |
+| E2E Diagnostic | Real-world end-to-end | LLM-as-Judge (5-dim, 10-pt) + per-type breakdown | Yes |
+
+### Data-Driven Insights
+
+**Ablation experiment** (112 questions × 4 modes) exposed a hidden ChromaDB cosine distance bug: distances (range 0-2) were treated as similarities (range 0-1), silently filtering ALL correct documents. Recall jumped from 17% to 88% after fix.
+
+**A/B comparison** discovered three cascading bugs: max_tokens default truncation → Judge 12000-char blind spot → prompt verbosity explosion. Attribution was overturned three times by data before the truth was found.
+
+### Evaluation Tools
+
+```bash
+# Ablation: compare 4 retrieval modes
+python -m src.researcher.evaluation.ablation
+
+# LLM-as-Judge report scoring
+python -m src.researcher.evaluation.run_eval --mode report
+
+# A/B comparison (pre/post prompt change)
+python -m src.researcher.evaluation.ab_compare gen
+python -m src.researcher.evaluation.ab_compare judge
+
+# Regression: fast validation after code changes
+python -m src.researcher.evaluation.run_regression --mode retriever  # 25s
+python -m src.researcher.evaluation.run_regression --mode format     # 2min
+```
 
 ---
 
@@ -78,26 +142,29 @@ Browser (Vue 3) → nginx (:80)
 
 | Module | Language | Lines |
 |--------|------|:---:|
-| Python Agent | Python | ~2,000 |
-| Java Gateway | Java 21 | ~700 |
-| Vue Frontend | Vue 3 | ~700 |
-| **Total** | | **~3,400** |
+| Python Agent + RAG + Evaluation + Trace | Python | ~3,500 |
+| Java Gateway | Java 21 | ~1,200 |
+| Vue Frontend | Vue 3 | ~900 |
+| **Total** | | **~5,600** |
 
 ### Core Files
 
 ```
 agent/src/researcher/
-├── agent.py     Four-level Agent + TOOLS + Prompts (~990 lines)
-├── server.py    FastAPI + run_agent_with_sse() (~310 lines)
-├── search.py    Tavily + DDG + batch summary + dedup + cache (~260 lines)
-├── kb.py        Chroma + embedding + chunking (~260 lines)
-├── llm.py       OpenAI SDK wrapper + retry (~130 lines)
-└── config.py    Environment variables (~40 lines)
+├── agent.py     Four-level Agent + 19 Prompts (~1,430 lines)
+├── kb.py        Chroma + 5 retrieval modes + embedding (~530 lines)
+├── server.py    FastAPI + SSE (~380 lines)
+├── search.py    Tavily + DDG + batch summary + dedup + cache (~300 lines)
+├── llm.py       AsyncOpenAI + retry (~170 lines)
+├── trace.py     JSONL structured tracing (~200 lines)
+├── config.py    Environment variables (~50 lines)
+├── retrievers/  BM25 + RRF + CrossEncoder + query rewriting (~190 lines)
+└── evaluation/  4 metrics + Judge + A/B + ablation + regression (~1,500 lines)
 
 java-gateway/.../
 ├── ResearchController.java   SSE passthrough + session management
-├── AgentClient.java          HTTP client to Python
-├── SessionService.java       Session CRUD + stale cleanup + context compression
+├── SessionService.java       Session CRUD + auto compression + context anchor
+├── SecurityConfig.java       WebFlux Security + JWT Filter
 └── JwtTokenProvider.java     JWT signing/verification
 ```
 
