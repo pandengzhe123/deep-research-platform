@@ -113,18 +113,29 @@ class _DashScopeEmbeddings:
         )
         self._model = os.getenv("EMBED_MODEL", "text-embedding-v4")
 
-    def embed(self, texts: list[str]) -> list[list[float]]:
+    def embed(self, texts: list[str], trace=None) -> list[list[float]]:
         # 阿里云限制每批最多 10 条
+        import time as _time
         BATCH = 10
         result = []
         for i in range(0, len(texts), BATCH):
             batch = texts[i:i + BATCH]
+            t0 = _time.time()
             resp = self._client.embeddings.create(model=self._model, input=batch)
+            duration_ms = int((_time.time() - t0) * 1000)
+            if trace:
+                trace.record_embedding(
+                    model=self._model,
+                    text_count=len(batch),
+                    total_tokens=resp.usage.total_tokens if getattr(resp, "usage", None) else 0,
+                    duration_ms=duration_ms,
+                    success=True,
+                )
             result.extend(d.embedding for d in resp.data)
         return result
 
-    def embed_one(self, text: str) -> list[float]:
-        return self.embed([text])[0]
+    def embed_one(self, text: str, trace=None) -> list[float]:
+        return self.embed([text], trace=trace)[0]
 
 
 # ============================================================
@@ -140,6 +151,7 @@ class KnowledgeBase:
         self._embedder = _embed_semantic
         self._collections: dict[str, object] = {}
         self._v2_embedder = None
+        self._trace = None  # TraceRun 实例，由 Agent 在调用前设置
 
     # ================================================================
     # 基础方法
@@ -179,7 +191,7 @@ class KnowledgeBase:
     def _v2_vector_search(self, query: str, user_id: str, doc_ids: list[str] | None, k: int) -> list[dict]:
         """纯向量检索。"""
         embedder = self._get_v2_embedder()
-        query_emb = embedder.embed_one(query)
+        query_emb = embedder.embed_one(query, trace=self._trace)
 
         if doc_ids:
             where = {"$and": [{"user_id": user_id}, {"doc_id": {"$in": doc_ids}}]}

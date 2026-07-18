@@ -167,6 +167,21 @@ class TraceRun:
         if event == "end":
             self._rounds_completed = max(self._rounds_completed, round_num)
 
+    def record_embedding(self, model: str, text_count: int,
+                         total_tokens: int, duration_ms: int,
+                         success: bool = True, error: str = ""):
+        """记录一次 embedding 调用（同步方法，可在线程池内调用）"""
+        self._append({
+            "type": "embedding_call",
+            "ts": time.time(),
+            "model": model,
+            "text_count": text_count,
+            "total_tokens": total_tokens,
+            "duration_ms": duration_ms,
+            "success": success,
+            "error": error,
+        })
+
     async def record_compress(self, before_chars: int, after_chars: int,
                               duration_ms: int, success: bool = True):
         """记录上下文压缩事件。"""

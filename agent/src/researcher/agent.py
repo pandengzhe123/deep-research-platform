@@ -266,6 +266,7 @@ class FastLevel1Agent:
         if kb_enabled or search_mode in ("hybrid", "rag_only"):
             from .kb import kb
             self.kb = kb
+        self.kb._trace = trace
 
     async def run(self, question: str) -> str:
         print(f"\n{'='*60}")
@@ -561,6 +562,7 @@ class Level2Agent:
         if search_mode in ("hybrid", "rag_only"):
             from .kb import kb
             self.kb = kb
+        self.kb._trace = trace
 
     def _get_tools(self):
         if self.search_mode == "web_only":
