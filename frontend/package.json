@@ -8,11 +8,13 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "vue": "^3.5",
-    "vue-router": "^4.5",
-    "pinia": "^2.3",
     "axios": "^1.7",
-    "marked": "^14.0"
+    "chart.js": "^4.5.1",
+    "marked": "^14.0",
+    "pinia": "^2.3",
+    "vue": "^3.5",
+    "vue-chartjs": "^5.3.4",
+    "vue-router": "^4.5"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.2",

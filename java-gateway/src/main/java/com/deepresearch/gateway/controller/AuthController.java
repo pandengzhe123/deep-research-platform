@@ -48,8 +48,8 @@ public class AuthController {
         userRepo.save(user);
         log.info("用户注册: {}", username);
 
-        String token = jwt.generateToken(String.valueOf(user.getId()), username);
-        return ResponseEntity.ok(Map.of("status", "ok", "token", token, "username", username));
+        String token = jwt.generateToken(String.valueOf(user.getId()), username, user.getRole());
+        return ResponseEntity.ok(Map.of("status", "ok", "token", token, "username", username, "role", user.getRole()));
     }
 
     /** 登录。 */
@@ -68,7 +68,7 @@ public class AuthController {
         }
 
         log.info("用户登录: {}", username);
-        String token = jwt.generateToken(String.valueOf(user.getId()), username);
-        return ResponseEntity.ok(Map.of("status", "ok", "token", token, "username", username));
+        String token = jwt.generateToken(String.valueOf(user.getId()), username, user.getRole());
+        return ResponseEntity.ok(Map.of("status", "ok", "token", token, "username", username, "role", user.getRole()));
     }
 }

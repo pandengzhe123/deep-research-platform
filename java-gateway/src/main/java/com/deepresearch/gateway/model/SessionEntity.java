@@ -35,6 +35,10 @@ public class SessionEntity {
 
     private String status = "running";
 
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "token_usage", columnDefinition = "jsonb")
+    private String tokenUsage = "{}";
+
     @Column(name = "created_at")
     private LocalDateTime createdAt = LocalDateTime.now();
 
@@ -73,4 +77,6 @@ public class SessionEntity {
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
     public LocalDateTime getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
+    public String getTokenUsage() { return tokenUsage; }
+    public void setTokenUsage(String tokenUsage) { this.tokenUsage = tokenUsage; }
 }

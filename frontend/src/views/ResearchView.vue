@@ -20,6 +20,9 @@
       </div>
 
       <div class="sidebar-bottom">
+        <div v-if="auth.isAdmin" class="admin-link" @click="$router.push('/admin')">
+          ⚙ 控制台
+        </div>
         <div class="user-info" @click="confirmLogout" title="点击退出">
           <div class="avatar">{{ auth.username.charAt(0).toUpperCase() }}</div>
           <span>{{ auth.username }}</span>
@@ -561,6 +564,8 @@ onMounted(async () => {
 .session-item.active .session-dot { background: #fff; }
 .session-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-bottom { padding: 14px 16px; border-top: 1px solid rgba(255,255,255,.06); }
+.admin-link { padding: 8px 0; color: #a5b4fc; font-size: 13px; cursor: pointer; user-select: none; }
+.admin-link:hover { color: #c7d2fe; }
 .user-info { display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 8px; border-radius: 8px; transition: background .12s; }
 .user-info:hover { background: rgba(255,255,255,.06); }
 .avatar { width: 32px; height: 32px; border-radius: 50%; background: #6366f1; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; }

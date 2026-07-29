@@ -90,6 +90,16 @@ public class SessionService {
     }
 
     /**
+    /** 更新 token 消耗统计。 */
+    public void updateTokenUsage(String sessionId, String tokenUsageJson) {
+        repo.findById(sessionId).ifPresent(entity -> {
+            entity.setTokenUsage(tokenUsageJson);
+            entity.touch();
+            repo.save(entity);
+        });
+    }
+
+    /**
      * 追加一份报告到 JSONB 数组（不覆盖历史报告），并标记完成。
      */
     public void appendReport(String sessionId, String report) {

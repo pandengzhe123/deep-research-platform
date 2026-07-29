@@ -14,7 +14,10 @@ import org.springframework.web.server.WebFilter;
 import org.springframework.web.server.WebFilterChain;
 import reactor.core.publisher.Mono;
 
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+
 import java.util.Collections;
+import java.util.List;
 
 @Configuration
 @EnableWebFluxSecurity
@@ -31,6 +34,7 @@ public class SecurityConfig {
         return http
                 .authorizeExchange(ex -> ex
                         .pathMatchers("/api/auth/**", "/api/health").permitAll()
+                        .pathMatchers("/api/admin/**").hasRole("ADMIN")
                         .anyExchange().authenticated()
                 )
                 .addFilterAt(jwtFilter(), SecurityWebFiltersOrder.AUTHENTICATION)
@@ -41,7 +45,7 @@ public class SecurityConfig {
     }
 
     /**
-     * JWT 认证过滤器 —— 从 Authorization: Bearer <token> 解析 userId，
+     * JWT 认证过滤器 —— 从 Authorization: Bearer <token> 解析 userId 和 role，
      * 注入 SecurityContext。通过 addFilterAt 放在 Security 链的 AUTHENTICATION
      * 位置，确保鉴权之前执行。
      */
@@ -49,9 +53,14 @@ public class SecurityConfig {
         return (ServerWebExchange exchange, WebFilterChain chain) -> {
             String auth = exchange.getRequest().getHeaders().getFirst("Authorization");
             if (auth != null && auth.startsWith("Bearer ") && jwt.validateToken(auth.substring(7))) {
-                String userId = jwt.getUserId(auth.substring(7));
+                String token = auth.substring(7);
+                String userId = jwt.getUserId(token);
+                String role = jwt.getRole(token);
+                List<SimpleGrantedAuthority> authorities = role != null
+                        ? List.of(new SimpleGrantedAuthority("ROLE_" + role.toUpperCase()))
+                        : Collections.emptyList();
                 UsernamePasswordAuthenticationToken authentication =
-                        new UsernamePasswordAuthenticationToken(userId, null, Collections.emptyList());
+                        new UsernamePasswordAuthenticationToken(userId, null, authorities);
                 return chain.filter(exchange)
                         .contextWrite(ReactiveSecurityContextHolder.withAuthentication(authentication));
             }

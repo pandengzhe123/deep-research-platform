@@ -4,21 +4,27 @@ import { ref, computed } from 'vue'
 export const useAuthStore = defineStore('auth', () => {
   const token = ref(localStorage.getItem('token') || '')
   const username = ref(localStorage.getItem('username') || '')
+  const role = ref(localStorage.getItem('role') || 'user')
 
   const isLoggedIn = computed(() => !!token.value)
+  const isAdmin = computed(() => role.value === 'admin')
 
-  function login(t, user) {
+  function login(t, user, r) {
     token.value = t
     username.value = user
+    role.value = r || 'user'
     localStorage.setItem('token', t)
     localStorage.setItem('username', user)
+    localStorage.setItem('role', r || 'user')
   }
 
   function logout() {
     token.value = ''
     username.value = ''
+    role.value = 'user'
     localStorage.removeItem('token')
     localStorage.removeItem('username')
+    localStorage.removeItem('role')
   }
 
   function kbUserId() {
@@ -31,5 +37,5 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  return { token, username, isLoggedIn, login, logout, kbUserId }
+  return { token, username, role, isLoggedIn, isAdmin, login, logout, kbUserId }
 })

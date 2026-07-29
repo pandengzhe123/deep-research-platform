@@ -48,7 +48,7 @@ async function doLogin() {
   loading.value = true; msg.value = ''
   try {
     const { data } = await api.post('/auth/login', { username: username.value, password: password.value })
-    if (data.token) { auth.login(data.token, data.username); router.push('/') }
+    if (data.token) { auth.login(data.token, data.username, data.role); router.push('/') }
     else { msg.value = data.message || '登录失败'; msgType.value = 'error' }
   } catch (e) { msg.value = e.response?.data?.message || '网络错误'; msgType.value = 'error' }
   finally { loading.value = false }
@@ -60,7 +60,7 @@ async function doRegister() {
   loading.value = true; msg.value = ''
   try {
     const { data } = await api.post('/auth/register', { username: username.value, password: password.value })
-    if (data.token) { auth.login(data.token, data.username); router.push('/') }
+    if (data.token) { auth.login(data.token, data.username, data.role); router.push('/') }
     else { msg.value = data.message || '注册失败'; msgType.value = 'error' }
   } catch (e) { msg.value = e.response?.data?.message || '网络错误'; msgType.value = 'error' }
   finally { loading.value = false }

@@ -30,11 +30,12 @@ public class JwtTokenProvider {
     }
 
     /** 签发 JWT。 */
-    public String generateToken(String userId, String username) {
+    public String generateToken(String userId, String username, String role) {
         Date now = new Date();
         return Jwts.builder()
                 .subject(userId)
                 .claim("username", username)
+                .claim("role", role)
                 .issuedAt(now)
                 .expiration(new Date(now.getTime() + expirationMs))
                 .signWith(key)
@@ -54,6 +55,11 @@ public class JwtTokenProvider {
     /** 从 JWT 提取 user_id（即 subject）。 */
     public String getUserId(String token) {
         return parseClaims(token).getSubject();
+    }
+
+    /** 从 JWT 提取 role。 */
+    public String getRole(String token) {
+        return parseClaims(token).get("role", String.class);
     }
 
     private Claims parseClaims(String token) {

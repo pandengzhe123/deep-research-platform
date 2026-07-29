@@ -172,6 +172,10 @@ public class ResearchController {
                                             String report = node.has("report") ? node.get("report").asText() : "";
                                             sessionService.appendReport(sessionId, report);
                                             sessionService.appendHistory(sessionId, "agent", report);
+                                            if (node.has("tokenUsage")) {
+                                                sessionService.updateTokenUsage(sessionId,
+                                                        objectMapper.writeValueAsString(node.get("tokenUsage")));
+                                            }
                                             log.info("流式研究完成: session={}, report_len={}", sessionId, report.length());
                                         } catch (Exception e) {
                                             log.error("解析报告失败: {}", e.getMessage());

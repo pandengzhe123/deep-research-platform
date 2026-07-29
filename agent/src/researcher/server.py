@@ -150,7 +150,13 @@ async def run_agent_with_sse(
         async def run_agent():
             try:
                 result = await agent.run(full_question)
-                await queue.put({"type": "done", "report": result})
+                token_summary = {
+                    "llm_calls": trace._llm_calls,
+                    "total_prompt_tokens": trace._total_prompt_tokens,
+                    "total_completion_tokens": trace._total_completion_tokens,
+                    "search_calls": trace._search_calls,
+                }
+                await queue.put({"type": "done", "report": result, "tokenUsage": token_summary})
             except aio.CancelledError:
                 log.info("Agent 任务被取消，停止研究")
                 raise  # 重新抛出让 task.cancel() 的 await 正常结束
@@ -169,9 +175,10 @@ async def run_agent_with_sse(
                     continue
 
                 if event.get("type") == "done":
-                    yield {"event": "done", "data": json.dumps({
-                        "report": event["report"], "language": language,
-                    })}
+                    done_data = {"report": event["report"], "language": language}
+                    if event.get("tokenUsage"):
+                        done_data["tokenUsage"] = event["tokenUsage"]
+                    yield {"event": "done", "data": json.dumps(done_data)}
                     return
                 elif event.get("type") == "error":
                     yield {"event": "error", "data": json.dumps({
@@ -185,9 +192,10 @@ async def run_agent_with_sse(
             while not queue.empty():
                 event = queue.get_nowait()
                 if event.get("type") == "done":
-                    yield {"event": "done", "data": json.dumps({
-                        "report": event["report"], "language": language,
-                    })}
+                    done_data = {"report": event["report"], "language": language}
+                    if event.get("tokenUsage"):
+                        done_data["tokenUsage"] = event["tokenUsage"]
+                    yield {"event": "done", "data": json.dumps(done_data)}
                     return
                 elif event.get("type") == "error":
                     yield {"event": "error", "data": json.dumps({
