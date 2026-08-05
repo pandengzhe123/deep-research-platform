@@ -41,8 +41,18 @@ def summarize_retriever(testset: list[dict], search_fn, user_id="eval") -> dict:
     return by_type
 
 
-def summarize_generator(results: list[dict]) -> dict:
-    """按题型统计 Generator 质量（简单规则：答案是否包含标准答案关键词）。"""
+def summarize_generator(results: list[dict], correctness_threshold: float = 0.0) -> dict:
+    """按题型统计 Generator 质量。
+
+    用 AnswerCorrectnessEvaluator 的声明级 F1 比对（而非字符串匹配），
+    避免"语义等价但字面不同"的答案被误判。与自实现 RAGAS 四指标保持同一方法论。
+
+    判定答对标准：F1 > correctness_threshold。
+    默认 0.0 → 只要有 1 条声明与标准答案一致就算对（语义等价即算命中）。
+    """
+    from researcher.evaluation.answer_correctness import AnswerCorrectnessEvaluator
+    ev = AnswerCorrectnessEvaluator()
+
     by_type = {}
     for r in results:
         t = r["type"]
@@ -51,10 +61,11 @@ def summarize_generator(results: list[dict]) -> dict:
         if not r.get("ground_truth"):
             continue
 
-        # 简单判断：标准答案的关键词是否出现在生成答案中
+        # 声明级比对：答案 vs 标准答案 → F1 分数
         gt = r["ground_truth"]
         answer = r["answer"]
-        ok = gt in answer
+        score = ev.evaluate(answer, gt)["score"]
+        ok = score > correctness_threshold
 
         if t not in by_type:
             by_type[t] = {"total": 0, "hits": 0}

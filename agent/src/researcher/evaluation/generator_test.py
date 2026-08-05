@@ -45,9 +45,9 @@ class Generator:
         self._model = os.getenv("LLM_MODEL", "deepseek-v4-flash")
 
     def ask(self, question, context_docs, all_docs):
-        if not context_docs:
-            return "[no-answer type, skip]"
-        ctx = "\n\n".join(all_docs.get(d, "") for d in context_docs)
+        # 不再跳过 no_answer：空/无关上下文也喂给 LLM，
+        # 测试生成端在"没有答案可查"时是拒绝（说未找到）还是硬编。
+        ctx = "\n\n".join(all_docs.get(d, "") for d in (context_docs or []))
         resp = self._client.chat.completions.create(
             model=self._model,
             temperature=0,
@@ -74,7 +74,43 @@ def run_generator_test(testset, docs):
     return results
 
 
-def run_faithfulness_eval(results, docs):
+# 拒绝信号关键词：答案中出现这些词 → 判定为"拒绝"（没说未找到则视为硬编）
+REJECT_KEYWORDS = ["未找到", "没有", "不存在", "无法", "没有找到", "not found", "no information", "no answer", "n/a", "暂未"]
+
+
+def _is_rejection(answer: str) -> bool:
+    """判断答案是否"拒绝"（诚实说没有相关信息）而非硬编。"""
+    if not answer or not answer.strip():
+        return False
+    low = answer.lower()
+    # 拒绝信号：明确说没有/找不到/无法回答
+    if any(k in low for k in REJECT_KEYWORDS):
+        return True
+    # 空话式拒绝："我没有足够的信息" "无法确定" 等
+    if "足够的信息" in low or "无法确定" in low or "不能回答" in low:
+        return True
+    return False
+
+
+def run_rejection_test(results: list[dict]) -> dict:
+    """测生成端拒绝能力：no_answer 题喂空/无关上下文后，模型是拒绝还是硬编。
+
+    返回按题型分组的拒绝率。重点看 no_answer 组。
+    """
+    by_type: dict[str, dict] = {}
+    for r in results:
+        t = r["type"]
+        if t not in by_type:
+            by_type[t] = {"total": 0, "rejected": 0, "hallucinated": []}
+        by_type[t]["total"] += 1
+        if _is_rejection(r["answer"]):
+            by_type[t]["rejected"] += 1
+        else:
+            # 记录硬编样例，供人工检查
+            by_type[t]["hallucinated"].append(
+                {"question": r["question"][:50], "answer": r["answer"][:120]}
+            )
+    return by_type
     """自实现 Faithfulness 评估器（和 RAGAS 同逻辑，不依赖 RAGAS 库）。"""
     from faithfulness import FaithfulnessEvaluator
 
@@ -99,12 +135,17 @@ def run_faithfulness_eval(results, docs):
     return {"avg_faithfulness": avg, "n": len(scores), "details": details}
 
 
-def print_report(results, faith_result, docs):
+def print_report(results, faith_result, docs, rejection_result=None):
     print("\n" + "=" * 80)
     print("  Generator Layer Test (skip retriever - feed golden docs)")
     print("=" * 80)
 
     # by type summary
+    # 用声明级 F1 比对（而非字符串匹配），避免语义等价被误判。
+    # 与 summarize_generator 保持一致：默认 F1 > 0 即算对。
+    from researcher.evaluation.answer_correctness import AnswerCorrectnessEvaluator
+    correctness_ev = AnswerCorrectnessEvaluator()
+
     by_type = {}
     for r in results:
         t = r["type"]
@@ -112,8 +153,11 @@ def print_report(results, faith_result, docs):
             by_type[t] = {"total": 0, "correct": 0}
         by_type[t]["total"] += 1
         gt = r.get("ground_truth", "")
-        if gt and gt in r["answer"]:
-            by_type[t]["correct"] += 1
+        answer = r.get("answer", "")
+        if gt and answer:
+            score = correctness_ev.evaluate(answer, gt)["score"]
+            if score > 0.0:  # 有声明与标准答案一致即算对
+                by_type[t]["correct"] += 1
 
     print(f"\n  {'type':<15} {'total':<8} {'correct':<10} {'rate':<10}")
     print("  " + "-" * 45)
@@ -127,6 +171,22 @@ def print_report(results, faith_result, docs):
     print(f"  Average Faithfulness: {faith_result['avg_faithfulness']:.2%}")
     for d in faith_result["details"][:5]:
         print(f"  [{d['supported']}/{d['total']}] {d['question']}...")
+
+    # 拒绝能力（生成端防硬编）
+    if rejection_result:
+        print("\n  --- Rejection Test (防硬编：空/无关上下文下是否拒绝) ---")
+        print(f"  {'type':<15} {'total':<8} {'rejected':<10} {'rate':<10}")
+        print("  " + "-" * 45)
+        for t, s in rejection_result.items():
+            rate = f"{s['rejected'] / s['total']:.0%}" if s["total"] else "N/A"
+            print(f"  {t:<15} {s['total']:<8} {s['rejected']:<10} {rate:<10}")
+        no_answer = rejection_result.get("no_answer", {})
+        hallu = no_answer.get("hallucinated", [])
+        if hallu:
+            print(f"\n  ⚠️ no_answer 题型 {len(hallu)} 个硬编样例（模型编造了答案）：")
+            for h in hallu[:5]:
+                print(f"    Q: {h['question']}")
+                print(f"    A: {h['answer']}...")
 
     # Sample
     print("\n  --- Sample Answers ---")
@@ -157,4 +217,5 @@ if __name__ == "__main__":
 
     results = run_generator_test(testset, docs)
     faith_result = run_faithfulness_eval(results, docs)
-    print_report(results, faith_result, docs)
+    rejection_result = run_rejection_test(results)
+    print_report(results, faith_result, docs, rejection_result=rejection_result)
