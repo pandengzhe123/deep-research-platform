@@ -43,6 +43,8 @@ class TraceRun:
         self._total_prompt_tokens = 0
         self._total_completion_tokens = 0
         self._rounds_completed = 0
+        self._query_history: list[str] = []  # 轨迹评估：历史 query，用于循环检测
+        self._max_query_similarity = 0.0     # 本轮 query 与历史的最大相似度
 
         self._level = level
         self._model = model
@@ -82,6 +84,7 @@ class TraceRun:
                 "total_prompt_tokens": self._total_prompt_tokens,
                 "total_completion_tokens": self._total_completion_tokens,
                 "rounds_completed": self._rounds_completed,
+                "max_query_similarity": round(self._max_query_similarity, 3),  # 循环检测指标
             },
         })
         self._flush()
@@ -138,10 +141,32 @@ class TraceRun:
                             total_duration_ms: int = 0,
                             cache_hit: bool = False,
                             success: bool = True, error: str = ""):
-        """记录一次搜索调用。"""
+        """记录一次搜索调用。
+
+        同时做轨迹评估的循环检测：计算本轮 query 与历史 query 的最大相似度，
+        高相似度说明 Agent 可能陷入了"重复搜索同一内容"的死循环。
+        """
         self._search_calls += 1
         if not success:
             self._search_errors += 1
+
+        # 循环检测：本轮 query 与历史 query 的字符级 Jaccard 最大相似度
+        max_sim = 0.0
+        for q in queries:
+            q_set = set(q)
+            if not q_set:
+                continue
+            for prev in self._query_history:
+                prev_set = set(prev)
+                if not prev_set:
+                    continue
+                union = q_set | prev_set
+                sim = len(q_set & prev_set) / len(union) if union else 0.0
+                if sim > max_sim:
+                    max_sim = sim
+        self._query_history.extend(queries)
+        if max_sim > self._max_query_similarity:
+            self._max_query_similarity = max_sim
 
         self._append({
             "type": "search_call",
@@ -153,6 +178,9 @@ class TraceRun:
             "cache_hit": cache_hit,
             "success": success,
             "error": error,
+            # 轨迹评估：与历史 query 的最大相似度（>0.8 视为潜在循环）
+            "max_query_similarity": round(max_sim, 3),
+            "query_history_len": len(self._query_history),
         })
 
     async def record_round(self, round_num: int, max_rounds: int,

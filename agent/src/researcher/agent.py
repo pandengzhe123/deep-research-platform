@@ -669,7 +669,8 @@ class Level2Agent:
                         if name == "search":
                             queries = args.get("queries", [question])
                             print(f"  搜索: {queries}")
-                            self.emit({"step": "searching", "message": f"搜索: {', '.join(queries)}", "round": round_num, "queries": queries})
+                            # tool + queries 一起入 trace，轨迹评估靠这个还原工具调用
+                            self.emit({"step": "searching", "message": f"搜索: {', '.join(queries)}", "round": round_num, "tool": "search", "tool_args": queries})
                             result = await self.search_tool.search(queries)
                             # 截断单个结果防止内存溢出
                             if len(result) > MAX_RESULTS_CHARS:
@@ -684,7 +685,8 @@ class Level2Agent:
                         elif name == "search_kb":
                             query = args.get("query", question)
                             print(f"  知识库检索: {query}")
-                            self.emit({"step": "kb_searching", "message": f"知识库检索: {query}", "round": round_num})
+                            # 补 query 入 trace（之前缺失），轨迹评估需要知道 KB 检索了什么
+                            self.emit({"step": "kb_searching", "message": f"知识库检索: {query}", "round": round_num, "tool": "search_kb", "tool_args": query})
                             if self.search_mode in ("hybrid", "rag_only"):
                                 result = await asyncio.to_thread(lambda: self.kb.search(query, user_id=self.user_id, doc_ids=self.rag_doc_ids or None, mode="full"))
                             else:
@@ -703,7 +705,8 @@ class Level2Agent:
                         elif name == "think":
                             reflection = args.get("reflection", "")
                             print(f"  反思: {reflection[:100]}...")
-                            self.emit({"step": "thinking", "message": reflection[:150] + ("..." if len(reflection) > 150 else ""), "round": round_num})
+                            # 完整 reflection 入 trace（之前只有截断的 message）
+                            self.emit({"step": "thinking", "message": reflection[:150] + ("..." if len(reflection) > 150 else ""), "round": round_num, "tool": "think", "tool_args": reflection})
                             messages.append({
                                 "role": "tool",
                                 "tool_call_id": tc.id,

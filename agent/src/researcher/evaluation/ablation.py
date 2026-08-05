@@ -78,19 +78,25 @@ def print_ablation_table(results: dict):
 
     # 置换检验：判断模式间差异是否显著（还是抽样波动）
     per_mode_hits = {m: r["hit_list"] for m, r in results.items() if r.get("hit_list")}
-    if len(per_mode_hits) >= 2:
+    permutation_results = compare_all_modes(per_mode_hits) if len(per_mode_hits) >= 2 else []
+    if permutation_results:
         print("\n  置换检验（判断差异是否显著，非抽样波动）：")
         print(f"  {'对比':<20} {'A/B命中':<12} {'差距':>5} {'p-value':>10}  判定")
         print("  " + "-" * 55)
-        for r in compare_all_modes(per_mode_hits):
+        for r in permutation_results:
             verdict = "✅ 显著" if r["significant"] else "⚠️ 不显著（可能是抽样波动）"
             print(f"  {r['mode_a']} vs {r['mode_b']:<7} {r['hits_a']}/{r['hits_b']:<6} "
                   f"{r['diff']:>4}  {r['p_value']:>10.3f}  {verdict}")
         print("\n  解读：p < 0.05 表示差异不太可能来自抽样波动；")
         print("  p >= 0.05 表示只凭这批评测题无法确认差异真实存在。")
 
-    # 保存结果（hit_list 不落盘，只存汇总）
-    save_results = {m: {k: v for k, v in r.items() if k != "hit_list"} for m, r in results.items()}
+    # 保存结果：汇总 + 逐题命中列表 + 置换检验结果 全部落盘（可复现）
+    save_results = {
+        "results": {
+            m: {k: v for k, v in r.items()} for m, r in results.items()
+        },
+        "permutation_test": permutation_results,
+    }
     from researcher.evaluation._results import run_dir_for
     out_path = os.path.join(run_dir_for("rag"), "ablation_results.json")
     with open(out_path, "w", encoding="utf-8") as f:
