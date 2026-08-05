@@ -619,6 +619,9 @@ class Level2Agent:
                 print(f"  [hybrid] KB 预搜失败: {e}，跳过")
 
         for round_num in range(1, self.max_rounds + 1):
+            # 轨迹评估：记录轮次转换（trace.jsonl 的 round_start/round_end）
+            if self.trace:
+                await self.trace.record_round(round_num, self.max_rounds, event="start")
             # Token 超限保护
             total_chars = sum(len(str(m)) for m in messages)
             messages, context_warned = await _truncate_context(
@@ -734,6 +737,10 @@ class Level2Agent:
                     "role": "user",
                     "content": f"（系统提示：本轮 LLM 调用失败: {e}，请基于已有信息继续研究）",
                 })
+
+            # 轨迹评估：本轮结束
+            if self.trace:
+                await self.trace.record_round(round_num, self.max_rounds, event="end")
 
         # 无结果兜底：避免用空字符串调 LLM 产生幻觉报告
         if not all_search_results:
@@ -1235,6 +1242,9 @@ class Level4Agent:
         context_warned = False
 
         for round_num in range(1, self.max_rounds + 1):
+            # 轨迹评估：记录 Supervisor 轮次转换
+            if self.trace:
+                await self.trace.record_round(round_num, self.max_rounds, event="start")
             # 消息历史超限保护（与 Level 2 一致）
             total_chars = sum(len(str(m)) for m in messages)
 
@@ -1337,6 +1347,10 @@ class Level4Agent:
                     "tool_call_id": tc.id,
                     "content": f"【课题】{topic}\n\n【摘要】\n{compressed}",
                 })
+
+            # 轨迹评估：本轮 Supervisor 结束
+            if self.trace:
+                await self.trace.record_round(round_num, self.max_rounds, event="end")
 
         # 汇总所有发现：用原始完整报告（raw_findings）保证信息量，
         # 同时传入决策笔记（all_findings = compressed）辅助结构组织
