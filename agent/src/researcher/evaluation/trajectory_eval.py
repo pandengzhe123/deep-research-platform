@@ -176,8 +176,22 @@ def print_trajectory_stats(stats: dict):
     print("=" * 60)
 
 
+def save_trajectory_stats(stats: dict, trace_path: str, out_path: str = None) -> str:
+    """把解析出的轨迹指标保存为 JSON（与 trace.jsonl 同目录）。
+
+    之前解析器只打印不落盘——关终端指标就丢了。补上：存成 trajectory_stats.json。
+    """
+    if out_path is None:
+        out_path = str(Path(trace_path).parent / "trajectory_stats.json")
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(stats, f, ensure_ascii=False, indent=2)
+    return out_path
+
+
 if __name__ == "__main__":
     import sys
     path = sys.argv[1] if len(sys.argv) > 1 else "reports/20260805_134427/trace.jsonl"
     stats = analyze_trace(path)
     print_trajectory_stats(stats)
+    saved = save_trajectory_stats(stats, path)
+    print(f"\n  [trajectory] 指标已保存: {saved}")
