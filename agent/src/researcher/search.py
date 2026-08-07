@@ -83,14 +83,17 @@ class SearchTool:
 
         # 未命中缓存，实际搜索
         self._cache_misses += 1
+        fallback_used = False
         result = await self._safe_tavily_search(query, max_results, include_raw)
         if not result.get("results"):
             print(f"  ⚠️ Tavily 无结果，降级到 DuckDuckGo: {query[:50]}...")
             result = await self._ddg_search(query, max_results)
+            fallback_used = True  # 记录降级发生（供恢复率评测）
 
-        # 存入缓存
+        # 存入缓存（带降级标记）
         if result.get("results"):
             self._search_cache[cache_key] = (now, result)
+        result["fallback_used"] = fallback_used
         return result
 
     def get_cache_stats(self) -> dict:
@@ -167,6 +170,8 @@ class SearchTool:
             output_parts.append("\n" + "-" * 60)
 
         result = "\n".join(output_parts) if len(output_parts) > 1 else "未找到相关结果。"
+        # 汇总本轮是否有降级发生（供恢复率评测）
+        fallback_used = any(r.get("fallback_used") for r in all_results)
         if self.trace:
             await self.trace.record_search(
                 queries=queries,
@@ -174,6 +179,7 @@ class SearchTool:
                 deduped_count=skipped,
                 total_duration_ms=int((time.time() - t0) * 1000),
                 success=True,
+                fallback_used=fallback_used,
             )
         return result
 

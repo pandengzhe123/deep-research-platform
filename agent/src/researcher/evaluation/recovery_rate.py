@@ -65,14 +65,18 @@ def recovery_rate(trace_path: str) -> dict:
                                        "method": e.get("method")})
 
         elif t == "search_call":
-            # 搜索降级：cache_hit=False 且失败过 → 降级；success 说明恢复
-            if not e.get("success", True):
+            # 搜索降级：fallback_used=True 说明 Tavily 失败后降级 DDG 且最终成功 → 恢复成功
+            if e.get("fallback_used"):
                 search_fallbacks += 1
-                # 后续有成功搜索 = 恢复（简化：本事件失败即算尝试恢复）
-                # 实际降级在 search.py 内部，trace 只记录最终 success
                 if e.get("success", True):
                     search_recovered += 1
-                recovery_cases.append({"type": "search_fallback", "recovered": e.get("success", True),
+                recovery_cases.append({"type": "search_fallback",
+                                       "recovered": e.get("success", True),
+                                       "queries": e.get("queries", [])[:1]})
+            elif not e.get("success", True):
+                # 无降级但搜索失败 → 恢复失败
+                search_fallbacks += 1
+                recovery_cases.append({"type": "search_fail", "recovered": False,
                                        "queries": e.get("queries", [])[:1]})
 
         elif t == "error":

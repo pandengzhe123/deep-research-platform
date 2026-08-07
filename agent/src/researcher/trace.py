@@ -140,7 +140,8 @@ class TraceRun:
                             deduped_count: int = 0,
                             total_duration_ms: int = 0,
                             cache_hit: bool = False,
-                            success: bool = True, error: str = ""):
+                            success: bool = True, error: str = "",
+                            fallback_used: bool = False):
         """记录一次搜索调用。
 
         同时做轨迹评估的循环检测：计算本轮 query 与历史 query 的最大相似度，
@@ -181,6 +182,8 @@ class TraceRun:
             # 轨迹评估：与历史 query 的最大相似度（>0.8 视为潜在循环）
             "max_query_similarity": round(max_sim, 3),
             "query_history_len": len(self._query_history),
+            # 恢复率评测：是否发生降级（Tavily→DDG）
+            "fallback_used": fallback_used,
         })
 
     async def record_round(self, round_num: int, max_rounds: int,
