@@ -217,6 +217,8 @@ class SearchTool:
             output_parts.append("\n" + "-" * 60)
 
         result = "\n".join(output_parts) if len(output_parts) > 1 else "未找到相关结果。"
+        # 汇总本轮是否有降级发生（与 search() 一致，供恢复率评测）
+        fallback_used = any(r.get("fallback_used") for r in all_results)
         if self.trace:
             await self.trace.record_search(
                 queries=queries,
@@ -224,6 +226,7 @@ class SearchTool:
                 deduped_count=0,
                 total_duration_ms=int((time.time() - t0) * 1000),
                 success=True,
+                fallback_used=fallback_used,
             )
         return result
 

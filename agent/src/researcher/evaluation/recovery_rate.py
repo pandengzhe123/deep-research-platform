@@ -93,9 +93,11 @@ def recovery_rate(trace_path: str) -> dict:
     research_completed = end_error is None
 
     # 综合恢复率：恢复成功的事件 / 所有"需要恢复"的事件
-    # 需要恢复 = 重试 + 降级失败 + error 事件（error 事件本身算已恢复，因为研究继续了）
+    # error 事件只有在研究最终完成（end_error 为空）时才算恢复，
+    # 否则 error 是"最终失败的 error"，不应计入恢复数。
+    error_recovered = error_events if research_completed else 0
     total_failures = llm_retries + search_fallbacks + error_events
-    total_recovered = llm_recovered + search_recovered + error_events  # error 事件算已恢复（研究继续）
+    total_recovered = llm_recovered + search_recovered + error_recovered
 
     overall = round(total_recovered / total_failures, 3) if total_failures else 1.0
 

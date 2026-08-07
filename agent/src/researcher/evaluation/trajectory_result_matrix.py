@@ -56,13 +56,15 @@ def trajectory_quality(trajectory_stats: dict) -> tuple[str, list[str]]:
         bad = True
         reasons.append(f"错误事件: {len(trajectory_stats['error_events'])} 个")
 
-    # 工具失衡：think 远多于 search，且 search 很少 → 光想不搜
+    # 工具失衡：search 和 search_kb 都为 0，但 think 很多 → 光想不搜
+    # （与 tool_accuracy.py 的判定一致：rag_only 模式 search_kb>0 不算失衡）
     dist = trajectory_stats.get("tool_distribution", {})
     search_n = dist.get("search", 0)
+    search_kb_n = dist.get("search_kb", 0)
     think_n = dist.get("think", 0)
-    if search_n == 0 and think_n >= 3:
+    if search_n == 0 and search_kb_n == 0 and think_n >= 3:
         bad = True
-        reasons.append(f"工具失衡: search=0 但 think={think_n}（光反思不行动）")
+        reasons.append(f"工具失衡: 无检索但 think={think_n}（光反思不行动）")
 
     if trajectory_stats.get("search_calls") == 0 and trajectory_stats.get("search_kb_calls") == 0:
         bad = True

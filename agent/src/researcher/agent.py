@@ -1394,10 +1394,18 @@ async def main():
     """命令行入口。"""
     import sys
 
+    # 解析 --search-mode 参数（默认 hybrid，与 Agent 类默认一致）
+    search_mode = "hybrid"
     if len(sys.argv) > 1:
         args = sys.argv[1:]
+        if "--search-mode" in args:
+            idx = args.index("--search-mode")
+            if idx + 1 < len(args):
+                search_mode = args[idx + 1]
+                # 从参数中移除，避免污染 question
+                args = args[:idx] + args[idx + 2:]
         # 最后一个参数如果是数字，当作 level
-        if args[-1].isdigit():
+        if args and args[-1].isdigit():
             level = int(args[-1])
             question = " ".join(args[:-1])
         else:
@@ -1424,16 +1432,16 @@ async def main():
 
     async with TraceRun(
         question=question, output_dir=str(reports_dir),
-        level=level, model=config.llm_model, search_mode="web_only",
+        level=level, model=config.llm_model, search_mode=search_mode,
     ) as trace:
         if level == 1:
-            agent = FastLevel1Agent(trace=trace)
+            agent = FastLevel1Agent(trace=trace, search_mode=search_mode)
         elif level == 3:
-            agent = Level3Agent(trace=trace)
+            agent = Level3Agent(trace=trace, search_mode=search_mode)
         elif level == 4:
-            agent = Level4Agent(trace=trace)
+            agent = Level4Agent(trace=trace, search_mode=search_mode)
         else:
-            agent = Level2Agent(trace=trace)
+            agent = Level2Agent(trace=trace, search_mode=search_mode)
 
         report = await agent.run(question)
         print(f"\n{'='*60}")
@@ -1474,15 +1482,18 @@ async def main():
             from .evaluation.judge import ReportJudge
             report_text = open(report_file, encoding="utf-8").read()
             judge_result = ReportJudge().evaluate(question, report_text)
-            result_score = judge_result.get("overall", 0)
+            # judge 失败时 dimensions 为空——区分"没评上"和"真实 0 分"，
+            # 避免把失败当成 0 分写进评测日志
+            judge_ok = bool(judge_result.get("dimensions"))
+            result_score = judge_result.get("overall") if judge_ok else None
 
             # 3. 五维评测
             # ① 完成率：报告非空 + 有结论
             completion = 1.0 if (len(report_text) > 100 and any(k in report_text for k in ("总结", "结论", "概述"))) else 0.0
             # ② 幻觉率：1 - Faithfulness（用 judge 结果近似，准确值需跑 faithfulness）
-            #    这里用 judge 的 accuracy 维度近似（报告是否准确）
-            accuracy_dim = judge_result.get("dimensions", {}).get("accuracy", {}).get("score", 0)
-            hallucination_est = round(max(0.0, 1.0 - accuracy_dim / 10.0), 3)
+            #    这里用 judge 的 accuracy 维度近似（报告是否准确）；judge 失败时为 None
+            accuracy_dim = judge_result.get("dimensions", {}).get("accuracy", {}).get("score", 0) if judge_ok else 0
+            hallucination_est = round(max(0.0, 1.0 - accuracy_dim / 10.0), 3) if judge_ok else None
             # ③ 工具准确率
             tool_acc = tool_accuracy(traj_stats).get("accuracy")
             # ④ 恢复率

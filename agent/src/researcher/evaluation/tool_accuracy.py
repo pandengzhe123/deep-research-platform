@@ -93,10 +93,14 @@ def tool_accuracy(trajectory_stats: dict) -> dict:
         violations.append({"tool": "think", "round": 0, "reason": imbalance_reason})
 
     total = len(tool_calls)
+    # 工具失衡是严重退化（光反思不检索），accuracy 应反映它——整体判为不准确
+    accuracy = round(correct / total, 3) if total else None
+    if imbalance_reason and accuracy is not None:
+        accuracy = 0.0
     return {
         "total_calls": total,
         "correct": correct,
-        "accuracy": round(correct / total, 3) if total else None,
+        "accuracy": accuracy,
         "violations": violations,
         "imbalance": imbalance_reason,
         "details": details,
