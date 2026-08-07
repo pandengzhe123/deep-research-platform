@@ -189,8 +189,11 @@ def compare_reports(question: str, report_old: str, report_new: str,
             s_new = _avg(n1["dimensions"].get(dim, {}).get("score", 0),
                          n2["dimensions"].get(dim, {}).get("score", 0))
             dim_delta[dim] = round(s_new - s_old, 3)
-            old_detail[dim] = {"score": s_old}
-            new_detail[dim] = {"score": s_new}
+            # 与单次分支 schema 一致：保留 reason（两次评分各取一条拼接）
+            r_old = o1["dimensions"].get(dim, {}).get("reason", "") or o2["dimensions"].get(dim, {}).get("reason", "")
+            r_new = n1["dimensions"].get(dim, {}).get("reason", "") or n2["dimensions"].get(dim, {}).get("reason", "")
+            old_detail[dim] = {"score": s_old, "reason": r_old}
+            new_detail[dim] = {"score": s_new, "reason": r_new}
     else:
         old = judge.evaluate(question, report_old, research_brief)
         new = judge.evaluate(question, report_new, research_brief)

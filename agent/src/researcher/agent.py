@@ -643,6 +643,9 @@ class Level2Agent:
                     print("  LLM 认为信息足够，停止搜索")
                     self.emit({"step": "decided", "message": "信息已足够，停止搜索", "round": round_num})
                     messages.append({"role": "assistant", "content": msg.content or "信息已足够，现在可以写报告。"})
+                    # 轨迹评估：补本轮 end 事件（避免 round_start 无配对）
+                    if self.trace:
+                        await self.trace.record_round(round_num, self.max_rounds, event="end")
                     break
 
                 messages.append(_assistant_msg(msg))
@@ -737,6 +740,9 @@ class Level2Agent:
                     "role": "user",
                     "content": f"（系统提示：本轮 LLM 调用失败: {e}，请基于已有信息继续研究）",
                 })
+                # 轨迹评估：记录错误事件（恢复率研究级维度依赖它）
+                if self.trace:
+                    await self.trace.record_error(source="llm_call", message=str(e)[:200], round_num=round_num)
 
             # 轨迹评估：本轮结束
             if self.trace:
@@ -1272,6 +1278,9 @@ class Level4Agent:
 
             if not msg.tool_calls:
                 print("  Supervisor: 信息足够，ResearchComplete")
+                # 轨迹评估：补本轮 end 事件
+                if self.trace:
+                    await self.trace.record_round(round_num, self.max_rounds, event="end")
                 break
 
             messages.append(_assistant_msg(msg))
@@ -1279,6 +1288,9 @@ class Level4Agent:
             # 优先检测 ResearchComplete，跳过所有工具执行直接结束
             if any(tc.function.name == "ResearchComplete" for tc in msg.tool_calls):
                 print(f"  Supervisor: 调用 ResearchComplete → 结束")
+                # 轨迹评估：补本轮 end 事件
+                if self.trace:
+                    await self.trace.record_round(round_num, self.max_rounds, event="end")
                 break
 
             conduct_items: list[tuple] = []  # (tc, topic) 配对收集，避免 zip 对齐风险
@@ -1317,6 +1329,9 @@ class Level4Agent:
                     return (compressed, raw, None)
                 except Exception as e:
                     print(f"    研究员失败: {topic[:40]}... error={e}")
+                    # 轨迹评估：记录子研究员错误
+                    if self.trace:
+                        await self.trace.record_error(source="researcher", message=str(e)[:200], round_num=round_num)
                     return (None, None, str(e))
 
             # 分批并行派遣，每批最多 max_parallel 个，防止资源耗尽

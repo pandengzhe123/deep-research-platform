@@ -74,20 +74,18 @@ def run_generator_test(testset, docs):
     return results
 
 
-# 拒绝信号关键词：答案中出现这些词 → 判定为"拒绝"（没说未找到则视为硬编）
-REJECT_KEYWORDS = ["未找到", "没有", "不存在", "无法", "没有找到", "not found", "no information", "no answer", "n/a", "暂未"]
+# 拒绝信号短语：答案中出现 → 判定为"拒绝"（诚实说没有相关信息）。
+# 用完整短语而非单字（"没有"/"无法"会出现在实质回答里，导致误判拒绝）。
+REJECT_KEYWORDS = ["未找到", "没有找到", "不存在", "not found", "no information", "no answer", "n/a", "暂未", "无法回答", "无法确定", "无法找到", "不能回答", "没有相关信息", "没有关于", "没有相关", "足够的信息"]
 
 
 def _is_rejection(answer: str) -> bool:
     """判断答案是否"拒绝"（诚实说没有相关信息）而非硬编。"""
     if not answer or not answer.strip():
-        return False
+        return None  # 空答案：无法判断，不算硬编也不算拒绝
     low = answer.lower()
     # 拒绝信号：明确说没有/找不到/无法回答
     if any(k in low for k in REJECT_KEYWORDS):
-        return True
-    # 空话式拒绝："我没有足够的信息" "无法确定" 等
-    if "足够的信息" in low or "无法确定" in low or "不能回答" in low:
         return True
     return False
 
@@ -101,9 +99,13 @@ def run_rejection_test(results: list[dict]) -> dict:
     for r in results:
         t = r["type"]
         if t not in by_type:
-            by_type[t] = {"total": 0, "rejected": 0, "hallucinated": []}
+            by_type[t] = {"total": 0, "rejected": 0, "hallucinated": [], "empty": 0}
         by_type[t]["total"] += 1
-        if _is_rejection(r["answer"]):
+        verdict = _is_rejection(r["answer"])
+        if verdict is None:
+            # 空答案：无法判断，不算拒绝也不算硬编
+            by_type[t]["empty"] += 1
+        elif verdict:
             by_type[t]["rejected"] += 1
         else:
             # 记录硬编样例，供人工检查
