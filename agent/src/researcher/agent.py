@@ -1444,6 +1444,44 @@ async def main():
         filename.write_text(report, encoding="utf-8")
         print(f"\n报告已保存至: {filename}")
 
+    # ============================================================
+    # 轨迹评测自动化：研究跑完 → 自动解析轨迹 + 2×2 判定 + 落盘
+    # 此时 trace.jsonl 已由 __aexit__ flush，report.md 已写好
+    # 通过环境变量 AUTO_EVAL_TRACE 控制（默认开启，设 0 关闭）
+    # ============================================================
+    import os as _os
+    if _os.getenv("AUTO_EVAL_TRACE", "1") != "0":
+        try:
+            from .evaluation.trajectory_eval import analyze_trace, save_trajectory_stats
+            from .evaluation.trajectory_result_matrix import save_run_record
+
+            trace_file = str(reports_dir / "trace.jsonl")
+            report_file = str(reports_dir / "report.md")
+
+            # 1. 解析轨迹指标（如已有则跳过）
+            stats_file = str(reports_dir / "trajectory_stats.json")
+            if not _os.path.exists(stats_file):
+                traj_stats = analyze_trace(trace_file)
+                save_trajectory_stats(traj_stats, trace_file)
+            else:
+                import json as _json
+                traj_stats = _json.load(open(stats_file, encoding="utf-8"))
+
+            # 2. Judge 打分（报告质量）
+            from .evaluation.judge import ReportJudge
+            report_text = open(report_file, encoding="utf-8").read()
+            judge_result = ReportJudge().evaluate(question, report_text)
+            result_score = judge_result.get("overall", 0)
+
+            # 3. 2×2 判定 + 落盘到 evaluation_log.json
+            run_id = str(reports_dir.name)
+            save_run_record(traj_stats, result_score, run_id=run_id)
+
+            print(f"\n  [auto-eval] 轨迹评测完成: 轨迹{'好' if traj_stats.get('max_query_similarity',0)<=0.8 else '差'} | 结果 {result_score} 分")
+            print(f"  [auto-eval] 判定已写入 reports/evaluation_log.json")
+        except Exception as e:
+            print(f"  [auto-eval] 轨迹评测跳过（可选，不影响研究）: {e}")
+
 
 if __name__ == "__main__":
     asyncio.run(main())
