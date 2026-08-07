@@ -1445,18 +1445,22 @@ async def main():
         print(f"\n报告已保存至: {filename}")
 
     # ============================================================
-    # 轨迹评测自动化：研究跑完 → 自动解析轨迹 + 2×2 判定 + 落盘
+    # 五维评测自动化：研究跑完 → 自动完成五维评测 + 2×2 判定 + 落盘
     # 此时 trace.jsonl 已由 __aexit__ flush，report.md 已写好
     # 通过环境变量 AUTO_EVAL_TRACE 控制（默认开启，设 0 关闭）
     # ============================================================
     import os as _os
     if _os.getenv("AUTO_EVAL_TRACE", "1") != "0":
         try:
+            import json as _json
             from .evaluation.trajectory_eval import analyze_trace, save_trajectory_stats
             from .evaluation.trajectory_result_matrix import save_run_record
+            from .evaluation.tool_accuracy import tool_accuracy
+            from .evaluation.recovery_rate import recovery_rate
 
             trace_file = str(reports_dir / "trace.jsonl")
             report_file = str(reports_dir / "report.md")
+            run_id = str(reports_dir.name)
 
             # 1. 解析轨迹指标（如已有则跳过）
             stats_file = str(reports_dir / "trajectory_stats.json")
@@ -1464,23 +1468,59 @@ async def main():
                 traj_stats = analyze_trace(trace_file)
                 save_trajectory_stats(traj_stats, trace_file)
             else:
-                import json as _json
                 traj_stats = _json.load(open(stats_file, encoding="utf-8"))
 
-            # 2. Judge 打分（报告质量）
+            # 2. Judge 打分（报告质量）→ 幻觉率/完成率/成本延迟的输入
             from .evaluation.judge import ReportJudge
             report_text = open(report_file, encoding="utf-8").read()
             judge_result = ReportJudge().evaluate(question, report_text)
             result_score = judge_result.get("overall", 0)
 
-            # 3. 2×2 判定 + 落盘到 evaluation_log.json
-            run_id = str(reports_dir.name)
+            # 3. 五维评测
+            # ① 完成率：报告非空 + 有结论
+            completion = 1.0 if (len(report_text) > 100 and any(k in report_text for k in ("总结", "结论", "概述"))) else 0.0
+            # ② 幻觉率：1 - Faithfulness（用 judge 结果近似，准确值需跑 faithfulness）
+            #    这里用 judge 的 accuracy 维度近似（报告是否准确）
+            accuracy_dim = judge_result.get("dimensions", {}).get("accuracy", {}).get("score", 0)
+            hallucination_est = round(max(0.0, 1.0 - accuracy_dim / 10.0), 3)
+            # ③ 工具准确率
+            tool_acc = tool_accuracy(traj_stats).get("accuracy")
+            # ④ 恢复率
+            recovery = recovery_rate(trace_file).get("overall_recovery")
+            # ⑤ 成本延迟
+            cost = {
+                "total_tokens": traj_stats.get("total_tokens", 0),
+                "duration_s": traj_stats.get("duration_s", 0),
+                "llm_calls": traj_stats.get("llm_calls", 0),
+            }
+
+            # 4. 2×2 判定 + 落盘到 evaluation_log.json
             save_run_record(traj_stats, result_score, run_id=run_id)
 
-            print(f"\n  [auto-eval] 轨迹评测完成: 轨迹{'好' if traj_stats.get('max_query_similarity',0)<=0.8 else '差'} | 结果 {result_score} 分")
-            print(f"  [auto-eval] 判定已写入 reports/evaluation_log.json")
+            # 5. 五维评测报告落盘到研究目录
+            eval_report = {
+                "run_id": run_id,
+                "question": traj_stats.get("question", question)[:80],
+                "five_dimensions": {
+                    "completion": completion,
+                    "hallucination_est": hallucination_est,
+                    "tool_accuracy": tool_acc,
+                    "recovery_rate": recovery,
+                    "cost": cost,
+                },
+                "judge_score": result_score,
+            }
+            eval_path = str(reports_dir / "eval_report.json")
+            with open(eval_path, "w", encoding="utf-8") as f:
+                _json.dump(eval_report, f, ensure_ascii=False, indent=2)
+
+            print(f"\n  [auto-eval] 五维评测完成:")
+            print(f"    完成率: {completion} | 幻觉率(估): {hallucination_est} | 工具准确率: {tool_acc} | 恢复率: {recovery}")
+            print(f"    成本: {cost['total_tokens']} token, {cost['duration_s']}s, {cost['llm_calls']} 次 LLM")
+            print(f"    Judge: {result_score} 分 | 2×2 判定已写入 reports/evaluation_log.json")
+            print(f"    评测报告已保存: {eval_path}")
         except Exception as e:
-            print(f"  [auto-eval] 轨迹评测跳过（可选，不影响研究）: {e}")
+            print(f"  [auto-eval] 五维评测跳过（可选，不影响研究）: {e}")
 
 
 if __name__ == "__main__":
