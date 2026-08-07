@@ -12,6 +12,8 @@
 输出：工具准确率 + 每次调用的对错明细
 """
 
+import json
+
 # search_mode → 允许的工具集合
 MODE_ALLOWED_TOOLS = {
     "rag_only": {"search_kb", "think"},
@@ -46,18 +48,32 @@ def tool_accuracy(trajectory_stats: dict) -> dict:
     correct = 0
     details = []
     violations = []
+    seen_calls = []  # 已处理调用，用于标准 3 的重复检测
 
     for tc in tool_calls:
         tool = tc.get("tool", "")
         round_n = tc.get("round", 0)
+        args = tc.get("args", "")
         reason = []
 
         # 标准 1：模式边界 —— 用了不允许的工具
         if tool not in allowed:
             reason.append(f"模式{search_mode}不允许使用 {tool}")
 
-        # 标准 3：重复调用 —— 同一工具参数几乎一致（本轮内）
-        # 用简单判断：同一 tool 出现多次且 args 相同
+        # 标准 3：重复调用 —— 同一轮内，同一工具且参数几乎一致（字符级 Jaccard）
+        args_str = json.dumps(args, ensure_ascii=False) if not isinstance(args, str) else args
+        args_set = set(args_str)
+        for prev in seen_calls:
+            if prev["tool"] != tool or prev["round"] != round_n:
+                continue  # 不同工具或不同轮，不判重复
+            prev_args = json.dumps(prev["args"], ensure_ascii=False) if not isinstance(prev["args"], str) else prev["args"]
+            prev_set = set(prev_args)
+            union = args_set | prev_set
+            sim = len(args_set & prev_set) / len(union) if union else 0.0
+            if sim >= 0.8:  # 参数高度相似 → 重复调用
+                reason.append("重复调用: 同一轮内相同工具且参数高度相似")
+                break
+        seen_calls.append({"tool": tool, "round": round_n, "args": args})
 
         if reason:
             violations.append({"tool": tool, "round": round_n, "reason": "；".join(reason)})
