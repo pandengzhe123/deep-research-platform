@@ -149,28 +149,67 @@ class ReportJudge:
 
 
 def compare_reports(question: str, report_old: str, report_new: str,
-                    research_brief: str = "", judge: ReportJudge = None) -> dict:
+                    research_brief: str = "", judge: ReportJudge = None,
+                    swap_avg: bool = True) -> dict:
     """A/B 对比两份报告（改动前后）。返回各维度分差 + 总分差。
 
     绝对分不可靠，看的是相对变化——report_new 相比 report_old 的提升。
+
+    位置偏差缓解（swap_avg=True 时）：
+      LLM 对"先看到/后看到"的报告可能有系统性偏好。固定顺序只评一次，
+      偏差会污染 delta。做法：两种顺序各评一次取平均——顺序影响被抵消。
+      顺序1: old先 new后 → delta1；顺序2: new先 old后 → delta2；delta=(d1+d2)/2
     """
     judge = judge or ReportJudge()
-    old = judge.evaluate(question, report_old, research_brief)
-    new = judge.evaluate(question, report_new, research_brief)
 
-    dim_delta = {}
-    for dim in _WEIGHTS:
-        s_old = old["dimensions"].get(dim, {}).get("score", 0)
-        s_new = new["dimensions"].get(dim, {}).get("score", 0)
-        dim_delta[dim] = s_new - s_old
+    def _score_pair(report_first, report_second):
+        """按 first→second 顺序打分，返回 (first_score, second_score)。"""
+        first = judge.evaluate(question, report_first, research_brief)
+        second = judge.evaluate(question, report_second, research_brief)
+        return first, second
+
+    if swap_avg:
+        # 顺序 1：old 先 → new 后
+        o1, n1 = _score_pair(report_old, report_new)
+        # 顺序 2：new 先 → old 后
+        n2, o2 = _score_pair(report_new, report_old)
+
+        def _avg(a, b):
+            return round((a + b) / 2, 3)
+
+        old_overall = _avg(o1["overall"], o2["overall"])
+        new_overall = _avg(n1["overall"], n2["overall"])
+
+        dim_delta = {}
+        old_detail = {}
+        new_detail = {}
+        for dim in _WEIGHTS:
+            s_old = _avg(o1["dimensions"].get(dim, {}).get("score", 0),
+                         o2["dimensions"].get(dim, {}).get("score", 0))
+            s_new = _avg(n1["dimensions"].get(dim, {}).get("score", 0),
+                         n2["dimensions"].get(dim, {}).get("score", 0))
+            dim_delta[dim] = round(s_new - s_old, 3)
+            old_detail[dim] = {"score": s_old}
+            new_detail[dim] = {"score": s_new}
+    else:
+        old = judge.evaluate(question, report_old, research_brief)
+        new = judge.evaluate(question, report_new, research_brief)
+        old_overall = old["overall"]
+        new_overall = new["overall"]
+        dim_delta = {dim: new["dimensions"].get(dim, {}).get("score", 0)
+                     - old["dimensions"].get(dim, {}).get("score", 0)
+                     for dim in _WEIGHTS}
+        old_detail = old["dimensions"]
+        new_detail = new["dimensions"]
 
     return {
-        "old_overall": old["overall"],
-        "new_overall": new["overall"],
-        "delta": round(new["overall"] - old["overall"], 3),
+        "old_overall": old_overall,
+        "new_overall": new_overall,
+        "delta": round(new_overall - old_overall, 3),
         "dim_delta": dim_delta,
-        "old_detail": old["dimensions"],
-        "new_detail": new["dimensions"],
+        "old_detail": old_detail,
+        "new_detail": new_detail,
+        "position_swap": swap_avg,  # 标记是否做了位置互换
     }
 
 
