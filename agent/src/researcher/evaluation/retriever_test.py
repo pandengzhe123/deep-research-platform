@@ -90,7 +90,7 @@ def print_results(results: dict):
 
 
 if __name__ == "__main__":
-    testset_path = os.path.join(os.path.dirname(__file__), "golden_testset_v2.json")
+    testset_path = os.path.join(os.path.dirname(__file__), "golden_testset_v4.json")
     with open(testset_path, encoding="utf-8") as f:
         testset = json.load(f)
     print(f"Loaded {len(testset)} test items")

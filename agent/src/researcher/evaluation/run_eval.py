@@ -1,7 +1,7 @@
 """评测主控脚本 —— 一键跑完整评估流程，汇总所有指标成表。
 
 用法：
-  # 检索 + 生成端到端评估（用 golden_testset_v2 的问题跑 RAG）
+  # 检索 + 生成端到端评估（用 golden_testset_v4 的问题跑 RAG）
   python -m researcher.evaluation.run_eval --mode rag --n 5
 
   # 报告质量评估（跑 Agent 生成报告 → Judge 打分）
