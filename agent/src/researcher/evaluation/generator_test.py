@@ -111,8 +111,11 @@ def run_rejection_test(results: list[dict]) -> dict:
                 {"question": r["question"][:50], "answer": r["answer"][:120]}
             )
     return by_type
+
+
+def run_faithfulness_eval(results, docs):
     """自实现 Faithfulness 评估器（和 RAGAS 同逻辑，不依赖 RAGAS 库）。"""
-    from faithfulness import FaithfulnessEvaluator
+    from researcher.evaluation.faithfulness import FaithfulnessEvaluator
 
     evaluator = FaithfulnessEvaluator()
     scores = []
