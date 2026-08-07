@@ -98,7 +98,7 @@ class LLMClient:
             resp = await self.client.chat.completions.create(**kwargs)
             return resp, resp.choices[0].message.content or ""
 
-        (resp, retries), result = await self._call_with_retry(_call)
+        (resp, result), retries = await self._call_with_retry(_call)
         if self.trace:
             await self.trace.record_llm(
                 method="chat",
@@ -129,7 +129,7 @@ class LLMClient:
             )
             return resp, resp.choices[0].message
 
-        (resp, retries), msg = await self._call_with_retry(_call)
+        (resp, msg), retries = await self._call_with_retry(_call)
         if self.trace:
             await self.trace.record_llm(
                 method="chat_with_tools",
@@ -166,7 +166,7 @@ class LLMClient:
             )
             return resp, json.loads(resp.choices[0].message.content or "{}")
 
-        (resp, retries), result = await self._call_with_retry(_call)
+        (resp, result), retries = await self._call_with_retry(_call)
         if self.trace:
             await self.trace.record_llm(
                 method="structured_output",
