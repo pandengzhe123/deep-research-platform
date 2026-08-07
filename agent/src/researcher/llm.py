@@ -30,15 +30,18 @@ class LLMClient:
     async def _call_with_retry(self, fn, max_retries: int = 3):
         """调用 LLM API，429/5xx/网络错误自动重试（指数退避）。
 
+        返回 (result, retries)：result 是 fn() 的结果，retries 是实际重试次数。
         不重试: 401（Key 错）、403（权限）、400（请求格式错）。
         """
         last_error = None
+        retries = 0
         for attempt in range(max_retries):
             try:
-                return await fn()
+                return await fn(), retries
             except RateLimitError as e:
                 # 429 —— 限流，等久一点
                 last_error = e
+                retries += 1
                 wait = (attempt + 1) * 5
                 print(f"  ⚠️ LLM 限流，{wait}s 后重试（{attempt+1}/{max_retries}）...")
                 await asyncio.sleep(wait)
@@ -48,6 +51,7 @@ class LLMClient:
             except APIConnectionError as e:
                 # 网络错误（非超时）——重试
                 last_error = e
+                retries += 1
                 wait = 2 ** (attempt + 1)
                 print(f"  ⚠️ LLM 网络错误，{wait}s 后重试（{attempt+1}/{max_retries}）...")
                 await asyncio.sleep(wait)
@@ -55,6 +59,7 @@ class LLMClient:
                 # 5xx 服务端错误才重试，4xx 直接抛
                 if e.status_code and e.status_code >= 500:
                     last_error = e
+                    retries += 1
                     wait = 2 ** (attempt + 1)
                     print(f"  ⚠️ LLM 服务端错误 {e.status_code}，{wait}s 后重试（{attempt+1}/{max_retries}）...")
                     await asyncio.sleep(wait)
@@ -93,7 +98,7 @@ class LLMClient:
             resp = await self.client.chat.completions.create(**kwargs)
             return resp, resp.choices[0].message.content or ""
 
-        resp, result = await self._call_with_retry(_call)
+        (resp, retries), result = await self._call_with_retry(_call)
         if self.trace:
             await self.trace.record_llm(
                 method="chat",
@@ -103,6 +108,7 @@ class LLMClient:
                 request_id=getattr(resp, "id", ""),
                 success=True,
                 purpose=system_prompt[:120],
+                retries=retries,
             )
         return result
 
@@ -123,7 +129,7 @@ class LLMClient:
             )
             return resp, resp.choices[0].message
 
-        resp, msg = await self._call_with_retry(_call)
+        (resp, retries), msg = await self._call_with_retry(_call)
         if self.trace:
             await self.trace.record_llm(
                 method="chat_with_tools",
@@ -133,6 +139,7 @@ class LLMClient:
                 request_id=getattr(resp, "id", ""),
                 success=True,
                 purpose=system_prompt[:120],
+                retries=retries,
             )
         return msg
 
@@ -159,7 +166,7 @@ class LLMClient:
             )
             return resp, json.loads(resp.choices[0].message.content or "{}")
 
-        resp, result = await self._call_with_retry(_call)
+        (resp, retries), result = await self._call_with_retry(_call)
         if self.trace:
             await self.trace.record_llm(
                 method="structured_output",
@@ -169,5 +176,6 @@ class LLMClient:
                 request_id=getattr(resp, "id", ""),
                 success=True,
                 purpose=system_prompt[:120],
+                retries=retries,
             )
         return result
