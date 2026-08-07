@@ -133,6 +133,79 @@ def build_matrix(runs: list[dict]) -> dict:
     return cells
 
 
+# 评测日志路径（统一存所有研究的轨迹-结果判定）
+EVAL_LOG_PATH = "reports/evaluation_log.json"
+
+
+def save_run_record(trajectory_stats: dict, result_score: float | None,
+                    run_id: str = "", log_path: str = EVAL_LOG_PATH) -> str:
+    """把一次研究的 轨迹分 + 结果分 + 2×2 定位 追加到统一评测日志。
+
+    之前矩阵判定只打印不存盘——关终端就丢，且无法统计多次研究。
+    现在每次评测记录追加到 evaluation_log.json，可复现、可聚合。
+    """
+    cls = classify_run(trajectory_stats, result_score)
+    if not run_id:
+        run_id = trajectory_stats.get("question", "unknown")[:40]
+
+    record = {
+        "run_id": run_id,
+        "trajectory": {
+            "quality": cls["trajectory_quality"],
+            "reasons": cls["trajectory_reasons"],
+            "rounds": trajectory_stats.get("rounds"),
+            "llm_per_round": trajectory_stats.get("llm_calls_per_round"),
+            "max_query_similarity": trajectory_stats.get("max_query_similarity"),
+        },
+        "result": {
+            "score": result_score,
+            "quality": cls["result_quality"],
+            "reason": cls["result_reason"],
+        },
+        "matrix": cls["matrix_cell"],
+    }
+
+    # 追加到日志（保留历史记录）
+    import json
+    from pathlib import Path
+    log_path = Path(log_path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    records = []
+    if log_path.exists():
+        try:
+            records = json.loads(log_path.read_text(encoding="utf-8"))
+        except Exception:
+            records = []
+    records.append(record)
+    log_path.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    print(f"  [matrix] 评测记录已保存: {log_path}")
+    return str(log_path)
+
+
+def build_matrix_from_log(log_path: str = EVAL_LOG_PATH) -> dict:
+    """从评测日志读取历史记录，统计 2×2 矩阵分布。
+
+    返回: {cell: [run_ids]} + 汇总。用于分析 N 次研究的整体健康度。
+    """
+    from pathlib import Path
+    log_path = Path(log_path)
+    cells = {"✅ 正常": [], "⚠️ 数据问题": [], "⚠️ 碰运气": [], "❌ Agent 问题": []}
+    if not log_path.exists():
+        return cells
+    try:
+        records = json.loads(log_path.read_text(encoding="utf-8"))
+    except Exception:
+        return cells
+    for rec in records:
+        cell = rec.get("matrix", "")
+        # matrix 字段形如 "✅ 正常：轨迹好 + 结果好，可上线" → 取前半
+        key = cell.split("：")[0] if "：" in cell else cell
+        if key in cells:
+            cells[key].append(rec.get("run_id", ""))
+    return cells
+
+
 if __name__ == "__main__":
     # 自测：4 种矩阵情况，验证分类逻辑
     import json
@@ -168,8 +241,8 @@ if __name__ == "__main__":
     r4 = classify_run(t3, 4.0)
     print(f"\n[4] 轨迹差 + 结果差 → {r4['matrix_cell']}")
 
-    # 批量矩阵汇总
-    print(f"\n=== 批量矩阵（模拟 6 次研究）===")
+    # 批量矩阵汇总（内存版）
+    print(f"\n=== 批量矩阵（内存版，模拟 6 次研究）===")
     runs = [
         {"id": "run1", "trajectory_stats": dict(real_traj), "result_score": 8.0},
         {"id": "run2", "trajectory_stats": dict(real_traj), "result_score": 4.0},
@@ -181,3 +254,20 @@ if __name__ == "__main__":
     matrix = build_matrix(runs)
     for cell, ids in matrix.items():
         print(f"  {cell}: {len(ids)} 次  {ids}")
+
+    # 落盘版：把每次研究记录追加到 evaluation_log.json
+    print(f"\n=== 落盘版：评测记录写入日志 ===")
+    test_log = "reports/_test_eval_log.json"
+    import os
+    if os.path.exists(test_log):
+        os.remove(test_log)  # 测试用，先清空
+    for run in runs:
+        save_run_record(run["trajectory_stats"], run["result_score"], run_id=run["id"], log_path=test_log)
+
+    # 从日志读回，统计矩阵分布
+    print(f"\n=== 从日志统计矩阵分布 ===")
+    from_log = build_matrix_from_log(test_log)
+    for cell, ids in from_log.items():
+        print(f"  {cell}: {len(ids)} 次  {ids}")
+    os.remove(test_log)
+    print("\n测试日志已清理")
