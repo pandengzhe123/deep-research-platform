@@ -1494,13 +1494,16 @@ async def main():
                 traj_stats = _json.load(open(stats_file, encoding="utf-8"))
 
             # 2. Judge 打分（报告质量）→ 幻觉率/完成率/成本延迟的输入
+            # 用 3 次平均压单次打分噪音（±0.5），与 A/B 对比的判定标准一致，
+            # 避免 2×2 矩阵结果质量被单次 judge 的随机波动误分。
             from .evaluation.judge import ReportJudge
             report_text = open(report_file, encoding="utf-8").read()
-            judge_result = ReportJudge().evaluate(question, report_text)
+            judge_result = ReportJudge().evaluate_avg(question, report_text, runs=3)
             # judge 失败时 dimensions 为空——区分"没评上"和"真实 0 分"，
             # 避免把失败当成 0 分写进评测日志
             judge_ok = bool(judge_result.get("dimensions"))
             result_score = judge_result.get("overall") if judge_ok else None
+            judge_std = judge_result.get("std") if judge_ok else None
 
             # 3. 五维评测
             # ① 完成率：报告非空 + 有结论
@@ -1535,6 +1538,7 @@ async def main():
                     "cost": cost,
                 },
                 "judge_score": result_score,
+                "judge_std": judge_std,  # 3 次打分标准差——波动越大结果分越不可信
             }
             eval_path = str(reports_dir / "eval_report.json")
             with open(eval_path, "w", encoding="utf-8") as f:
@@ -1543,7 +1547,7 @@ async def main():
             print(f"\n  [auto-eval] 五维评测完成:")
             print(f"    完成率: {completion} | 幻觉率(估): {hallucination_est} | 工具准确率: {tool_acc} | 恢复率: {recovery}")
             print(f"    成本: {cost['total_tokens']} token, {cost['duration_s']}s, {cost['llm_calls']} 次 LLM")
-            print(f"    Judge: {result_score} 分 | 2×2 判定已写入 reports/evaluation_log.json")
+            print(f"    Judge: {result_score} 分 (std {judge_std}) | 2×2 判定已写入 reports/evaluation_log.json")
             print(f"    评测报告已保存: {eval_path}")
         except Exception as e:
             print(f"  [auto-eval] 五维评测跳过（可选，不影响研究）: {e}")
