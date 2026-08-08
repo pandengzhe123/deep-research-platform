@@ -87,6 +87,11 @@ class SemanticHit:
         """
         if not expected:
             return False, 0.0, "miss"
+        # no_answer 题（expected=["未找到"]）不走语义判断——
+        # question 和知识库里相关文档天然相似，embedding 必然误判命中。
+        # 这类题应单独用"结果是否未找到"判定（由调用方处理），这里直接返回 miss。
+        if expected == ["未找到"] or "未找到" in expected:
+            return False, 0.0, "miss"
         # 第 1 层：字面全中 → 直接命中（零成本）
         if self._is_literal_hit(expected, result):
             return True, 1.0, "literal"
