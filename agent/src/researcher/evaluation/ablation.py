@@ -14,6 +14,8 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".env"))
 
 from researcher.kb import kb
 from researcher.evaluation.permutation import compare_all_modes
+from researcher.evaluation.semantic_hit import semantic_hit
+from researcher.llm import LLMClient
 
 
 def run_ablation(testset: list[dict], user_id: str, doc_ids=None) -> dict:
@@ -25,9 +27,13 @@ def run_ablation(testset: list[dict], user_id: str, doc_ids=None) -> dict:
     返回：{mode: {hits, total, hit_rate, avg_time, hit_list}}
       hit_list 是每题命中(1)/未命中(0) 的列表，只含有 expected_chunks 的题
       （no_answer 题型 expected_chunks 为空，单独统计不参与置换检验）。
+
+    命中判定：semantic_hit 混合策略——字面全中直接算（零成本），
+    字面不中调 LLM 判断语义等价（修复关键词匹配的语义缺失）。
     """
     modes = ["v2", "hybrid", "rerank", "full"]
     results = {}
+    llm = LLMClient()  # 共享一个 LLM，用于语义等价判定
 
     for mode in modes:
         print(f"\n  Running mode: {mode}...")
@@ -48,8 +54,10 @@ def run_ablation(testset: list[dict], user_id: str, doc_ids=None) -> dict:
             elapsed = time.time() - start
             times.append(elapsed)
 
-            # 检查所有期望的关键词是否在结果中
-            all_found = all(kw in result for kw in expected)
+            # 语义命中判断：字面全中直接命中，字面不中调 LLM 判断语义等价
+            all_found, hit_mode = semantic_hit(question, expected, result, llm=llm)
+            if hit_mode == "llm_equiv":
+                print(f"    [语义命中] {question[:30]}... 字面不中但语义等价 ✓")
             hit_list.append(1 if all_found else 0)
             if all_found:
                 hits += 1
