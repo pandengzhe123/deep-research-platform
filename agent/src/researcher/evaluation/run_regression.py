@@ -74,8 +74,7 @@ def _calc_mrr(result_text: str, expected_chunks: list[str]) -> float:
 def run_retriever_regression(mode: str = "v2"):
     """跑检索回归，对比基准命中率和 MRR，检测退化。"""
     from researcher.kb import kb
-    from researcher.evaluation.semantic_hit import semantic_hit
-    from researcher.llm import LLMClient
+    from researcher.evaluation.semantic_hit import SemanticHit
 
     print("\n" + "=" * 60)
     print(f"  检索回归测试 ({mode})")
@@ -88,7 +87,7 @@ def run_retriever_regression(mode: str = "v2"):
     mrr_sum = 0.0
     mrr_count = 0
     failures = []
-    llm = LLMClient()  # 语义等价判定用
+    semantic_hit = SemanticHit()  # embedding 语义判定
     t0 = time.time()
     for item in testset:
         result = kb.search(item["question"], user_id="eval", mode=mode)
@@ -103,8 +102,8 @@ def run_retriever_regression(mode: str = "v2"):
             else:
                 failures.append({"question": item["question"][:50], "missing": ["应返回未找到但实际有结果"]})
             continue
-        # 语义命中判断：字面全中直接命中，字面不中调 LLM 判断语义等价
-        all_found, _ = semantic_hit(item["question"], expected, result, llm=llm)
+        # 语义命中判断：字面全中直接命中，字面不中 embedding 语义判断
+        all_found, _, _ = semantic_hit.check(item["question"], expected, result)
         total += 1
         if all_found:
             hits += 1
@@ -268,12 +267,11 @@ async def main():
     if args.update_baseline:
         print("更新基准...")
         from researcher.kb import kb
-        from researcher.evaluation.semantic_hit import semantic_hit
-        from researcher.llm import LLMClient
+        from researcher.evaluation.semantic_hit import SemanticHit
         with open(TESTSET, encoding="utf-8") as f:
             testset = json.load(f)
         baseline = _load_baseline() or {}
-        llm = LLMClient()
+        semantic_hit = SemanticHit()
         for rm in retrieval_modes:
             hits, mrr_sum, mrr_count = 0, 0.0, 0
             for item in testset:
@@ -283,7 +281,7 @@ async def main():
                     hits += 1 if ("未找到" in result or "not found" in result.lower()) else 0
                     mrr_sum += 1.0; mrr_count += 1
                 else:
-                    found, _ = semantic_hit(item["question"], expected, result, llm=llm)
+                    found, _, _ = semantic_hit.check(item["question"], expected, result)
                     if found:
                         hits += 1
                     mrr_sum += _calc_mrr(result, expected)
