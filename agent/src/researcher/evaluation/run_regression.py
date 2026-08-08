@@ -92,7 +92,9 @@ def run_retriever_regression(mode: str = "v2"):
     for item in testset:
         result = kb.search(item["question"], user_id="eval", mode=mode)
         expected = item.get("expected_chunks", [])
-        if not expected:
+        # no_answer 判定：按 type 而非 expected_chunks 是否为空——
+        # 测试集统一用 chunks=['未找到'] 标注 no_answer，chunks 非空但题型是 no_answer
+        if item.get("type") == "no_answer":
             # no_answer 题型：文档中无答案，检索结果应返回"未找到"
             total += 1
             if "未找到" in result or "not found" in result.lower():
@@ -277,7 +279,8 @@ async def main():
             for item in testset:
                 result = kb.search(item["question"], user_id="eval", mode=rm)
                 expected = item.get("expected_chunks", [])
-                if not expected:
+                # no_answer 判定：按 type 而非 expected_chunks 是否为空
+                if item.get("type") == "no_answer":
                     hits += 1 if ("未找到" in result or "not found" in result.lower()) else 0
                     mrr_sum += 1.0; mrr_count += 1
                 else:

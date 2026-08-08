@@ -152,13 +152,17 @@
     "ground_truth": null
   },
   {
-    "type": "no_answer",
+    "type": "multi_doc",
     "question": "Kubernetes 的架构是怎样的",
     "expected_docs": [
-      "doc3.txt"
+      "doc8_k8s.txt"
     ],
-    "expected_chunks": [],
-    "ground_truth": null
+    "expected_chunks": [
+      "控制平面",
+      "工作节点",
+      "Pod"
+    ],
+    "ground_truth": "Kubernetes 架构由控制平面（API Server、etcd、调度器、控制器管理器）和工作节点（kubelet、容器运行时）组成，最小调度单位是 Pod"
   },
   {
     "type": "no_answer",
@@ -414,8 +418,19 @@
     "ground_truth": "存储文档切块的向量，检索时找到与用户问题最相关的文档片段"
   },
   {
-    "type": "no_answer",
+    "type": "simple",
     "question": "MongoDB 是什么时候创建的",
+    "expected_docs": [
+      "doc14_mongodb.txt"
+    ],
+    "expected_chunks": [
+      "2007"
+    ],
+    "ground_truth": "2007年"
+  },
+  {
+    "type": "no_answer",
+    "question": "Redis 的作者现在在哪家公司工作",
     "expected_docs": [],
     "expected_chunks": [
       "未找到"
@@ -424,20 +439,11 @@
   },
   {
     "type": "no_answer",
-    "question": "Redis 的作者现在在哪家公司工作",
-    "expected_docs": [
-      "doc6_redis.txt"
-    ],
-    "expected_chunks": [],
-    "ground_truth": null
-  },
-  {
-    "type": "no_answer",
     "question": "Kafka 和 RabbitMQ 哪个性能更好",
-    "expected_docs": [
-      "doc7_kafka.txt"
+    "expected_docs": [],
+    "expected_chunks": [
+      "未找到"
     ],
-    "expected_chunks": [],
     "ground_truth": null
   },
   {
@@ -782,8 +788,10 @@
     "type": "no_answer",
     "question": "JWT 签名用 RS256 比 HS256 快多少",
     "expected_docs": [],
-    "expected_chunks": [],
-    "ground_truth": "知识库中未涉及 RS256 和 HS256 的性能对比数据。"
+    "expected_chunks": [
+      "未找到"
+    ],
+    "ground_truth": null
   },
   {
     "type": "simple",
@@ -868,8 +876,10 @@
     "type": "no_answer",
     "question": "分布式锁的最佳超时时间设多少",
     "expected_docs": [],
-    "expected_chunks": [],
-    "ground_truth": "没有固定值——取决于业务操作的最大耗时，通常设业务操作耗时 3-5 倍的冗余。"
+    "expected_chunks": [
+      "未找到"
+    ],
+    "ground_truth": null
   },
   {
     "type": "multi_doc",
@@ -1244,15 +1254,19 @@
     "type": "no_answer",
     "question": "Raft 和 Paxos 哪个更快",
     "expected_docs": [],
-    "expected_chunks": [],
-    "ground_truth": ""
+    "expected_chunks": [
+      "未找到"
+    ],
+    "ground_truth": null
   },
   {
     "type": "no_answer",
     "question": "Kafka 和 RabbitMQ 在千万级消息下的延迟对比是多少",
     "expected_docs": [],
-    "expected_chunks": [],
-    "ground_truth": ""
+    "expected_chunks": [
+      "未找到"
+    ],
+    "ground_truth": null
   },
   {
     "type": "multi_doc",
@@ -1293,5 +1307,231 @@
       "HTTP/2"
     ],
     "ground_truth": ""
+  },
+  {
+    "type": "precision",
+    "question": "Redis 的 AOF 日志落盘策略里，每秒刷一次磁盘对应哪个配置值？",
+    "expected_docs": [
+      "doc20_redis_persistence.txt"
+    ],
+    "expected_chunks": [
+      "everysec",
+      "appendfsync"
+    ],
+    "ground_truth": "appendfsync everysec：每秒执行一次 fsync"
+  },
+  {
+    "type": "precision",
+    "question": "Redis 做 RDB 快照时，通过复制进程实现不阻塞主线程的机制叫什么？",
+    "expected_docs": [
+      "doc20_redis_persistence.txt"
+    ],
+    "expected_chunks": [
+      "copy-on-write",
+      "fork"
+    ],
+    "ground_truth": "copy-on-write（写时复制），通过 fork 子进程实现"
+  },
+  {
+    "type": "precision",
+    "question": "Redis AOF 持久化有三档落盘策略，每写一条命令就同步磁盘的是哪档？",
+    "expected_docs": [
+      "doc20_redis_persistence.txt"
+    ],
+    "expected_chunks": [
+      "always",
+      "appendfsync"
+    ],
+    "ground_truth": "appendfsync always：每次写入命令都 fsync"
+  },
+  {
+    "type": "precision",
+    "question": "Martin Kleppmann 指出，分布式锁要防持锁进程被暂停导致锁失效，需要引入什么机制？",
+    "expected_docs": [
+      "doc27_distributed_lock.txt"
+    ],
+    "expected_chunks": [
+      "fencing",
+      "token"
+    ],
+    "ground_truth": "fencing token（栅栏令牌）：锁服务颁发单调递增的 token，写请求必须携带"
+  },
+  {
+    "type": "precision",
+    "question": "分布式锁算法 Redlock 的讨论里，指出客户端时钟不能发生漂移这个前提，对应的概念是什么？",
+    "expected_docs": [
+      "doc27_distributed_lock.txt"
+    ],
+    "expected_chunks": [
+      "clock drift",
+      "clock"
+    ],
+    "ground_truth": "clock drift（时钟漂移）：Redlock 假设客户端时钟可靠，但现实中时钟可能任意错误"
+  },
+  {
+    "type": "precision",
+    "question": "HNSW 向量索引查询阶段，控制搜索宽度、平衡召回率和速度的参数是什么？",
+    "expected_docs": [
+      "doc28_vectordb_hnsw.txt"
+    ],
+    "expected_chunks": [
+      "efSearch"
+    ],
+    "ground_truth": "efSearch：查询时控制搜索宽度，越大召回率越高但越慢"
+  },
+  {
+    "type": "precision",
+    "question": "HNSW 索引除了 efSearch，还有一个控制每层最大连接数的参数，它是什么？",
+    "expected_docs": [
+      "doc28_vectordb_hnsw.txt"
+    ],
+    "expected_chunks": [
+      "efConstruction",
+      "efSearch",
+      "M"
+    ],
+    "ground_truth": "M：每层的最大连接数；efConstruction：构建时控制搜索宽度"
+  },
+  {
+    "type": "precision",
+    "question": "Kafka 生产者批量发送消息前，最多攒多久再发出去的控制参数是什么？",
+    "expected_docs": [
+      "doc26_kafka_throughput.txt"
+    ],
+    "expected_chunks": [
+      "linger.ms",
+      "linger"
+    ],
+    "ground_truth": "linger.ms：生产者等待攒批的时间，越大批量越大延迟越高"
+  },
+  {
+    "type": "precision",
+    "question": "Nginx 反向代理里，修改客户端请求头发给后端服务器的指令是什么？",
+    "expected_docs": [
+      "doc23_nginx_proxy.txt"
+    ],
+    "expected_chunks": [
+      "proxy",
+      "headers",
+      "proxy_pass"
+    ],
+    "ground_truth": "proxy_set_header 指令修改请求头；proxy_pass 指定后端"
+  },
+  {
+    "type": "precision",
+    "question": "MongoDB 聚合管道里，把数据按字段分组然后聚合统计的 stage 是什么？",
+    "expected_docs": [
+      "doc24_mongodb_agg.txt"
+    ],
+    "expected_chunks": [
+      "aggregation",
+      "pipeline",
+      "stage",
+      "group"
+    ],
+    "ground_truth": "aggregation pipeline 的 $group stage，按字段分组聚合"
+  },
+  {
+    "type": "simple",
+    "question": "内存数据存储为了防止断电丢失数据，会定期把内存快照写到磁盘，这种持久化机制叫什么？",
+    "expected_docs": [
+      "doc20_redis_persistence.txt",
+      "doc6_redis.txt"
+    ],
+    "expected_chunks": [
+      "RDB",
+      "snapshot",
+      "snapshots"
+    ],
+    "ground_truth": "RDB（Redis Database）：定期生成数据快照"
+  },
+  {
+    "type": "simple",
+    "question": "数据库把每条写命令追加到日志文件，重启时重放这些命令恢复数据，这种方式叫什么？",
+    "expected_docs": [
+      "doc20_redis_persistence.txt",
+      "doc6_redis.txt"
+    ],
+    "expected_chunks": [
+      "AOF",
+      "Append Only File"
+    ],
+    "ground_truth": "AOF（Append Only File）：追加写命令日志，启动时重放恢复"
+  },
+  {
+    "type": "simple",
+    "question": "向量数据库要在大规模向量里做最近邻搜索，为了加速构建多层图结构逐层逼近，这个算法叫什么？",
+    "expected_docs": [
+      "doc28_vectordb_hnsw.txt",
+      "doc9_vectordb.txt"
+    ],
+    "expected_chunks": [
+      "HNSW"
+    ],
+    "ground_truth": "HNSW（分层导航小世界图）：多层图结构实现高效最近邻检索"
+  },
+  {
+    "type": "simple",
+    "question": "容器编排平台里，负责保存集群所有配置数据的分布式键值存储组件是哪个？",
+    "expected_docs": [
+      "doc21_k8s_architecture.txt",
+      "doc8_k8s.txt"
+    ],
+    "expected_chunks": [
+      "etcd"
+    ],
+    "ground_truth": "etcd：一致且高可用的键值存储，保存 Kubernetes 所有集群数据"
+  },
+  {
+    "type": "simple",
+    "question": "消息队列里，多个生产者并发写时把同一业务的消息发到同一个分区保证顺序，这个机制是什么？",
+    "expected_docs": [
+      "doc26_kafka_throughput.txt",
+      "doc7_kafka.txt"
+    ],
+    "expected_chunks": [
+      "partition",
+      "partitioner"
+    ],
+    "ground_truth": "分区（partition）：同一 partition 内消息有序"
+  },
+  {
+    "type": "simple",
+    "question": "网站服务器前挡一层代理，客户端只访问代理、由代理转发请求给后端真实服务器，这种架构叫什么？",
+    "expected_docs": [
+      "doc23_nginx_proxy.txt",
+      "doc11_nginx.txt"
+    ],
+    "expected_chunks": [
+      "Reverse Proxy",
+      "proxy"
+    ],
+    "ground_truth": "反向代理（Reverse Proxy）：代理位于服务器前，转发客户端请求到后端"
+  },
+  {
+    "type": "simple",
+    "question": "文档数据库把一个集合的数据经多级过滤、分组、排序处理后输出结果，这个数据处理管道叫什么？",
+    "expected_docs": [
+      "doc24_mongodb_agg.txt",
+      "doc14_mongodb.txt"
+    ],
+    "expected_chunks": [
+      "aggregation",
+      "pipeline"
+    ],
+    "ground_truth": "聚合管道（aggregation pipeline）：多 stage 顺序处理文档"
+  },
+  {
+    "type": "simple",
+    "question": "全文搜索引擎把词映射到包含它的文档列表，才能瞬间查找含某词的内容，这个结构叫什么？",
+    "expected_docs": [
+      "doc25_es_inverted.txt",
+      "doc13_elasticsearch.txt"
+    ],
+    "expected_chunks": [
+      "inverted index",
+      "index"
+    ],
+    "ground_truth": "倒排索引（inverted index）：词到文档列表的映射，加速全文搜索"
   }
 ]

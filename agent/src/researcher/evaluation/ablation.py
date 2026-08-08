@@ -44,8 +44,9 @@ def run_ablation(testset: list[dict], user_id: str, doc_ids=None) -> dict:
         for item in testset:
             question = item["question"]
             expected = item.get("expected_chunks") or []
-            # no_answer 题型（expected_chunks 为空）：不参与置换检验的命中统计
-            if not expected:
+            # no_answer 题型（按 type 判定，不依赖 expected_chunks 是否为空）：
+            # 不参与置换检验的命中统计，单独测拒绝能力
+            if item.get("type") == "no_answer":
                 continue
 
             start = time.time()

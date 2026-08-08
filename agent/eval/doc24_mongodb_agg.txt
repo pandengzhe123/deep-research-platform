@@ -1,0 +1,155 @@
+Aggregation Operations - Database Manual - MongoDB Docs
+Docs Menu
+Ask MongoDB AI
+Docs Home
+/
+Development
+Docs Home
+/
+Development
+Docs Home
+/
+Development
+Aggregation Operations
+Copy page
+Aggregation operations process multiple documents and return computed
+results. You can use aggregation operations to:
+Group values from multiple documents.
+Compute a single result from the grouped data.
+Analyze data changes over time.
+Query the most up-to-date version of your data.
+The aggregation operators in MongoDB let you run analytics on your
+cluster without moving data to another platform.
+Get Started
+To perform aggregation operations, you can use:
+Aggregation pipelines
+, the
+preferred method.
+Single purpose aggregation methods
+, which have less functionality than an
+aggregation pipeline.
+You can
+run aggregation pipelines in the UI
+for deployments hosted in
+MongoDB Atlas
+.
+Aggregation Pipelines
+An aggregation pipeline consists of one or more
+stages
+that process documents. These
+documents can come from a collection, a view, or a specially designed stage.
+Each stage performs an operation on the input documents. For example, a stage
+can
+$filter
+documents,
+$group
+documents, and calculate
+values. The documents that a stage outputs are then passed to the next stage in
+the pipeline.
+An aggregation pipeline can return results for groups of documents. You can also
+update documents with an aggregation pipeline using the stages shown in
+Updates with Aggregation Pipeline
+.
+Note
+Aggregation pipelines run with the
+db.collection.aggregate()
+method do not modify documents in
+a collection, unless the pipeline contains a
+$merge
+or
+$out
+stage.
+Aggregation Pipeline Example
+The examples on this page use data from the
+sample_mflix sample dataset
+. For details on how to load this dataset into your self-managed
+MongoDB deployment, see
+Load the sample dataset
+.
+If you made any modifications to the sample databases, you may need to drop and
+recreate the databases to run the examples on this page.
+The following pipeline finds the top three directors who have directed
+the most movies in the database.
+Use a
+$match
+stage to filter to movies that have directors
+listed (excluding documents where the directors field is null or empty):
+,
+The
+$match
+stage reduces the number of documents in our pipeline by
+filtering out movies without director information. Next, use
+$unwind
+to deconstruct the directors array so you can
+count movies per individual director:
+,
+Use
+$group
+to group documents by director name and count
+each director's movies:
+,
+Use
+$sort
+to order the remaining documents in descending
+order by movie count:
+,
+Use
+$limit
+to return the top three directors:
+The full pipeline:
+db.
+movies
+.
+aggregate
+(
+[
+,
+,
+,
+,
+]
+)
+The pipeline returns these results:
+[
+,
+,
+]
+For runnable examples containing sample input documents, see
+Complete Aggregation Pipeline Examples
+.
+To learn more about aggregation pipelines, see
+Aggregation Pipeline
+.
+Single Purpose Aggregation Methods
+Single purpose aggregation methods aggregate documents from a single
+collection. These methods have less functionality than an aggregation
+pipeline.
+Method
+Description
+db.collection.estimatedDocumentCount()
+Returns an approximate count of the documents in a collection or
+a view.
+db.collection.count()
+Returns a count of the number of documents in a collection or a
+view.
+db.collection.distinct()
+Returns an array of documents that have distinct values for the
+specified field.
+Back
+Monetary Data
+Next
+Aggregation Pipeline
+Earn a Skill Badge
+Master "
+Fundamentals of Data Transformation
+" for free!
+Learn more
+Rate this page
+On this page
+Get Started
+Aggregation Pipelines
+Single Purpose Aggregation Methods
+On this page
+Get Started
+Aggregation Pipelines
+Single Purpose Aggregation Methods
