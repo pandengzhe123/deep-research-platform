@@ -788,6 +788,15 @@ class Level2Agent:
         if self._compressed_summaries:
             prefix = "<!-- 上下文压缩记录 -->\n" + "\n".join(self._compressed_summaries)
             report = prefix + "\n\n" + report
+        # 保存检索上下文（供精确版幻觉率 Faithfulness 使用）
+        # 报告生成完，all_search_results 是本次研究检索到的全部内容，
+        # 存成 context.md 到 trace 目录，后续评测可对照验证幻觉
+        try:
+            if self.trace:
+                ctx_dir = self.trace._output_dir
+                (ctx_dir / "context.md").write_text(raw_text, encoding="utf-8")
+        except Exception:
+            pass  # 保存 context 失败不影响报告
         return report
 
 
@@ -1508,8 +1517,9 @@ async def main():
             # 3. 五维评测
             # ① 完成率：报告非空 + 有结论
             completion = 1.0 if (len(report_text) > 100 and any(k in report_text for k in ("总结", "结论", "概述"))) else 0.0
-            # ② 幻觉率：1 - Faithfulness（用 judge 结果近似，准确值需跑 faithfulness）
-            #    这里用 judge 的 accuracy 维度近似（报告是否准确）；judge 失败时为 None
+            # ② 幻觉率：用 judge accuracy 估算（快）。
+            #    精确版（Faithfulness 拆声明验证文档）暂不可用——FaithfulnessEvaluator
+            #    对长报告拆分不稳定（返回空声明），开启会得到误导性的结果，已回退。
             accuracy_dim = judge_result.get("dimensions", {}).get("accuracy", {}).get("score", 0) if judge_ok else 0
             hallucination_est = round(max(0.0, 1.0 - accuracy_dim / 10.0), 3) if judge_ok else None
             # ③ 工具准确率
