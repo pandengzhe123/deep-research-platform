@@ -17,7 +17,7 @@ from researcher.evaluation.permutation import compare_all_modes
 from researcher.evaluation.semantic_hit import SemanticHit
 
 
-def run_ablation(testset: list[dict], user_id: str, doc_ids=None) -> dict:
+def run_ablation(testset: list[dict], user_id: str, doc_ids=None, modes: list[str] = None) -> dict:
     """
     对每个模式，逐条运行测试集，对比检索结果。
 
@@ -29,8 +29,10 @@ def run_ablation(testset: list[dict], user_id: str, doc_ids=None) -> dict:
 
     命中判定：SemanticHit（方案 B）——字面全中直接算（零成本），
     字面不中 embedding 语义相似度判断（修复关键词匹配的语义缺失）。
+
+    modes: 要测的检索模式，默认全 4 个。full 慢（9s/题），可用 --retrieval-mode 控制。
     """
-    modes = ["v2", "hybrid", "rerank", "full"]
+    modes = modes or ["v2", "hybrid", "rerank", "full"]
     results = {}
     semantic_hit = SemanticHit()  # 复用阿里云 embedding
 
@@ -113,6 +115,13 @@ def print_ablation_table(results: dict):
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="RAG 消融实验")
+    parser.add_argument("--retrieval-mode", choices=["v2", "hybrid", "rerank", "full", "all"], default="all",
+                        help="检索模式: v2/hybrid/rerank/full/all(默认)。full 慢(9s/题)，可用 v2 等快模式")
+    args = parser.parse_args()
+    modes = ["v2", "hybrid", "rerank", "full"] if args.retrieval_mode == "all" else [args.retrieval_mode]
+
     # 加载测试集
     testset_path = os.path.join(os.path.dirname(__file__), "golden_testset_v4.json")
     try:
@@ -123,5 +132,5 @@ if __name__ == "__main__":
         print("请先创建 golden_testset.json")
         sys.exit(1)
 
-    results = run_ablation(testset, user_id="eval")
+    results = run_ablation(testset, user_id="eval", modes=modes)
     print_ablation_table(results)

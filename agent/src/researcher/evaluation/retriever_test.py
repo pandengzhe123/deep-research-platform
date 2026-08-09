@@ -30,9 +30,13 @@ def mrr(relevant: set, retrieved: list) -> float:
     return 0.0
 
 
-def run_retriever_test(testset: list[dict], user_id: str) -> dict:
-    """仅测检索器——不涉及 LLM。比较四个模式的 Precision/Recall/MRR。"""
-    modes = ["v2", "hybrid", "rerank", "full"]
+def run_retriever_test(testset: list[dict], user_id: str, modes: list[str] = None) -> dict:
+    """仅测检索器——不涉及 LLM。比较多个模式的 Precision/Recall/MRR。
+
+    modes: 要测的检索模式，默认 ["v2", "hybrid", "rerank", "full"]。
+      rerank/full 慢（含模型加载+精排），可用 --retrieval-mode 控制。
+    """
+    modes = modes or ["v2", "hybrid", "rerank", "full"]
     results = {}
 
     for mode in modes:
@@ -90,10 +94,17 @@ def print_results(results: dict):
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Retriever 层测试")
+    parser.add_argument("--retrieval-mode", choices=["v2", "hybrid", "rerank", "full", "all"], default="all",
+                        help="检索模式: v2/hybrid/rerank/full/all(默认)")
+    args = parser.parse_args()
+    modes = ["v2", "hybrid", "rerank", "full"] if args.retrieval_mode == "all" else [args.retrieval_mode]
+
     testset_path = os.path.join(os.path.dirname(__file__), "golden_testset_v4.json")
     with open(testset_path, encoding="utf-8") as f:
         testset = json.load(f)
-    print(f"Loaded {len(testset)} test items")
+    print(f"Loaded {len(testset)} test items, modes: {modes}")
 
-    results = run_retriever_test(testset, user_id="eval")
+    results = run_retriever_test(testset, user_id="eval", modes=modes)
     print_results(results)

@@ -126,15 +126,21 @@ def diagnostic_matrix(testset, retriever_stats, generator_stats):
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="E2E 诊断矩阵")
+    parser.add_argument("--retrieval-mode", choices=["v2", "hybrid", "rerank", "full"], default="hybrid",
+                        help="Retriever 检索模式（默认 hybrid，避免 full 太慢）")
+    args = parser.parse_args()
+
     testset_path = os.path.join(os.path.dirname(__file__), "golden_testset_v4.json")
     with open(testset_path, encoding="utf-8") as f:
         testset = json.load(f)
 
     from researcher.kb import kb
 
-    # 用 full 模式跑 Retriever
+    # 用指定模式跑 Retriever（默认 hybrid，full 太慢可跳过）
     def search_fn(q, user_id):
-        return kb.search(q, user_id=user_id, mode="full")
+        return kb.search(q, user_id=user_id, mode=args.retrieval_mode)
 
     retriever_stats = summarize_retriever(testset, search_fn)
 
