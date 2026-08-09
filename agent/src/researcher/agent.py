@@ -1135,9 +1135,11 @@ FINAL_REPORT_PROMPT = """你是一个深度研究报告总编。基于研究简�
 
 4. **写作风格**：默认使用段落叙述，表达清晰、专业。在列举数据、步骤或要点时适当使用项目符号，但不要全文都写成要点清单
 
-5. **引用规范**：每个关键事实使用 [标题](URL) 格式直接标注来源。在报告末尾的 ### 参考来源 节中列出所有引用过的来源
+5. **引用规范**：每个关键事实使用 [标题](URL) 格式直接标注来源。在报告末尾的 ### 参考来源 节中列出所有引用过的来源。**引用去重**：多个研究员引用了同一来源时只保留一次；单个来源地址重复出现的不算多个引用
 
 6. **语言**：报告语言必须与用户问题的语言一致。如果用户用中文提问，整个报告用中文撰写；如果用户用英文提问，整个报告用英文撰写
+
+7. **篇幅控制（重要）**：报告长度应与问题复杂度匹配——复杂问题 3000-8000 字足够，避免为凑全面而堆砌。**多份子报告常有重叠内容，融合时去重合并**，同一结论只保留最详细的一次表述。宁可精炼也不重复
 
 ---
 
@@ -1149,7 +1151,8 @@ FINAL_REPORT_PROMPT = """你是一个深度研究报告总编。基于研究简�
 - ❌ 不要强行统一不同研究员的结论。标注"研究员 A 认为...，研究员 B 则认为..."，分歧本身也是信息
 - ❌ 不要将个人博客、论坛帖子等非权威来源的说法当作确定事实。如有此类来源，标注"非官方来源，未经独立验证"
 - ❌ 如果某个说法只有单一来源支撑，必须标注"单一来源，未经交叉验证"
-- ❌ 不要因为篇幅考虑而省略有价值的信息。详细和全面优于简洁"""
+- ❌ 不要逐条照搬子报告的每个段落——要重新组织融合，去掉跨研究员重复的部分
+- ❌ 不要因为追求'全面'而把报告写到几万字——信息密度优先，重复的内容全部删掉"""
 
 # ============================================================
 # 研究员压缩 Prompt —— 子报告 → 结构化摘要，Supervisor 快速决策用
@@ -1384,6 +1387,18 @@ class Level4Agent:
             return "# 研究失败\n\n未能获取有效信息，请简化问题重试。"
 
         notes_text = "\n\n---\n\n".join(all_findings) if all_findings else ""
+
+        # 防止报告臃肿：每份子报告截断到最大长度（防止 5 份 2 万字报告撑爆总编）
+        # 之前 L4 报告 5 万字、conciseness 4.33，根因是喂给总编的信息量过大
+        MAX_SUB_FINDING_CHARS = 15000  # 每份子报告最多 1.5 万字（原来是完整 2 万字）
+        trimmed_findings = []
+        for rf in raw_findings:
+            if len(rf) > MAX_SUB_FINDING_CHARS:
+                trimmed_findings.append(rf[:MAX_SUB_FINDING_CHARS] + "\n\n（子报告过长已截断）")
+            else:
+                trimmed_findings.append(rf)
+        findings_text = "\n\n---\n\n".join(trimmed_findings)
+
         try:
             final = await self.llm.chat(
                 system_prompt="你是专业的深度研究报告总编。",
@@ -1392,7 +1407,7 @@ class Level4Agent:
                     question=question,
                     research_brief=research_brief,
                     messages="",
-                    findings="\n\n---\n\n".join(raw_findings),
+                    findings=findings_text,
                     notes=notes_text,
                     date=_today_str(),
                 ),
