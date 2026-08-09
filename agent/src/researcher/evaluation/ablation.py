@@ -118,9 +118,10 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="RAG 消融实验")
     parser.add_argument("--retrieval-mode", choices=["v2", "hybrid", "rerank", "full", "all"], default="all",
-                        help="检索模式: v2/hybrid/rerank/full/all(默认)。full 慢(9s/题)，可用 v2 等快模式")
+                        help="检索模式: v2/hybrid/rerank/full/all(默认)。all 不含 full（full 慢 9s/题），跑 full 需显式 --retrieval-mode full")
     args = parser.parse_args()
-    modes = ["v2", "hybrid", "rerank", "full"] if args.retrieval_mode == "all" else [args.retrieval_mode]
+    # all 默认跑 v2/hybrid/rerank，full 需显式指定（避免误触发慢模式）
+    modes = ["v2", "hybrid", "rerank"] if args.retrieval_mode == "all" else [args.retrieval_mode]
 
     # 加载测试集
     testset_path = os.path.join(os.path.dirname(__file__), "golden_testset_v4.json")
