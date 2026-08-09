@@ -116,14 +116,38 @@ def run_rejection_test(results: list[dict]) -> dict:
 
 
 def run_faithfulness_eval(results, docs):
-    """自实现 Faithfulness 评估器（和 RAGAS 同逻辑，不依赖 RAGAS 库）。"""
-    from researcher.evaluation.faithfulness import FaithfulnessEvaluator
+    """自实现 Faithfulness 评估器（和 RAGAS 同逻辑，不依赖 RAGAS 库）。
+
+    两层：
+      ① 有答案的题 → 拆声明 → LLM 验证文档支撑 → 支撑占比（Faithfulness）
+      ② no_answer 题 → 方案 C 答案存在性判断 → 正确拒绝 vs 硬编
+    """
+    from researcher.evaluation.faithfulness import FaithfulnessEvaluator, AnswerExistenceEvaluator
 
     evaluator = FaithfulnessEvaluator()
+    existence_ev = AnswerExistenceEvaluator()
     scores = []
     details = []
+    # 方案 C：no_answer 题的答案存在性判定结果
+    existence = {"total": 0, "correct_reject": 0, "hallucinated": [], "doc_has_answer": []}
     for r in results:
-        if r["type"] == "no_answer" or not r["context_docs"]:
+        if r["type"] == "no_answer":
+            # 方案 C：喂空/无关文档给生成端，看它拒绝还是硬编
+            contexts = [docs.get(d, "") for d in (r.get("context_docs") or [])]
+            ex = existence_ev.evaluate(r["question"], r.get("answer", ""), contexts)
+            existence["total"] += 1
+            if ex["doc_has_answer"]:
+                # 文档里其实有答案 → 说明不是真 no_answer（标注或检索问题）
+                existence["doc_has_answer"].append(r["question"][:40])
+                continue
+            if ex["correct"]:
+                existence["correct_reject"] += 1
+            else:
+                existence["hallucinated"].append(
+                    {"question": r["question"][:50], "answer": (r.get("answer") or "")[:120]}
+                )
+            continue
+        if not r["context_docs"]:
             continue
         contexts = [docs.get(d, "") for d in r["context_docs"]]
         result = evaluator.evaluate(r["question"], r["answer"], contexts)
@@ -137,7 +161,10 @@ def run_faithfulness_eval(results, docs):
             }
         )
     avg = sum(scores) / len(scores) if scores else 0.0
-    return {"avg_faithfulness": avg, "n": len(scores), "details": details}
+    existence["reject_rate"] = (
+        existence["correct_reject"] / existence["total"] if existence["total"] else None
+    )
+    return {"avg_faithfulness": avg, "n": len(scores), "details": details, "existence": existence}
 
 
 def print_report(results, faith_result, docs, rejection_result=None):
@@ -176,6 +203,25 @@ def print_report(results, faith_result, docs, rejection_result=None):
     print(f"  Average Faithfulness: {faith_result['avg_faithfulness']:.2%}")
     for d in faith_result["details"][:5]:
         print(f"  [{d['supported']}/{d['total']}] {d['question']}...")
+
+    # 方案 C：答案存在性判断（Faithfulness 的 no_answer 分支）
+    existence = faith_result.get("existence", {})
+    if existence.get("total"):
+        print("\n  --- 方案C 答案存在性判断（no_answer 分支）---")
+        print(f"  no_answer 题: {existence['total']} 个")
+        rate = existence.get("reject_rate")
+        print(f"  正确拒绝: {existence['correct_reject']} ({rate:.0%} 若 rate else 'N/A')" if rate is not None else f"  正确拒绝: {existence['correct_reject']}/{existence['total']}")
+        hallu = existence.get("hallucinated", [])
+        if hallu:
+            print(f"  ⚠️ 硬编 {len(hallu)} 个（文档无答案但模型编造）：")
+            for h in hallu[:5]:
+                print(f"    Q: {h['question']}")
+                print(f"    A: {h['answer']}...")
+        doc_ans = existence.get("doc_has_answer", [])
+        if doc_ans:
+            print(f"  ⚠️ {len(doc_ans)} 个 no_answer 题文档里其实有答案（标注/检索问题，非生成端）:")
+            for q in doc_ans[:3]:
+                print(f"    Q: {q}")
 
     # 拒绝能力（生成端防硬编）
     if rejection_result:
