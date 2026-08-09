@@ -6,7 +6,9 @@ import sys
 import io
 
 # 强制 UTF-8 输出，绕开 Windows GBK
-if sys.platform == "win32":
+# 保护：管道/后台环境下 sys.stdout.buffer 可能已被关闭，包装会崩
+# （ValueError: I/O operation on closed file），只在有 buffer 且未关闭时包装。
+if sys.platform == "win32" and hasattr(sys.stdout, "buffer") and not sys.stdout.buffer.closed:
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
