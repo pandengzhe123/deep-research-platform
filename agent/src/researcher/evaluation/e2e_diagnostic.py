@@ -44,39 +44,59 @@ def summarize_retriever(testset: list[dict], search_fn, user_id="eval") -> dict:
 def summarize_generator(results: list[dict], correctness_threshold: float = 0.0) -> dict:
     """按题型统计 Generator 质量。
 
-    方案 A（2026-08-09）：判定从"AnswerCorrectness F1"改为"语义命中"。
-      背景：F1 适合多声明比对（长答案 vs 长 GT），但 simple 题的 GT 是短事实
-      （"etcd"），答案也是短词——F1 拆不出声明导致 TP=0、F1=0，明明对的答案被判错。
-      修法：判断"答案是否命中 ground_truth"（字面 or 语义）：
-        ① 字面：GT 的关键实体词出现在答案里 → 命中（处理答案短的情况）
-        ② 语义：question embedding vs 答案 → 相似度 ≥ 阈值 → 命中
-      对短答案友好（"etcd" 命中 "etcd：一致且高可用..."）。
+    方案 A v2（2026-08-09）：判定从"AnswerCorrectness F1"改为"字面 + LLM 判定"。
+      背景：F1 拆声明对短答案（"etcd"）失败 → TP=0 → 明明对却判错。
+      修法：
+        ① 字面快路径（零成本）：GT 的关键实体词出现在答案里 → 命中
+        ② 字面不中 → LLM 判定"答案是否覆盖标准答案"（准确，理解语义）
+      为什么不用 embedding 相似度做语义兜底：
+        question vs answer 相似度高 ≠ 答案正确（"Redis端口" vs "Redis是内存库"
+        主题相关但没回答问题）；应测"答案是否与标准答案一致"，LLM 判定最准。
 
-    判定答对标准：字面命中 或 语义命中。
+    判定答对标准：字面命中 或 LLM 判定命中。
     """
-    from researcher.evaluation.semantic_hit import SemanticHit
-    from researcher.kb import _DashScopeEmbeddings
-    from researcher.evaluation.semantic_hit import _cosine
-    hit = SemanticHit()
-    embedder = _DashScopeEmbeddings()
-
     def _answer_matches(question, answer, gt):
-        """答案是否命中 ground_truth（字面 or 语义）。"""
+        """答案是否命中 ground_truth（字面快路径 + LLM 判定）。"""
         if not answer or not gt:
             return False
-        # ① 字面：GT 里的关键实体词（拆掉标点和说明部分）出现在答案里
-        #    对短答案友好："etcd" ∈ "etcd：一致且高可用..."
+        # ① 字面快路径：GT 关键实体词（拆标点）出现在答案里 → 命中（零成本）
         gt_words = [w for w in gt.replace("：", " ").replace(":", " ").split() if len(w) >= 2]
         for w in gt_words:
             if w in answer:
                 return True
-        # ② 语义：question embedding vs answer 相似度（绕过切块，直接整句 embedding）
+        # ② LLM 判定：答案是否覆盖标准答案（字面不中时，用 LLM 理解语义）
         try:
-            qv = embedder.embed([question])[0]
-            av = embedder.embed([answer])[0]
-            return _cosine(qv, av) >= hit._threshold
+            return _llm_answer_correct(question, answer, gt)
         except Exception:
             return False
+
+    def _llm_answer_correct(question, answer, gt):
+        """LLM 判断答案是否与标准答案一致（语义等价 / 覆盖核心信息）。"""
+        import httpx
+        import os as _os
+        api_key = _os.getenv("DEEPSEEK_API_KEY", "")
+        base_url = _os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+        model = _os.getenv("LLM_MODEL", "deepseek-v4-flash")
+        prompt = (
+            "你是一个严格的答案评判器，判断生成答案是否与标准答案一致。\n\n"
+            f"问题：{question}\n\n"
+            f"生成答案：{answer}\n\n"
+            f"标准答案：{gt}\n\n"
+            "规则：\n"
+            "- 生成答案覆盖了标准答案的核心信息，或语义等价 → 返回 yes\n"
+            "- 生成答案没回答问题，或与标准答案矛盾 → 返回 no\n"
+            "- 生成答案比标准答案多说了额外内容，但核心一致 → 返回 yes\n\n"
+            "只返回 yes 或 no："
+        )
+        resp = httpx.post(
+            f"{base_url}/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={"model": model, "temperature": 0,
+                  "messages": [{"role": "user", "content": prompt}]},
+            timeout=30,
+        )
+        text = resp.json()["choices"][0]["message"]["content"] or ""
+        return text.strip().lower().startswith("yes")
 
     by_type = {}
     for r in results:
