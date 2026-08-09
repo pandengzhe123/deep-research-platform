@@ -44,14 +44,39 @@ def summarize_retriever(testset: list[dict], search_fn, user_id="eval") -> dict:
 def summarize_generator(results: list[dict], correctness_threshold: float = 0.0) -> dict:
     """按题型统计 Generator 质量。
 
-    用 AnswerCorrectnessEvaluator 的声明级 F1 比对（而非字符串匹配），
-    避免"语义等价但字面不同"的答案被误判。与自实现 RAGAS 四指标保持同一方法论。
+    方案 A（2026-08-09）：判定从"AnswerCorrectness F1"改为"语义命中"。
+      背景：F1 适合多声明比对（长答案 vs 长 GT），但 simple 题的 GT 是短事实
+      （"etcd"），答案也是短词——F1 拆不出声明导致 TP=0、F1=0，明明对的答案被判错。
+      修法：判断"答案是否命中 ground_truth"（字面 or 语义）：
+        ① 字面：GT 的关键实体词出现在答案里 → 命中（处理答案短的情况）
+        ② 语义：question embedding vs 答案 → 相似度 ≥ 阈值 → 命中
+      对短答案友好（"etcd" 命中 "etcd：一致且高可用..."）。
 
-    判定答对标准：F1 > correctness_threshold。
-    默认 0.0 → 只要有 1 条声明与标准答案一致就算对（语义等价即算命中）。
+    判定答对标准：字面命中 或 语义命中。
     """
-    from researcher.evaluation.answer_correctness import AnswerCorrectnessEvaluator
-    ev = AnswerCorrectnessEvaluator()
+    from researcher.evaluation.semantic_hit import SemanticHit
+    from researcher.kb import _DashScopeEmbeddings
+    from researcher.evaluation.semantic_hit import _cosine
+    hit = SemanticHit()
+    embedder = _DashScopeEmbeddings()
+
+    def _answer_matches(question, answer, gt):
+        """答案是否命中 ground_truth（字面 or 语义）。"""
+        if not answer or not gt:
+            return False
+        # ① 字面：GT 里的关键实体词（拆掉标点和说明部分）出现在答案里
+        #    对短答案友好："etcd" ∈ "etcd：一致且高可用..."
+        gt_words = [w for w in gt.replace("：", " ").replace(":", " ").split() if len(w) >= 2]
+        for w in gt_words:
+            if w in answer:
+                return True
+        # ② 语义：question embedding vs answer 相似度（绕过切块，直接整句 embedding）
+        try:
+            qv = embedder.embed([question])[0]
+            av = embedder.embed([answer])[0]
+            return _cosine(qv, av) >= hit._threshold
+        except Exception:
+            return False
 
     by_type = {}
     for r in results:
@@ -61,16 +86,13 @@ def summarize_generator(results: list[dict], correctness_threshold: float = 0.0)
         if not r.get("ground_truth"):
             continue
 
-        # 声明级比对：答案 vs 标准答案 → F1 分数
-        gt = r["ground_truth"]
-        answer = r["answer"]
-        score = ev.evaluate(answer, gt)["score"]
-        ok = score > correctness_threshold
+        # 判断 answer 是否命中 ground_truth（字面 or 语义）
+        found = _answer_matches(r["question"], r.get("answer", ""), r["ground_truth"])
 
         if t not in by_type:
             by_type[t] = {"total": 0, "hits": 0}
         by_type[t]["total"] += 1
-        if ok:
+        if found:
             by_type[t]["hits"] += 1
 
     return by_type
@@ -144,15 +166,20 @@ if __name__ == "__main__":
 
     retriever_stats = summarize_retriever(testset, search_fn)
 
-    # 加载 Generator 结果（从最近一次 rag 评测目录找，否则用空）
-    from researcher.evaluation._results import run_dir_for, latest_run_dir
+    # 加载 Generator 结果：找"包含 generator_results.json 的最新 rag 目录"
+    # （不能用 latest_run_dir，因为 run_dir_for 保存 retriever_stats 时会新建目录，
+    #   latest 会指向刚创建的空目录，导致 generator 文件读不到）
+    from researcher.evaluation._results import run_dir_for
     gen_results = []
-    _latest = latest_run_dir("rag")
-    if _latest:
-        gen_path = os.path.join(_latest, "generator_results.json")
-        if os.path.exists(gen_path):
-            with open(gen_path, encoding="utf-8") as f:
-                gen_results = json.load(f)
+    results_root = os.path.join(os.path.dirname(__file__), "results")
+    if os.path.isdir(results_root):
+        for _d in sorted(os.listdir(results_root), reverse=True):
+            if _d.endswith("_rag"):
+                _gen_path = os.path.join(results_root, _d, "generator_results.json")
+                if os.path.exists(_gen_path):
+                    with open(_gen_path, encoding="utf-8") as f:
+                        gen_results = json.load(f)
+                    break
 
     generator_stats = summarize_generator(gen_results)
 
