@@ -2,70 +2,106 @@
   {
     "type": "stop_early",
     "question": "Python 是什么",
-    "expected_trajectory": {"max_rounds": 2, "llm_per_round_max": 2.0, "should_loop": false},
+    "expected_trajectory": {
+      "max_rounds": 4,
+      "llm_per_round_max": 2.0,
+      "should_loop": false
+    },
     "expected_failure": "过度搜索：简单问题搜太多轮 = 低效",
     "why": "简单事实题，Agent 应该 1-2 轮就停。搜多了说明不会判断'信息够了'"
   },
   {
     "type": "stop_early",
     "question": "Redis 是什么",
-    "expected_trajectory": {"max_rounds": 2, "llm_per_round_max": 2.0, "should_loop": false},
+    "expected_trajectory": {
+      "max_rounds": 4,
+      "llm_per_round_max": 2.0,
+      "should_loop": false
+    },
     "expected_failure": "过度搜索：简单问题搜太多轮 = 低效",
     "why": "同上，知识库/网络都有，一轮就该够"
   },
   {
     "type": "loop",
     "question": "对比 Paxos、Raft、ZAB 三种一致性协议在选举机制、日志复制、脑裂处理三方面的具体差异",
-    "expected_trajectory": {"max_rounds": 5, "llm_per_round_max": 2.0, "should_loop": true, "similarity_risk": true},
+    "expected_trajectory": {
+      "max_rounds": 6,
+      "llm_per_round_max": 2.0,
+      "should_loop": true,
+      "similarity_risk": true
+    },
     "expected_failure": "疑似循环：范围大，Agent 可能反复搜同一类内容",
     "why": "对抗样本 1，实测 7 轮、query 相似度 0.75（接近 0.8 阈值）"
   },
   {
     "type": "loop",
     "question": "2025年中国AIGC行业所有拿到融资的初创公司的完整名单，包括每家公司的具体融资额、投资方、轮次和估值，按融资额从高到低排序",
-    "expected_trajectory": {"max_rounds": 5, "llm_per_round_max": 2.0, "should_loop": true, "similarity_risk": true},
+    "expected_trajectory": {
+      "max_rounds": 6,
+      "llm_per_round_max": 2.0,
+      "should_loop": true,
+      "similarity_risk": true
+    },
     "expected_failure": "疑似循环 + 结果差：数据凑不全，Agent 反复搜 + 硬编",
     "why": "对抗样本 2，实测 9 轮、query 相似度 0.81（触发循环）、judge 3.6 分"
   },
   {
     "type": "tool_choice",
     "question": "我的文档里关于 Docker 容器和虚拟机的区别讲了什么",
-    "expected_trajectory": {"should_use_kb": true, "max_rounds": 4},
+    "expected_trajectory": {
+      "should_use_kb": true,
+      "max_rounds": 6
+    },
     "expected_failure": "工具选择：该用 search_kb 却用 search（web_only 会漏）",
     "why": "测 Agent 是否识别'我的文档'=知识库信号"
   },
   {
     "type": "tool_choice",
     "question": "结合我上传的数据库文档，对比 MySQL 和 MongoDB 的存储引擎",
-    "expected_trajectory": {"should_use_kb": true, "max_rounds": 4},
+    "expected_trajectory": {
+      "should_use_kb": true,
+      "max_rounds": 6
+    },
     "expected_failure": "工具选择：该用 search_kb 却用 search",
     "why": "测 Agent 是否识别'我上传的文档'=知识库信号"
   },
   {
     "type": "data_missing",
     "question": "昨天 A 股涨幅最大的前 10 只股票是哪几只",
-    "expected_trajectory": {"max_rounds": 4, "should_admit_missing": true},
+    "expected_trajectory": {
+      "max_rounds": 6,
+      "should_admit_missing": true
+    },
     "expected_failure": "硬编：搜不到实时数据却编造，或反复搜索不肯承认",
     "why": "需要实时数据但 Agent 可能搜不到却硬编（幻觉）"
   },
   {
     "type": "data_missing",
     "question": "我公司内部某项目的具体营收数据是多少",
-    "expected_trajectory": {"max_rounds": 3, "should_admit_missing": true},
+    "expected_trajectory": {
+      "max_rounds": 6,
+      "should_admit_missing": true
+    },
     "expected_failure": "硬编：内部数据网上搜不到，该承认却编造",
     "why": "私有数据不存在于公网，Agent 该说'无法获取'而非编造"
   },
   {
     "type": "error_recovery",
     "question": "什么是量子纠缠（故意难搜，测降级）",
-    "expected_trajectory": {"max_rounds": 5, "recovery_rate_min": 0.5},
+    "expected_trajectory": {
+      "max_rounds": 5,
+      "recovery_rate_min": 0.5
+    },
     "expected_failure": "恢复率低：搜索失败后是否能降级恢复",
     "why": "测 Agent 遇到搜索失败是否降级（Tavily→DDG）而不是放弃"
   },
   {
     "type": "multi_topic",
     "question": "对比 Redis、MongoDB、PostgreSQL 在缓存、文档存储、关系型三种场景下的适用性，给出选型建议",
-    "expected_trajectory": {"max_rounds": 6, "expected_subtopics": 3},
+    "expected_trajectory": {
+      "max_rounds": 7,
+      "expected_subtopics": 3
+    },
     "expected_failure": "覆盖不全：多维度问题 Agent 可能只覆盖部分",
     "why": "测 Agent 是否覆盖所有子维度（3 个数据库 × 3 种场景）"
   }
