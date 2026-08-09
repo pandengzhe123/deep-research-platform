@@ -154,9 +154,11 @@ async def main():
     parser = argparse.ArgumentParser(description="轨迹层测试")
     parser.add_argument("--n", type=int, default=10, help="跑前 N 题")
     parser.add_argument("--concurrency", type=int, default=3, help="并发数（默认 3，避免 API 限流）")
+    parser.add_argument("--offset", type=int, default=0, help="从第 N 题开始（跳过前面的）")
     args = parser.parse_args()
 
-    testset = json.load(open(TESTSET, encoding="utf-8"))[:args.n]
+    all_testset = json.load(open(TESTSET, encoding="utf-8"))
+    testset = all_testset[args.offset:args.offset + args.n]
     print("=" * 70)
     print(f"  轨迹层测试（{len(testset)} 题，并发 {args.concurrency}）")
     print("=" * 70)
