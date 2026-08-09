@@ -1513,6 +1513,7 @@ async def main():
             judge_ok = bool(judge_result.get("dimensions"))
             result_score = judge_result.get("overall") if judge_ok else None
             judge_std = judge_result.get("std") if judge_ok else None
+            judge_summary = judge_result.get("summary", "") if judge_ok else None  # LLM 诊断总结（丢了就少了关键归因）
 
             # 3. 五维评测
             # ① 完成率：报告非空 + 有结论
@@ -1549,6 +1550,7 @@ async def main():
                 },
                 "judge_score": result_score,
                 "judge_std": judge_std,  # 3 次打分标准差——波动越大结果分越不可信
+                "judge_summary": judge_summary,  # LLM 诊断总结——报告哪里好/哪里差，归因关键
             }
             eval_path = str(reports_dir / "eval_report.json")
             with open(eval_path, "w", encoding="utf-8") as f:
