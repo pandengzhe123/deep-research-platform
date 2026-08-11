@@ -1402,7 +1402,7 @@ class Level4Agent:
         try:
             final = await self.llm.chat(
                 system_prompt="你是专业的深度研究报告总编。",
-                max_tokens=32768,  # DeepSeek 默认 4096 不够 L4 长报告
+                max_tokens=65536,  # L4 长报告用 64K（DeepSeek V4 Flash 输出上限 65536，实测 65537 会 400）
                 user_message=FINAL_REPORT_PROMPT.format(
                     question=question,
                     research_brief=research_brief,
