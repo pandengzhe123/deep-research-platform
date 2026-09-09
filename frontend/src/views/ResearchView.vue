@@ -56,11 +56,11 @@
             <div class="ai-badge">AI</div>
             <div class="ai-body" :id="'msg-' + i">
               <div v-if="msg.content.startsWith('错误：')" class="error-msg">{{ msg.content }}</div>
-              <div v-else-if="msg.content.startsWith('需要澄清：')" class="clarify-msg">
+              <div v-else-if="clarifyQuestion(msg.content) !== null" class="clarify-msg">
                 <div class="clarify-icon">❓</div>
                 <div>
                   <strong>需要补充信息</strong>
-                  <p>{{ msg.content.replace('需要澄清：', '') }}</p>
+                  <p>{{ clarifyQuestion(msg.content) }}</p>
                   <span class="clarify-hint">请在下方的输入框中补充说明后重新提交</span>
                 </div>
               </div>
@@ -156,8 +156,18 @@ const sessions = ref([])
 const currentSessionId = ref('')
 const msgContainer = ref(null)
 const inputEl = ref(null)
-const needClarify = ref(false)
 const showLogoutModal = ref(false)
+
+// 澄清消息存在两处：前端即时渲染（'需要澄清：'）与后端权威 history（'（追问）'）。
+// 统一在此识别，否则同一句话刷新前是澄清卡片、刷新后变成普通报告正文（B40）
+const CLARIFY_PREFIXES = ['需要澄清：', '（追问）']
+function clarifyQuestion(content) {
+  if (!content) return null
+  for (const p of CLARIFY_PREFIXES) {
+    if (content.startsWith(p)) return content.slice(p.length)
+  }
+  return null
+}
 
 const quickQuestions = ['量子计算是什么？', 'Java 21 虚拟线程的优势', '2025年AI领域的重要事件']
 // 上下文由后端权威拼接（Java SessionService.getContextHistory），前端只传 question + session_id
@@ -214,7 +224,7 @@ async function start() {
   let mySessionId = currentSessionId.value || null  // 研究绑定的会话 ID
   researchSessionId.value = mySessionId
   _activeResearch = { sessionId: mySessionId, messages: myMessages }
-  const icons = { searching: '搜索', kb_searching: 'RAG', thinking: '反思', planned: '就绪', planning: '规划', decided: '完成', reporting: '撰写' }
+  const icons = { searching: '搜索', kb_searching: 'RAG', thinking: '反思', planned: '就绪', planning: '规划', decided: '完成', reporting: '撰写', clarify: '澄清', quota: '配额' }
 
   question.value = ''
   if (inputEl.value) { inputEl.value.style.height = 'auto' }

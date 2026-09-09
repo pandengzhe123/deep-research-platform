@@ -114,10 +114,14 @@ public class ResearchController {
             );
 
             // 3. 保存报告 + 追加历史
-            sessionService.appendReport(session.getId(), resp.report());
-            if (resp.needClarify() != null && resp.needClarify()) {
-                sessionService.appendHistory(session.getId(), "agent", "（追问）" + (resp.question() != null ? resp.question() : ""));
+            //    澄清轮没有报告：不能调 appendReport("")，否则会往 reports 数组里塞一个空串
+            //    并把 status 置成 done，导致「最新报告」变空、前端显示「报告已丢失」（B41）
+            boolean needClarify = resp.needClarify() != null && resp.needClarify();
+            if (needClarify) {
+                sessionService.appendHistory(session.getId(), "agent",
+                        "（追问）" + (resp.question() != null ? resp.question() : ""));
             } else {
+                sessionService.appendReport(session.getId(), resp.report() != null ? resp.report() : "");
                 sessionService.appendHistory(session.getId(), "agent", resp.report() != null ? resp.report() : "");
             }
             log.info("研究完成: session={}, report_len={}", session.getId(),

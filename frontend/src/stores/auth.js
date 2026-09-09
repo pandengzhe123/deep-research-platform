@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { clearSessionCache } from '../utils/session-cache'
 
 export const useAuthStore = defineStore('auth', () => {
   const token = ref(localStorage.getItem('token') || '')
@@ -22,14 +23,9 @@ export const useAuthStore = defineStore('auth', () => {
     token.value = ''
     username.value = ''
     role.value = 'user'
-    localStorage.removeItem('token')
-    localStorage.removeItem('username')
-    localStorage.removeItem('role')
-    // 清空本账号的会话痕迹，避免换账号登录后看到上一账号的聊天记录（信息泄露）
-    localStorage.removeItem('activeSession')
-    Object.keys(localStorage)
-      .filter(k => k.startsWith('chat_'))
-      .forEach(k => localStorage.removeItem(k))
+    // 清空登录凭据 + 本账号的会话痕迹，避免换账号登录后看到上一账号的聊天记录（信息泄露）
+    // 与 axios 401 拦截器共用同一实现，保证两条退出路径行为一致
+    clearSessionCache()
   }
 
   function kbUserId() {
