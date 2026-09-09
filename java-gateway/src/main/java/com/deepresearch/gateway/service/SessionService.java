@@ -171,13 +171,12 @@ public class SessionService {
         return repo.findById(sessionId)
                 .map(entity -> {
                     List<Object> history = fromJson(entity.getHistory());
-                    StringBuilder ctx = new StringBuilder();
 
                     // 锚点：原始研究问题，永远不丢（独立字段，不受 history 截断影响）
-                    ctx.append("=== 研究主题 ===\n");
-                    ctx.append(entity.getQuestion()).append("\n\n");
+                    String anchor = "=== 研究主题 ===\n" + entity.getQuestion() + "\n\n";
 
                     // 格式化历史消息：角色 + 时间 + 内容
+                    StringBuilder hist = new StringBuilder();
                     for (Object item : history) {
                         Map<String, Object> msg = toMsgObject(item);
                         String role = (String) msg.get("role");
@@ -186,38 +185,43 @@ public class SessionService {
 
                         if ("system".equals(role)) {
                             // 压缩摘要
-                            ctx.append("[对话摘要] ").append(content).append("\n\n");
+                            hist.append("[对话摘要] ").append(content).append("\n\n");
                         } else {
                             String label = "user".equals(role) ? "用户" : "Agent";
                             if (!time.isEmpty()) {
-                                ctx.append("[").append(time).append("] ");
+                                hist.append("[").append(time).append("] ");
                             }
-                            ctx.append(label).append(": ").append(content).append("\n\n");
+                            hist.append(label).append(": ").append(content).append("\n\n");
                         }
                     }
+                    String historyText = hist.toString();
 
-                    String historyText = ctx.toString();
-
-                    // report 列兜底：补回 history 截断时丢失的报告，放在最前面（从旧到新）
+                    // report 列兜底：补回 history 截断时丢失的报告（用前 200 字指纹判定）
                     List<String> reports = fromJsonStringList(entity.getReport());
                     List<String> missing = new ArrayList<>();
+                    String searchable = anchor + historyText;
                     for (String report : reports) {
                         String snippet = report.length() > 200 ? report.substring(0, 200) : report;
-                        if (!historyText.contains(snippet)) {
+                        if (!searchable.contains(snippet)) {
                             missing.add(report);
                         }
                     }
-                    if (!missing.isEmpty()) {
-                        StringBuilder prefix = new StringBuilder();
-                        prefix.append("=== 历史报告（history 截断补回）===\n");
-                        for (int i = 0; i < missing.size(); i++) {
-                            prefix.append("\n--- 报告 ").append(i + 1).append(" ---\n");
-                            prefix.append(missing.get(i));
-                        }
-                        prefix.append("\n\n");
-                        ctx.insert(0, prefix.toString());  // 插在最前面
+                    if (missing.isEmpty()) {
+                        return anchor + historyText;
                     }
-                    return ctx.toString();
+
+                    // 补回段放在【锚点之后、history 之前】：
+                    // 锚点始终是最前（唯一稳定的前缀起点），补回的历史报告紧跟其后
+                    // （阅读顺序：主题 → 历史背景 → 近期对话）
+                    StringBuilder prefix = new StringBuilder();
+                    prefix.append("=== 历史报告（history 截断补回）===\n");
+                    for (int i = 0; i < missing.size(); i++) {
+                        prefix.append("\n--- 报告 ").append(i + 1).append(" ---\n");
+                        prefix.append(missing.get(i));
+                    }
+                    prefix.append("\n\n");
+
+                    return anchor + prefix + historyText;
                 })
                 .orElse("");
     }
