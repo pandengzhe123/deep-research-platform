@@ -33,6 +33,11 @@ services:
     environment:
       # 容器内不能用 localhost 连 Redis（那是容器自己）
       - REDIS_URL=redis://redis:6379/0
+    # 真实 API Key 从 agent/.env 注入；文件不存在也能起（required: false），
+    # 这样「clone 后直接 docker compose up」不再需要先手动 cp .env.example
+    env_file:
+      - path: ./agent/.env
+        required: false
     depends_on:
       postgres:
         condition: service_started

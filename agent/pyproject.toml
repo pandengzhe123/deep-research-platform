@@ -20,6 +20,12 @@ dependencies = [
     "jieba>=0.42",
     "rank-bm25>=0.2",
     "redis>=8.1.0",
+    # 以下三项原先只写在 Dockerfile 里 → `pip install -e .` 路径下缺失：
+    #   python-multipart: server.py 用 UploadFile，FastAPI 建路由时若无此包直接 RuntimeError
+    #   pymupdf / python-docx: kb.read_file() 解析 PDF / DOCX（函数内惰性 import）
+    "python-multipart>=0.0.9",
+    "pymupdf>=1.24",
+    "python-docx>=1.1",
 ]
 
 [tool.setuptools.packages.find]

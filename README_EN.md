@@ -18,21 +18,33 @@ cp agent/.env.example agent/.env
 #   DASHSCOPE_API_KEY=sk-xxx       (Aliyun embedding)
 ```
 
+> This only affects whether research actually works (no keys → LLM/search calls fail).
+> Container startup no longer depends on it: `docker compose up` succeeds without `.env`.
+
 ### 2. Launch
 
 ```bash
 docker compose up
 # Brings up 5 services: nginx (frontend) · Java gateway · Python agent · PostgreSQL · Redis
 # Open http://localhost:3000
+# agent/.env is injected automatically when present (env_file, required: false)
 ```
 
 First launch downloads images and dependencies (~10 min). Subsequent launches take seconds.
+
+**Without Docker**, the three `start.bat` scripts are directly runnable (they `cd` to their own directory, so they work on any machine/path):
+
+| Script | Starts | Port |
+|------|--------|------|
+| `agent/start.bat` | Python Agent | 8000 |
+| `java-gateway/start.bat` | Java gateway (compiles first) | 8080 |
+| `frontend/start.bat` | Vue frontend (auto `npm install` if needed) | 3000 |
 
 ### 3. CLI (without Docker)
 
 ```bash
 cd agent
-pip install -e .
+pip install -e .          # all deps declared in pyproject.toml (incl. python-multipart / pymupdf / python-docx)
 python -m src.researcher.agent "Impact of quantum computing on cryptography" 2
 ```
 

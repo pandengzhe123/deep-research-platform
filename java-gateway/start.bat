@@ -2,22 +2,25 @@
 chcp 65001 >nul
 title Deep Research Java Gateway
 
-cd /d "D:\deep_research\java-gateway"
+rem 切到本脚本所在目录 —— 原先硬编码 cd /d "D:\deep_research\java-gateway"
+cd /d "%~dp0"
 
 echo.
 echo ============================================
-echo   Deep Research Java Gateway - 构建 & 启动
+echo   Deep Research Java Gateway - 构建 ^& 启动
 echo ============================================
 echo.
 
-echo [0/3] 确保 PostgreSQL 在运行...
-docker ps --filter name=deepresearch-pg --format "{{.Status}}" | find "Up" >nul
-if %errorlevel% neq 0 (
-    echo   PostgreSQL 未运行，正在启动...
-    docker start deepresearch-pg >nul 2>&1
-    echo   已启动
-) else (
-    echo   PostgreSQL 运行中
+echo [0/3] 检查 PostgreSQL (5432) 与 Redis (6379)...
+netstat -ano | findstr /r /c:":5432 .*LISTENING" >nul
+if errorlevel 1 (
+    echo   [警告] 5432 未监听 —— PostgreSQL 可能没起。
+    echo          在仓库根目录执行: docker compose up -d postgres
+)
+netstat -ano | findstr /r /c:":6379 .*LISTENING" >nul
+if errorlevel 1 (
+    echo   [警告] 6379 未监听 —— Redis 没起（上下文热层/锁/限流会降级，功能仍可用）。
+    echo          在仓库根目录执行: docker compose up -d redis
 )
 
 echo [1/3] 编译项目...

@@ -18,21 +18,33 @@ cp agent/.env.example agent/.env
 #   DASHSCOPE_API_KEY=sk-xxx       (阿里云 embedding)
 ```
 
+> 这一步只影响**能不能真的跑研究**（没有 Key，LLM/搜索会失败）。
+> 容器启动本身不再依赖它 —— 缺失时 `docker compose up` 照样能起，只是研究请求会报缺 Key。
+
 ### 2. 启动
 
 ```bash
 docker compose up
 # 一键起 5 个服务：nginx(前端) · Java 网关 · Python Agent · PostgreSQL · Redis
 # 浏览器打开 http://localhost:3000
+# agent/.env 存在时由 compose 自动注入容器（env_file, required: false）
 ```
 
 首次启动需下载镜像和依赖（约 10 分钟），后续启动几秒。
+
+**不用 Docker 时**，三个 `start.bat` 可直接双击（自动切到脚本所在目录，换机器/换路径都能跑）：
+
+| 脚本 | 起什么 | 端口 |
+|------|--------|------|
+| `agent/start.bat` | Python Agent | 8000 |
+| `java-gateway/start.bat` | Java 网关（含编译） | 8080 |
+| `frontend/start.bat` | Vue 前端（缺 node_modules 自动 `npm install`） | 3000 |
 
 ### 3. 命令行（不启动 Docker 也能跑）
 
 ```bash
 cd agent
-pip install -e .
+pip install -e .          # 依赖已全部声明在 pyproject.toml（含 python-multipart / pymupdf / python-docx）
 python -m src.researcher.agent "量子计算对密码学的影响" 2
 ```
 
