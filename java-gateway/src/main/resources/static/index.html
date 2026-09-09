@@ -68,7 +68,7 @@
     <div id="report"></div>
 
     <script>
-        let contextHistory = '';
+        let sessionId = null;   // 会话 ID：多轮追问复用（上下文由后端权威拼接）
         let authToken = localStorage.getItem('token') || '';
 
         // ========== 认证 ==========
@@ -228,8 +228,7 @@
 
         function continueSession(sid, question) {
             document.getElementById('question').value = '继续之前的话题: ' + question;
-            contextHistory = sessionStorage.getItem('ctx_' + sid) || '';
-            // 后续提交时会带上这个 session 的 context
+            sessionId = sid;   // 复用该会话，上下文由后端从 DB/Redis 权威拼接
         }
 
         // 页面加载时
@@ -266,20 +265,19 @@
             fetch('/api/research', {
                 method: 'POST',
                 headers: authHeaders(),
-                body: JSON.stringify({ question, level, context: contextHistory, kb_enabled: kbEnabled })
+                body: JSON.stringify({ question, level, session_id: sessionId || undefined, kb_enabled: kbEnabled })
             }).then(res => {
                 clearInterval(timerId);
                 if (!res.ok) throw new Error('服务器返回 ' + res.status);
                 return res.json();
             }).then(data => {
+                if (data.session_id) sessionId = data.session_id;   // 后续追问复用同一会话
                 if (data.need_clarify) {
-                    contextHistory += (contextHistory ? '\n\n' : '') + '用户: ' + question;
                     progress.textContent = '❓ ' + (data.question || '需要补充信息') + '\n\n请在输入框补充后重新提交\n';
                     statusEl.innerHTML = '<span class="badge badge-warn">需要补充</span>';
                     btn.disabled = false;
                     return;
                 }
-                contextHistory = '';
                 progress.textContent = '✅ 研究完成\n';
                 statusEl.innerHTML = '<span class="badge badge-ok">完成</span>';
                 if (data.report) {
@@ -298,7 +296,6 @@
                     progress.textContent = '❌ 请求失败: ' + err.message + '\n';
                 }
                 statusEl.innerHTML = '<span class="badge badge-warn">失败</span>';
-                contextHistory = '';
             }).finally(() => { btn.disabled = false; });
         }
     </script>

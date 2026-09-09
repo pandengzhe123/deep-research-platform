@@ -81,10 +81,15 @@ public class SessionService {
      * 追加一条结构化消息到会话历史。
      * 超过 40 条时自动压缩旧消息：调用 Python /compress 将旧对话总结为一条摘要。
      */
+    @org.springframework.transaction.annotation.Transactional
     public void appendHistory(String sessionId, String role, String content) {
-        repo.findById(sessionId).ifPresent(entity -> {
+        // 行锁读取（B9）：同会话并发追加串行化，避免后写覆盖前写导致 PG 丢消息
+        repo.findByIdForUpdate(sessionId).ifPresent(entity -> {
             List<Object> history = fromJson(entity.getHistory());
-            history.add(msgObj(role, content));
+            // 只构造一次消息对象：PG 与 Redis 必须是同一条（含相同的 time），
+            // 否则「Redis == PG」的镜像语义不成立（B22）
+            Map<String, String> newMsg = msgObj(role, content);
+            history.add(newMsg);
 
             boolean restructured = false;   // 是否发生结构性变更（压缩/硬截断）→ 热层需失效
 
@@ -118,7 +123,7 @@ public class SessionService {
             entity.touch();
             repo.save(entity);                                  // ① PG 先落（权威）
 
-            syncHistoryCache(sessionId, msgObj(role, content), restructured);  // ② Redis 后同步
+            syncHistoryCache(sessionId, newMsg, restructured);  // ② Redis 后同步
         });
     }
 
@@ -172,6 +177,7 @@ public class SessionService {
                     for (String s : raw) {
                         msgs.add(objectMapper.readValue(s, Map.class));
                     }
+                    redis.expire(key, HISTORY_TTL);   // 命中即续期：活跃会话不应被空闲回收（B23）
                     return msgs;
                 } catch (Exception parseErr) {
                     // 热层内容损坏（如旧格式纯文本条目 "用户: xxx" 无法反序列化为 Map）
@@ -295,8 +301,9 @@ public class SessionService {
                         String time = (String) msg.getOrDefault("time", "");
 
                         if ("system".equals(role)) {
-                            // 压缩摘要
-                            hist.append("[对话摘要] ").append(content).append("\n\n");
+                            // 存储时已带 [对话摘要] 前缀，这里避免重复添加（兼容未带前缀的旧数据）
+                            String prefix = content.startsWith("[对话摘要]") ? "" : "[对话摘要] ";
+                            hist.append(prefix).append(content).append("\n\n");
                         } else {
                             String label = "user".equals(role) ? "用户" : "Agent";
                             if (!time.isEmpty()) {

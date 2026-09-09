@@ -453,6 +453,7 @@ async def _truncate_context(messages: list[dict], total_chars: int, max_chars: i
         emit({"step": "thinking", "message": "上下文已满，正在压缩早期对话以保留关键信息...", "round": round_num})
         # 保留窗口起点必须落在 tool_calls 配对边界上，否则下一轮 chat_with_tools 会 400
         start = _safe_window_start(messages, 5)
+        compressed = False          # 是否真的生成了摘要（用于提示准确性）
         try:
             old_msgs = messages[1:start]
             if old_msgs:
@@ -490,6 +491,7 @@ async def _truncate_context(messages: list[dict], total_chars: int, max_chars: i
                 )
                 if summary:
                     messages = [messages[0], {"role": "system", "content": f"[早期对话摘要] {summary}"}] + messages[start:]
+                    compressed = True
                     if compressed_summaries is not None:
                         compressed_summaries.append(f"[第{round_num}轮压缩] {summary}")
         except Exception:
@@ -505,7 +507,10 @@ async def _truncate_context(messages: list[dict], total_chars: int, max_chars: i
                     and str(messages[1].get("content", "")).startswith("[早期对话摘要]")):
                 head = messages[:2]
             messages = head + messages[max(start2, len(head)):]
-        emit({"step": "thinking", "message": f"早期对话已压缩（上下文已用 {sum(len(str(m)) for m in messages) * 100 // max_chars}%）。建议开新会话以保证研究质量", "round": round_num})
+        if compressed:
+            emit({"step": "thinking", "message": f"早期对话已压缩（上下文已用 {sum(len(str(m)) for m in messages) * 100 // max_chars}%）。建议开新会话以保证研究质量", "round": round_num})
+        else:
+            emit({"step": "thinking", "message": f"上下文仍接近上限（已用 {sum(len(str(m)) for m in messages) * 100 // max_chars}%），建议开新会话以保证研究质量", "round": round_num})
 
     return messages, context_warned
 
