@@ -415,29 +415,102 @@ def _safe_window_start(messages: list[dict], keep: int) -> int:
     （assistant 悬空 或 tool 孤立），向前扩展起点，直到配对完整。
     messages[0] 固定保留，因此起点至少为 1。
 
+    实现：先对全体消息做**一次**线性扫描，用差分数组标记「哪些切点会切断配对」，
+    再从候选起点向前找第一个未被标记的切点。
+    原实现每前移一格就重扫整个窗口（O(n²)），长会话反复压缩时会明显卡顿。
+
     返回可安全保留的窗口起点下标。
     """
     end = len(messages)
     start = max(1, end - keep)
-    while start > 1:
-        need: set[str] = set()          # 等待响应的 tool_call_id
-        ok = True
-        for m in messages[start:end]:
-            role = m.get("role")
-            if role == "assistant" and m.get("tool_calls"):
-                for tc in m["tool_calls"]:
-                    need.add(tc.get("id"))
-            elif role == "tool":
-                tid = m.get("tool_call_id")
-                if tid in need:
-                    need.discard(tid)
-                else:
-                    ok = False          # 孤立 tool：对应 assistant 被切在窗口外
-                    break
-        if ok and not need:
-            return start
-        start -= 1
-    return start
+    if start <= 1:
+        return start
+
+    # diff 差分数组：cut[s] > 0 表示「以 s 为窗口起点」会切断某个 tool_calls 配对
+    diff = [0] * (end + 2)
+    pending: dict[str, int] = {}       # tool_call_id -> 对应 assistant 的下标
+    dangling: set[int] = set()         # 有 tool_calls 但缺响应的 assistant 下标
+    for i, m in enumerate(messages):
+        role = m.get("role")
+        if role == "assistant" and m.get("tool_calls"):
+            for tc in m["tool_calls"]:
+                tid = tc.get("id")
+                if tid is not None:
+                    pending[tid] = i
+                    dangling.add(i)
+        elif role == "tool":
+            tid = m.get("tool_call_id")
+            a = pending.pop(tid, None)
+            if a is None:
+                # 孤立 tool：找不到对应 assistant → 任何包含它的窗口都不安全
+                diff[1] += 1
+                diff[i + 1] -= 1
+            else:
+                dangling.discard(a)
+                # 分组闭合：切点落在 (a, i] 内即被切断
+                diff[a + 1] += 1
+                diff[i + 1] -= 1
+    # 悬空 assistant：其响应永远不会出现 → 只要窗口包含它就不安全，
+    # 即切点 s <= a 全部被切断
+    for a in dangling:
+        diff[1] += 1
+        diff[a + 1] -= 1
+
+    cut = 0
+    s = start
+    # 先算出 cut[start]
+    for i in range(1, start + 1):
+        cut += diff[i]
+    while s > 1 and cut > 0:
+        s -= 1
+        cut -= diff[s + 1]
+    return s
+
+
+def _drop_dangling_tail(messages: list[dict]) -> list[dict]:
+    """删除尾部悬空/残缺的 tool_calls 分组。
+
+    上游异常（工具超时、任务取消、LLM 输出被截断）会在对话末尾留下：
+      - assistant 带 tool_calls 但**没有任何** tool 响应（悬空）
+      - assistant 带 N 个 tool_calls 但只回了 M<N 条 tool（残缺）
+      - 尾部孤立 tool（对应 assistant 已被切掉）
+    这三种消息直接发给 OpenAI 兼容后端会 400 invalid_request_error，
+    因此每次调用 LLM 前都要清理干净。
+
+    只动尾部：中间的配对由 `_safe_window_start` 保证完整。
+    """
+    while messages:
+        # 尾部连续 tool 段的起点
+        i = len(messages)
+        while i > 0 and messages[i - 1].get("role") == "tool":
+            i -= 1
+
+        if i == len(messages):
+            # 末尾不是 tool：检查是否悬空 assistant
+            prev = messages[-1]
+            if prev.get("role") == "assistant" and prev.get("tool_calls"):
+                messages = messages[:-1]
+                continue
+            return messages
+
+        prev = messages[i - 1] if i > 0 else None
+        if prev is None or prev.get("role") != "assistant" or not prev.get("tool_calls"):
+            # 尾部孤立 tool：没有对应的 assistant，整段删掉
+            messages = messages[:i]
+            continue
+
+        answered = {m.get("tool_call_id") for m in messages[i:]}
+        asked = {tc.get("id") for tc in prev["tool_calls"]}
+        if asked - answered:
+            # 残缺分组：整组删除，再检查新的尾部
+            messages = messages[:i - 1]
+            continue
+        return messages
+    return messages
+
+
+SUMMARY_PREFIX = "[早期对话摘要]"
+"""压缩摘要的固定前缀（用于识别并保留摘要消息，勿随意改）。"""
 
 
 async def _truncate_context(messages: list[dict], total_chars: int, max_chars: int,
@@ -490,7 +563,13 @@ async def _truncate_context(messages: list[dict], total_chars: int, max_chars: i
                     user_message=f"请压缩以下对话，保留关键信息：\n\n{raw}",
                 )
                 if summary:
-                    messages = [messages[0], {"role": "system", "content": f"[早期对话摘要] {summary}"}] + messages[start:]
+                    # 用 user 角色而非 system：部分 OpenAI 兼容后端拒绝「对话中段的
+                    # system 消息」（只允许首条 system），会直接 400
+                    messages = [messages[0], {
+                        "role": "user",
+                        "content": f"{SUMMARY_PREFIX} 以下是更早对话的压缩摘要，"
+                                   f"请在后续回答中继续遵守其中的事实与约束：\n{summary}",
+                    }] + messages[start:]
                     compressed = True
                     if compressed_summaries is not None:
                         compressed_summaries.append(f"[第{round_num}轮压缩] {summary}")
@@ -503,8 +582,8 @@ async def _truncate_context(messages: list[dict], total_chars: int, max_chars: i
             # （[早期对话摘要]）切掉，压缩白做
             head = messages[:1]
             if (len(messages) > 1
-                    and messages[1].get("role") == "system"
-                    and str(messages[1].get("content", "")).startswith("[早期对话摘要]")):
+                    and messages[1].get("role") in ("system", "user")
+                    and str(messages[1].get("content", "")).startswith(SUMMARY_PREFIX)):
                 head = messages[:2]
             messages = head + messages[max(start2, len(head)):]
         if compressed:
@@ -512,6 +591,8 @@ async def _truncate_context(messages: list[dict], total_chars: int, max_chars: i
         else:
             emit({"step": "thinking", "message": f"上下文仍接近上限（已用 {sum(len(str(m)) for m in messages) * 100 // max_chars}%），建议开新会话以保证研究质量", "round": round_num})
 
+    # 尾部悬空 tool_calls 清理：上游异常留下的残缺分组会让下一轮 LLM 调用 400
+    messages = _drop_dangling_tail(messages)
     return messages, context_warned
 
 

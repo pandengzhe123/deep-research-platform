@@ -82,6 +82,15 @@ end
 """
 
 
+_LOCK_RENEW_LUA = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('expire', KEYS[1], ARGV[2])
+else
+    return 0
+end
+"""
+
+
 async def acquire_research_lock(session_id: str, ttl: int = 3600) -> tuple[bool, str]:
     """尝试获取会话研究锁。
 
@@ -131,6 +140,37 @@ async def release_research_lock(session_id: str, token: str) -> None:
         log.info(f"释放研究锁: session={session_id}")
     except Exception as e:
         log.warning(f"释放研究锁失败: {e}")
+
+
+async def renew_research_lock_loop(session_id: str, token: str, ttl: int = 3600,
+                                   interval: int | None = None) -> None:
+    """后台续期会话研究锁，直到被取消。
+
+    锁 TTL 固定 1 小时，但 L3/L4 深研究可能跑更久（多路并行 + 多轮反思），
+    一旦 TTL 到期锁自动消失，同一会话的第二个请求就能趁虚而入 —— 报告错乱、
+    token 翻倍，正是锁要防的事。故每 TTL/3 续一次。
+
+    续期用 Lua 校验 token，只续自己持有的锁，避免把别人的锁续命。
+    取不到 Redis 客户端时跳过本次（降级期不续期，恢复后自动继续）。
+    """
+    if interval is None:
+        interval = max(30, ttl // 3)
+    from .search import _get_redis
+
+    while True:
+        await aio.sleep(interval)
+        r = _get_redis()
+        if r is None:
+            continue
+        try:
+            ok = await r.eval(_LOCK_RENEW_LUA, 1, f"lock:research:{session_id}", token, ttl)
+            if not ok:
+                # 锁已过期或已易主 → 停止续期（不再持有锁，也不该继续「保护」）
+                log.warning(f"锁续期失败（锁已不属于本任务，停止续期）: session={session_id}")
+                return
+            log.debug(f"锁续期成功: session={session_id}")
+        except Exception as e:
+            log.warning(f"锁续期异常（下次重试）: {e}")
 
 
 # ============================================================
@@ -349,6 +389,13 @@ async def run_agent_with_sse(
 # 带会话锁的研究执行
 # ============================================================
 
+# 错误码 → HTTP 状态映射（同步端点用；SSE 端点只能靠 event=error + code 表达）
+ERROR_HTTP_STATUS = {
+    "session_locked": 409,      # 冲突：同会话已有研究在跑
+    "rate_limited": 429,        # 限流：语义明确，前端可据此退避重试
+}
+
+
 async def _run_with_lock(req: "ResearchRequest", cancel: aio.Event) -> AsyncGenerator[dict, None]:
     """在会话研究锁保护下执行研究。
 
@@ -361,21 +408,36 @@ async def _run_with_lock(req: "ResearchRequest", cancel: aio.Event) -> AsyncGene
     # ① 会话研究锁（拿不到直接拒绝，不计配额）
     session_id = (req.session_id or "").strip()
     lock_token = ""
+    renew_task: aio.Task | None = None
     if session_id:
         acquired, lock_token = await acquire_research_lock(session_id)
         if not acquired:
             yield {"event": "error", "data": json.dumps({
                 "message": "该会话正在研究中，请等待完成后再试",
+                "code": "session_locked",
             }, ensure_ascii=False)}
             return
+        if lock_token:
+            # 长研究（>1h）自动续期，否则锁提前过期 → 并发研究趁虚而入
+            renew_task = aio.create_task(renew_research_lock_loop(session_id, lock_token))
     try:
         # ② 限流：每用户每分钟上限（Redis 不可用时放行）
         allowed, remaining = await check_rate_limit(req.user_id)
         if not allowed:
             yield {"event": "error", "data": json.dumps({
                 "message": f"请求过于频繁，每分钟最多 {RATE_LIMIT_PER_MINUTE} 次研究，请稍后再试",
+                "code": "rate_limited",
+                "remaining": 0,
+                "retry_after": 60,
             }, ensure_ascii=False)}
             return
+        if remaining >= 0:
+            # 剩余额度回传前端：多用户高频场景下，用户能提前知道「这是本分钟最后一次」
+            yield {"event": "status", "data": json.dumps({
+                "step": "quota",
+                "message": f"本分钟剩余研究额度 {remaining} 次",
+                "remaining": remaining,
+            }, ensure_ascii=False)}
 
         # ③ 用量统计：真正开始研究才计数（含热门主题榜）
         await record_usage(req.user_id, req.question)
@@ -388,6 +450,12 @@ async def _run_with_lock(req: "ResearchRequest", cancel: aio.Event) -> AsyncGene
         ):
             yield event
     finally:
+        if renew_task is not None:
+            renew_task.cancel()
+            try:
+                await renew_task
+            except (aio.CancelledError, Exception):
+                pass
         if lock_token:
             await release_research_lock(session_id, lock_token)
 
@@ -420,7 +488,13 @@ async def research_sync(req: ResearchRequest):
         if event["event"] == "done":
             result.append(json.loads(event["data"]))
         elif event["event"] == "error":
-            raise HTTPException(status_code=500, detail=json.loads(event["data"]))
+            detail = json.loads(event["data"])
+            # 按错误码映射状态码：原来一律 500，调用方无法区分「该退避重试」和「真故障」
+            status = ERROR_HTTP_STATUS.get(detail.get("code"), 500)
+            headers = None
+            if status == 429:
+                headers = {"Retry-After": str(detail.get("retry_after", 60))}
+            raise HTTPException(status_code=status, detail=detail, headers=headers)
     if not result:
         raise HTTPException(status_code=500, detail="无结果")
     return JSONResponse(content=result[0])

@@ -191,7 +191,9 @@ def test_chinese_detection():
 
 import asyncio
 
-from researcher.agent import _safe_window_start, _truncate_context
+from researcher.agent import (
+    _safe_window_start, _truncate_context, _drop_dangling_tail, SUMMARY_PREFIX,
+)
 
 
 def _msg(role, content="", tool_calls=None, tool_call_id=None):
@@ -326,6 +328,111 @@ def test_truncate_context_keeps_summary_on_hard_truncate():
     )
 
 
+def test_safe_window_start_dangling_assistant():
+    """assistant 的 tool_calls 在整段消息里都没有响应 → 任何含它的窗口都不安全"""
+    msgs = [
+        _msg("user", "q"),
+        _msg("assistant", "old"),
+        _msg("user", "q2"),
+        _msg("assistant", "", tool_calls=[_tc("c9")]),   # 悬空：无 tool 响应
+        _msg("user", "q3"),
+    ]
+    assert _safe_window_start(msgs, 2) == 1
+
+
+def test_safe_window_start_large_input_is_fast():
+    """B30：长会话压缩时不得 O(n²)。3000 条消息必须秒级完成。"""
+    import time
+    msgs = _build_tool_loop_messages(rounds=1500)
+    t0 = time.time()
+    start = _safe_window_start(msgs, 5)
+    elapsed = time.time() - t0
+    assert start > 0
+    assert elapsed < 1.0, f"耗时 {elapsed:.3f}s，疑似退化为 O(n²)"
+
+
+def test_drop_dangling_tail_dangling_assistant():
+    """B31：尾部悬空 assistant(tool_calls) 必须删除"""
+    msgs = [
+        _msg("user", "q"),
+        _msg("assistant", "", tool_calls=[_tc("c1")]),
+        _msg("tool", "r1", tool_call_id="c1"),
+        _msg("assistant", "", tool_calls=[_tc("c2")]),   # 悬空
+    ]
+    out = _drop_dangling_tail(msgs)
+    assert len(out) == 3, out
+    _assert_pairing_complete(out)
+
+
+def test_drop_dangling_tail_partial_group():
+    """B31：多 tool_calls 只回了一部分 → 整组删除"""
+    msgs = [
+        _msg("user", "q"),
+        _msg("assistant", "old"),
+        _msg("assistant", "", tool_calls=[_tc("c1"), _tc("c2")]),
+        _msg("tool", "r1", tool_call_id="c1"),           # 缺 c2
+    ]
+    out = _drop_dangling_tail(msgs)
+    assert len(out) == 2, out
+    _assert_pairing_complete(out)
+
+
+def test_drop_dangling_tail_orphan_tool():
+    """B31：尾部孤立 tool（对应 assistant 已丢）必须删除"""
+    msgs = [
+        _msg("user", "q"),
+        _msg("assistant", "old"),
+        _msg("tool", "r1", tool_call_id="c1"),
+    ]
+    out = _drop_dangling_tail(msgs)
+    assert len(out) == 2, out
+
+
+def test_drop_dangling_tail_keeps_complete():
+    """配对完整时不得误删"""
+    msgs = [
+        _msg("user", "q"),
+        _msg("assistant", "", tool_calls=[_tc("c1"), _tc("c2")]),
+        _msg("tool", "r1", tool_call_id="c1"),
+        _msg("tool", "r2", tool_call_id="c2"),
+    ]
+    assert _drop_dangling_tail(msgs) == msgs
+
+
+def test_truncate_context_summary_role_is_user():
+    """B32：压缩摘要必须是 user 角色（对话中段的 system 会被部分后端拒绝）"""
+    class FakeLLM:
+        async def chat(self, system_prompt, user_message, **kw):
+            return "压缩摘要"
+
+    msgs = _build_tool_loop_messages()
+    new_msgs, _ = asyncio.run(_truncate_context(
+        msgs, total_chars=10 ** 6, max_chars=100,
+        llm=FakeLLM(), emit=lambda e: None, round_num=1, context_warned=False,
+    ))
+    summaries = [m for m in new_msgs if str(m.get("content", "")).startswith(SUMMARY_PREFIX)]
+    assert summaries, "未生成摘要"
+    for m in summaries:
+        assert m["role"] == "user", f"摘要角色应为 user，实际 {m['role']}"
+    # 除首条外不允许出现 system 消息
+    assert all(m.get("role") != "system" for m in new_msgs[1:]), new_msgs
+
+
+def test_truncate_context_drops_dangling_tail():
+    """B31 集成：_truncate_context 出口处必须清理尾部悬空 tool_calls"""
+    class FailLLM:
+        async def chat(self, *a, **kw):
+            raise RuntimeError("LLM 不可用")
+
+    msgs = _build_tool_loop_messages(rounds=3)
+    msgs.append(_msg("assistant", "", tool_calls=[_tc("dangling")]))  # 上游异常残留
+    new_msgs, _ = asyncio.run(_truncate_context(
+        msgs, total_chars=10 ** 6, max_chars=100,
+        llm=FailLLM(), emit=lambda e: None, round_num=1, context_warned=False,
+    ))
+    _assert_pairing_complete(new_msgs)
+
+
 # ============================================================
 # 运行
 # ============================================================
@@ -350,9 +457,17 @@ if __name__ == "__main__":
         test_safe_window_start_orphan_tool,
         test_safe_window_start_aligned_assistant,
         test_safe_window_start_multi_tool_calls,
+        test_safe_window_start_dangling_assistant,
+        test_safe_window_start_large_input_is_fast,
+        test_drop_dangling_tail_dangling_assistant,
+        test_drop_dangling_tail_partial_group,
+        test_drop_dangling_tail_orphan_tool,
+        test_drop_dangling_tail_keeps_complete,
         test_truncate_context_compressed_pairing_complete,
         test_truncate_context_hard_truncate_pairing_complete,
         test_truncate_context_keeps_summary_on_hard_truncate,
+        test_truncate_context_summary_role_is_user,
+        test_truncate_context_drops_dangling_tail,
     ]
 
     passed = 0

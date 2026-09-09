@@ -32,7 +32,8 @@ async def test_do_search_hits_redis_cache():
     from researcher.search import SearchTool, _get_redis
     tool = SearchTool()
     query = "test_cache_hit_query"
-    key = f"search:{query}:5"
+    # key 含 include_raw 标记（B34）：_do_search 内部用 include_raw=True 调用
+    key = f"search:{query}:5:raw"
     payload = {"results": [{"url": "u", "title": "from-cache", "content": "c"}], "query": query}
 
     await tool._cache_set(key, payload)
@@ -261,6 +262,146 @@ async def test_rate_limit_degrades_when_redis_down():
         sm._redis_disabled_until = saved
 
 
+async def test_lock_renewal_extends_ttl():
+    """B29：长研究必须能续期，否则锁 TTL 到期后同会话并发研究趁虚而入。"""
+    import uuid
+    import researcher.server as srv
+    from researcher.search import _get_redis
+
+    session_id = "test_renew_" + uuid.uuid4().hex[:8]
+    acquired, token = await srv.acquire_research_lock(session_id, ttl=2)
+    assert acquired and token, "未拿到锁"
+    task = asyncio.create_task(
+        srv.renew_research_lock_loop(session_id, token, ttl=2, interval=1))
+    try:
+        await asyncio.sleep(3.5)            # 已超过原始 TTL(2s)
+        r = _get_redis()
+        assert await r.exists(f"lock:research:{session_id}") == 1, "锁被 TTL 回收，续期失效"
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        await srv.release_research_lock(session_id, token)
+
+
+async def test_lock_renewal_stops_when_token_changed():
+    """B29：锁已易主 → 续期任务必须自行退出，不能一直给别人的锁续命。"""
+    import uuid
+    import researcher.server as srv
+    from researcher.search import _get_redis
+
+    session_id = "test_stolen_" + uuid.uuid4().hex[:8]
+    acquired, token = await srv.acquire_research_lock(session_id, ttl=10)
+    assert acquired and token
+    r = _get_redis()
+    await r.set(f"lock:research:{session_id}", "other-token", ex=10)   # 模拟易主
+    task = asyncio.create_task(
+        srv.renew_research_lock_loop(session_id, token, ttl=10, interval=1))
+    try:
+        await asyncio.sleep(1.5)
+        assert task.done(), "锁已易主，续期任务应已退出"
+        task.result()                       # 有异常则在此抛出
+        assert await r.get(f"lock:research:{session_id}") == "other-token", "不应续别人的锁"
+    finally:
+        if not task.done():
+            task.cancel()
+        await r.delete(f"lock:research:{session_id}")
+
+
+async def test_cache_key_separates_include_raw():
+    """B34：include_raw 不同 → 缓存 key 不同，避免一种形态污染另一种。"""
+    import uuid
+    from researcher.search import SearchTool, _get_redis
+
+    tool = SearchTool()
+    query = "test_include_raw_" + uuid.uuid4().hex[:6]
+
+    async def fake_tavily(q, max_results, include_raw, retries=2):
+        return {"results": [{"url": "u",
+                             "title": "raw" if include_raw else "noraw",
+                             "content": "c"}], "query": q}
+
+    tool._safe_tavily_search = fake_tavily
+    raw = await tool._do_search(query, 3, True)
+    noraw = await tool._do_search(query, 3, False)
+    assert raw["results"][0]["title"] == "raw", raw
+    assert noraw["results"][0]["title"] == "noraw", f"两种形态共用 key 了: {noraw}"
+
+    r = _get_redis()
+    base = query.strip().lower()
+    assert await r.exists(f"search:{base}:3:raw") == 1, "raw 形态未独立缓存"
+    assert await r.exists(f"search:{base}:3:noraw") == 1, "noraw 形态未独立缓存"
+    await r.delete(f"search:{base}:3:raw", f"search:{base}:3:noraw")
+
+
+async def test_error_codes_and_http_mapping():
+    """B35：锁冲突→409、限流→429，错误体必须带 code（原来一律 500）。"""
+    import json
+    import time
+    import uuid
+    import researcher.server as srv
+    from researcher.search import _get_redis
+
+    assert srv.ERROR_HTTP_STATUS.get("session_locked") == 409
+    assert srv.ERROR_HTTP_STATUS.get("rate_limited") == 429
+
+    # ① 会话锁冲突
+    session_id = "test_err_" + uuid.uuid4().hex[:8]
+    acquired, token = await srv.acquire_research_lock(session_id, ttl=10)
+    assert acquired and token
+    try:
+        events = [e async for e in srv._run_with_lock(
+            srv.ResearchRequest(question="q", user_id="err_user", session_id=session_id),
+            asyncio.Event())]
+        assert len(events) == 1 and events[0]["event"] == "error", events
+        payload = json.loads(events[0]["data"])
+        assert payload["code"] == "session_locked", payload
+    finally:
+        await srv.release_research_lock(session_id, token)
+
+    # ② 限流（把每分钟上限临时设为 0）
+    saved = srv.RATE_LIMIT_PER_MINUTE
+    srv.RATE_LIMIT_PER_MINUTE = 0
+    user = "err_user_" + uuid.uuid4().hex[:6]
+    try:
+        events = [e async for e in srv._run_with_lock(
+            srv.ResearchRequest(question="q", user_id=user), asyncio.Event())]
+        payload = json.loads(events[0]["data"])
+        assert payload["code"] == "rate_limited", payload
+        assert payload["remaining"] == 0, payload
+        assert payload["retry_after"] == 60, payload
+    finally:
+        srv.RATE_LIMIT_PER_MINUTE = saved
+        await _get_redis().delete(f"rate:research:{user}:{int(time.time()) // 60}")
+
+
+async def test_quota_event_reports_remaining():
+    """B36：remaining 必须被真正使用 —— 放行时以 status 事件回传剩余额度。"""
+    import json
+    import time
+    import uuid
+    import researcher.server as srv
+    from researcher.search import _get_redis
+
+    saved = srv.RATE_LIMIT_PER_MINUTE
+    srv.RATE_LIMIT_PER_MINUTE = 5
+    user = "quota_user_" + uuid.uuid4().hex[:6]
+    try:
+        agen = srv._run_with_lock(
+            srv.ResearchRequest(question="q", user_id=user), asyncio.Event())
+        first = await agen.__anext__()      # 首个事件应是额度提示
+        await agen.aclose()
+        assert first["event"] == "status", first
+        payload = json.loads(first["data"])
+        assert payload["step"] == "quota", payload
+        assert payload["remaining"] == 4, payload       # 上限 5 - 已用 1
+    finally:
+        srv.RATE_LIMIT_PER_MINUTE = saved
+        await _get_redis().delete(f"rate:research:{user}:{int(time.time()) // 60}")
+
+
 async def main():
     from researcher.search import _get_redis
 
@@ -291,6 +432,11 @@ async def main():
         test_lock_release_only_own_token,
         test_rate_limit_and_usage,
         test_rate_limit_degrades_when_redis_down,
+        test_lock_renewal_extends_ttl,
+        test_lock_renewal_stops_when_token_changed,
+        test_cache_key_separates_include_raw,
+        test_error_codes_and_http_mapping,
+        test_quota_event_reports_remaining,
     ]
     passed = 0
     for t in tests:

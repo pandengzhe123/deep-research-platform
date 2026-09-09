@@ -129,15 +129,12 @@ public class ResearchController {
         }).subscribeOn(VIRTUAL);
     }
 
-    /**
-     * SSE 流式研究 —— 实时推送进度，完成时自动保存报告。
-     */
-    @PostMapping(value = "/research/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<ServerSentEvent<String>> researchStream(@RequestBody ResearchRequest req,
-            org.springframework.http.server.reactive.ServerHttpRequest request) {
-        final String uid = extractUserId(request);
+    /** 流式研究的准备阶段产物（全部由阻塞调用产出）。 */
+    private record StreamSetup(String sessionId, ResearchRequest reqWithUser,
+                               ServerSentEvent<String> sessionEvent, String error) {}
 
-        // 1. 创建或继续会话（和 sync 端点一致）
+    /** 建/取会话 + 取上下文 + 写历史 —— 全是阻塞 IO，只能在非事件循环线程调用。 */
+    private StreamSetup prepareStream(ResearchRequest req, String uid) {
         ResearchSession session;
         boolean followUp = false;
         if (req.sessionId() != null && !req.sessionId().isBlank()) {
@@ -145,10 +142,7 @@ public class ResearchController {
             if (session == null) session = sessionService.createSession(uid, req.question());
             else if (!uid.equals(session.getUserId())) {
                 // 越权防护：不允许往别人的会话追加消息
-                return Flux.just(ServerSentEvent.<String>builder()
-                        .event("error")
-                        .data("{\"message\":\"无权访问该会话\"}")
-                        .build());
+                return new StreamSetup(null, null, null, "无权访问该会话");
             }
             else {
                 followUp = true;
@@ -156,10 +150,10 @@ public class ResearchController {
         } else {
             session = sessionService.createSession(uid, req.question());
         }
-        final String sessionId = session.getId();
+        String sessionId = session.getId();
 
-        // 2. 先取上下文（不含本轮问题），再写入历史 —— 避免同一问题被拼两遍（B28）
-        //    上下文由后端权威拼接（前端只传 question + session_id，不再传 context）
+        // 先取上下文（不含本轮问题），再写入历史 —— 避免同一问题被拼两遍（B28）
+        // 上下文由后端权威拼接（前端只传 question + session_id，不再传 context）
         String fullContext = sessionService.getContextHistory(sessionId);
         if (followUp) {
             sessionService.appendHistory(sessionId, "user", req.question());
@@ -172,53 +166,92 @@ public class ResearchController {
                 uid, sessionId, req.ragDocIds()
         );
 
-        // 3. 先推一条 session 事件，告诉前端 session_id
         ServerSentEvent<String> sessionEvent = ServerSentEvent.<String>builder()
                 .event("session")
                 .data("{\"id\":\"" + sessionId + "\"}")
                 .build();
+        return new StreamSetup(sessionId, reqWithUser, sessionEvent, null);
+    }
 
-        // 4. 转发 Python SSE 事件，拦截 done/error 做持久化
-        return Flux.just(sessionEvent)
-                .concatWith(
-                        agentClient.researchStream(reqWithUser)
-                                .doOnNext(sse -> {
-                                    String eventName = sse.event();
-                                    String data = sse.data();
-                                    if ("done".equals(eventName) && data != null) {
-                                        try {
-                                            JsonNode node = objectMapper.readTree(data);
-                                            String report = node.has("report") ? node.get("report").asText() : "";
-                                            boolean needClarify = node.has("need_clarify")
-                                                    && node.get("need_clarify").asBoolean();
-                                            if (needClarify) {
-                                                // 澄清追问：没有报告，只记一条 agent 消息（与同步端点一致）
-                                                String clarifyQuestion = node.has("question")
-                                                        ? node.get("question").asText() : "";
-                                                sessionService.appendHistory(sessionId, "agent",
-                                                        "（追问）" + clarifyQuestion);
-                                                log.info("流式研究需澄清: session={}", sessionId);
-                                            } else {
-                                                sessionService.appendReport(sessionId, report);
-                                                sessionService.appendHistory(sessionId, "agent", report);
-                                                log.info("流式研究完成: session={}, report_len={}", sessionId, report.length());
-                                            }
-                                            if (node.has("tokenUsage")) {
-                                                sessionService.updateTokenUsage(sessionId,
-                                                        objectMapper.writeValueAsString(node.get("tokenUsage")));
-                                            }
-                                        } catch (Exception e) {
-                                            log.error("解析报告失败: {}", e.getMessage());
-                                        }
-                                    } else if ("error".equals(eventName)) {
-                                        sessionService.markError(sessionId);
-                                    }
-                                })
-                                .doOnError(e -> {
-                                    log.error("流式研究异常: session={}, error={}", sessionId, e.getMessage());
-                                    sessionService.markError(sessionId);
-                                })
-                );
+    /** done/error 事件的持久化（阻塞 JDBC + Redis）——切到虚拟线程，保持事件顺序。 */
+    private Mono<ServerSentEvent<String>> persistEvent(String sessionId, ServerSentEvent<String> sse) {
+        String eventName = sse.event();
+        if ("done".equals(eventName) && sse.data() != null) {
+            return Mono.fromRunnable(() -> {
+                        try {
+                            JsonNode node = objectMapper.readTree(sse.data());
+                            String report = node.has("report") ? node.get("report").asText() : "";
+                            boolean needClarify = node.has("need_clarify")
+                                    && node.get("need_clarify").asBoolean();
+                            if (needClarify) {
+                                // 澄清追问：没有报告，只记一条 agent 消息（与同步端点一致）
+                                String clarifyQuestion = node.has("question")
+                                        ? node.get("question").asText() : "";
+                                sessionService.appendHistory(sessionId, "agent",
+                                        "（追问）" + clarifyQuestion);
+                                log.info("流式研究需澄清: session={}", sessionId);
+                            } else {
+                                sessionService.appendReport(sessionId, report);
+                                sessionService.appendHistory(sessionId, "agent", report);
+                                log.info("流式研究完成: session={}, report_len={}", sessionId, report.length());
+                            }
+                            if (node.has("tokenUsage")) {
+                                sessionService.updateTokenUsage(sessionId,
+                                        objectMapper.writeValueAsString(node.get("tokenUsage")));
+                            }
+                        } catch (Exception e) {
+                            log.error("解析报告失败: {}", e.getMessage());
+                        }
+                    })
+                    .subscribeOn(VIRTUAL)
+                    .onErrorResume(e -> {
+                        log.error("持久化流式报告失败: session={}, error={}", sessionId, e.getMessage());
+                        return Mono.empty();
+                    })
+                    .thenReturn(sse);
+        }
+        if ("error".equals(eventName)) {
+            return Mono.fromRunnable(() -> sessionService.markError(sessionId))
+                    .subscribeOn(VIRTUAL)
+                    .onErrorResume(e -> Mono.empty())
+                    .thenReturn(sse);
+        }
+        return Mono.just(sse);
+    }
+
+    /**
+     * SSE 流式研究 —— 实时推送进度，完成时自动保存报告。
+     */
+    @PostMapping(value = "/research/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux<ServerSentEvent<String>> researchStream(@RequestBody ResearchRequest req,
+            org.springframework.http.server.reactive.ServerHttpRequest request) {
+        final String uid = extractUserId(request);
+
+        // 准备阶段的 JDBC + Redis 调用都是阻塞的，绝不能跑在 Netty 事件循环上
+        // （会连带阻塞该 event loop 上的所有连接），统一切到虚拟线程调度器
+        return Mono.fromCallable(() -> prepareStream(req, uid))
+                .subscribeOn(VIRTUAL)
+                .flatMapMany(setup -> {
+                    if (setup.error() != null) {
+                        return Flux.just(ServerSentEvent.<String>builder()
+                                .event("error")
+                                .data("{\"message\":\"" + setup.error() + "\"}")
+                                .build());
+                    }
+                    final String sessionId = setup.sessionId();
+                    // 转发 Python SSE 事件，拦截 done/error 做持久化（同样切线程、保顺序）
+                    return Flux.just(setup.sessionEvent())
+                            .concatWith(agentClient.researchStream(setup.reqWithUser())
+                                    .concatMap(sse -> persistEvent(sessionId, sse))
+                                    .onErrorResume(e -> Mono.fromRunnable(() -> {
+                                                log.error("流式研究异常: session={}, error={}",
+                                                        sessionId, e.getMessage());
+                                                sessionService.markError(sessionId);
+                                            })
+                                            .subscribeOn(VIRTUAL)
+                                            .onErrorResume(ignored -> Mono.empty())
+                                            .then(Mono.error(e))));
+                });
     }
 
     /**

@@ -181,7 +181,9 @@ class SearchTool:
 
     async def _do_search(self, query: str, max_results: int, include_raw: bool) -> dict:
         """搜索：先查 Redis 缓存（EX 自动过期），Tavily 优先，失败自动降级到 DuckDuckGo。"""
-        cache_key = f"search:{query.strip().lower()}:{max_results}"
+        # include_raw 必须进 key：它决定 raw_content 是否被抓取，两种结果的体积和
+        # 内容都不同。若共用一个 key，先请求的形态会污染后请求的形态（摘要质量下降）
+        cache_key = f"search:{query.strip().lower()}:{max_results}:{'raw' if include_raw else 'noraw'}"
 
         cached = await self._cache_get(cache_key)
         if cached is not None:
