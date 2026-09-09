@@ -433,6 +433,47 @@ def test_truncate_context_drops_dangling_tail():
     _assert_pairing_complete(new_msgs)
 
 
+def test_kb_presearch_keeps_task_anchor_at_index_zero():
+    """B43：KB 预搜必须追加到任务根消息，不能 insert 一条 system 把锚点挤到 [1]。
+
+    否则 _truncate_context 保护的是 KB 摘要，真正的任务根消息反而会被压缩掉；
+    且对话中出现 system 消息部分后端会 400。
+    """
+    from researcher.agent import Level2Agent
+
+    captured = {}
+
+    class FakeMsg:
+        content = "报告"
+        tool_calls = None
+
+    class FakeLLM:
+        trace = None
+
+        async def chat_with_tools(self, system_prompt, messages, tools):
+            captured["messages"] = [dict(m) for m in messages]
+            return FakeMsg()
+
+        async def chat(self, system_prompt, user_message, **kw):
+            return "报告正文"
+
+    class FakeKB:
+        _trace = None
+
+        def search(self, q, user_id=None, doc_ids=None, mode=None):
+            return "知识库里有：某文档提到 X"
+
+    agent = Level2Agent(llm=FakeLLM(), kb_enabled=True, search_mode="hybrid")
+    agent.kb = FakeKB()
+    asyncio.run(agent.run("测试问题"))
+
+    msgs = captured["messages"]
+    assert msgs[0]["role"] == "user", f"任务锚点被挤走: {msgs[0]}"
+    assert "测试问题" in msgs[0]["content"], "任务根消息内容丢失"
+    assert "[知识库预检索]" in msgs[0]["content"], "KB 摘要未注入"
+    assert all(m.get("role") != "system" for m in msgs), "messages 中不应出现 system 消息"
+
+
 # ============================================================
 # 运行
 # ============================================================
@@ -468,6 +509,7 @@ if __name__ == "__main__":
         test_truncate_context_keeps_summary_on_hard_truncate,
         test_truncate_context_summary_role_is_user,
         test_truncate_context_drops_dangling_tail,
+        test_kb_presearch_keeps_task_anchor_at_index_zero,
     ]
 
     passed = 0

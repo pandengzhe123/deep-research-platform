@@ -736,13 +736,15 @@ class Level2Agent:
                 if "未找到相关信息" not in kb_preview:
                     # 截取前 500 字作为摘要注入，让 LLM 知道"知识库里有这些"
                     preview = kb_preview[:500]
-                    messages.insert(0, {
-                        "role": "system",
-                        "content": (
-                            f"[知识库预检索] 以下是知识库中与问题「{question}」相关的已有内容摘要。"
-                            f"你可以据此判断是否需要使用 search_kb 工具深入检索：\n\n{preview}"
-                        ),
-                    })
+                    # 追加到任务根消息，而不是 insert 一条 system：
+                    # ① messages[0] 必须始终是「任务锚点」——_truncate_context 保护的是
+                    #    messages[0]，若这里插一条 system 把任务挤到 [1]，长会话压缩时
+                    #    被保护的变成 KB 摘要、任务根消息反而会被压掉（B43）
+                    # ② 对话中段出现 system 消息，部分 OpenAI 兼容后端直接 400（同 B32）
+                    messages[0]["content"] += (
+                        f"\n\n[知识库预检索] 以下是知识库中与问题「{question}」相关的已有内容摘要。"
+                        f"你可以据此判断是否需要使用 search_kb 工具深入检索：\n\n{preview}"
+                    )
                     print(f"  [hybrid] KB 预搜命中，摘要已注入 (前 {len(preview)} 字)")
                 else:
                     print(f"  [hybrid] KB 预搜未命中，不注入摘要")
