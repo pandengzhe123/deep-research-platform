@@ -10,6 +10,7 @@ import asyncio as aio
 import json
 import logging
 import os
+import time
 import traceback
 import uuid
 from datetime import datetime
@@ -124,6 +125,53 @@ async def release_research_lock(session_id: str, token: str) -> None:
         log.info(f"释放研究锁: session={session_id}")
     except Exception as e:
         log.warning(f"释放研究锁失败: {e}")
+
+
+# ============================================================
+# 用量统计 + 限流（多用户高频场景）
+# ============================================================
+
+RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "10"))  # 每用户每分钟研究次数上限
+
+
+async def check_rate_limit(user_id: str) -> tuple[bool, int]:
+    """固定窗口限流（INCR + EXPIRE）。
+
+    返回 (allowed, remaining)：
+      - allowed=False → 超过该用户每分钟上限，应拒绝本次请求
+      - remaining=-1  → Redis 不可用（放行，不做限流；可用性优先）
+    """
+    from .search import _get_redis
+
+    r = _get_redis()
+    if r is None:
+        return True, -1
+    try:
+        bucket = int(time.time()) // 60          # 按分钟分桶
+        key = f"rate:research:{user_id}:{bucket}"
+        cnt = await r.incr(key)
+        if cnt == 1:
+            await r.expire(key, 120)             # 跨桶安全：2 分钟后自动清理
+        remaining = RATE_LIMIT_PER_MINUTE - cnt
+        return cnt <= RATE_LIMIT_PER_MINUTE, max(0, remaining)
+    except Exception as e:
+        log.warning(f"限流检查失败，放行: {e}")
+        return True, -1
+
+
+async def record_usage(user_id: str, question: str = "") -> None:
+    """累计用量：用户研究总次数（永久计数）+ 热门主题榜（ZSet）。"""
+    from .search import _get_redis
+
+    r = _get_redis()
+    if r is None:
+        return
+    try:
+        await r.incr(f"usage:research:{user_id}")
+        if question:
+            await r.zincrby("hot:topics", 1, question[:50])
+    except Exception as e:
+        log.warning(f"用量统计失败（不影响主流程）: {e}")
 
 # ============================================================
 # 核心 —— 用 asyncio.Queue 把 Agent 的进度事件转成 SSE 流
@@ -295,7 +343,20 @@ async def _run_with_lock(req: "ResearchRequest", cancel: aio.Event) -> AsyncGene
 
     同一会话并发研究 → 报告错乱 + 双倍 token，故第二个请求直接拒绝；
     不同会话/不同用户互不影响（锁粒度为 session_id）。
+    执行前先做每用户限流（Redis INCR 固定窗口）。
     """
+    # ① 限流：每用户每分钟上限（Redis 不可用时放行）
+    allowed, remaining = await check_rate_limit(req.user_id)
+    if not allowed:
+        yield {"event": "error", "data": json.dumps({
+            "message": f"请求过于频繁，每分钟最多 {RATE_LIMIT_PER_MINUTE} 次研究，请稍后再试",
+        }, ensure_ascii=False)}
+        return
+
+    # ② 用量统计：研究开始即计数（含热门主题榜）
+    await record_usage(req.user_id, req.question)
+
+    # ③ 会话研究锁
     session_id = (req.session_id or "").strip()
     lock_token = ""
     if session_id:

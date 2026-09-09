@@ -156,6 +156,59 @@ async def test_lock_release_only_own_token():
     assert await _get_redis().exists(key) == 0, "正确 token 应释放锁"
 
 
+async def test_rate_limit_and_usage():
+    """R5：限流按用户每分钟计数（超限拒绝）+ 用量计数 + 热榜。"""
+    import researcher.server as srv
+    from researcher.search import _get_redis
+
+    r = _get_redis()
+    uid = "test_r5_user"
+    usage_key = f"usage:research:{uid}"
+
+    async def cleanup():
+        for k in [k async for k in r.scan_iter(f"rate:research:{uid}:*")]:
+            await r.delete(k)
+        await r.delete(usage_key)
+
+    await cleanup()
+
+    # 前 N 次允许
+    for i in range(srv.RATE_LIMIT_PER_MINUTE):
+        allowed, _ = await srv.check_rate_limit(uid)
+        assert allowed, f"第 {i + 1} 次应允许"
+
+    # 第 N+1 次拒绝
+    allowed, remaining = await srv.check_rate_limit(uid)
+    assert not allowed and remaining == 0, f"超过上限应拒绝: allowed={allowed} remaining={remaining}"
+
+    # 用量计数
+    await srv.record_usage(uid, "测试热门主题")
+    await srv.record_usage(uid, "测试热门主题")
+    cnt = await r.get(usage_key)
+    assert cnt == "2", f"用量计数错误: {cnt}"
+
+    # 热榜
+    score = await r.zscore("hot:topics", "测试热门主题")
+    assert score is not None and score >= 2, f"热榜计分错误: {score}"
+
+    await cleanup()
+
+
+async def test_rate_limit_degrades_when_redis_down():
+    """R5：Redis 不可用时限流放行（不阻塞业务）。"""
+    import researcher.server as srv
+    import researcher.search as sm
+
+    saved = sm._redis_disabled_until
+    try:
+        sm._redis_disabled_until = 9e18
+        allowed, remaining = await srv.check_rate_limit("any_user")
+        assert allowed and remaining == -1, f"降级应放行: {allowed} {remaining}"
+        await srv.record_usage("any_user", "x")   # 静默跳过，不抛异常
+    finally:
+        sm._redis_disabled_until = saved
+
+
 async def main():
     from researcher.search import _get_redis
 
@@ -181,6 +234,8 @@ async def main():
         test_dedup_local_fallback,
         test_research_lock_mutual_exclusion,
         test_lock_release_only_own_token,
+        test_rate_limit_and_usage,
+        test_rate_limit_degrades_when_redis_down,
     ]
     passed = 0
     for t in tests:
