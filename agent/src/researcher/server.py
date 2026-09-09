@@ -112,13 +112,19 @@ async def acquire_research_lock(session_id: str, ttl: int = 3600) -> tuple[bool,
 
 
 async def release_research_lock(session_id: str, token: str) -> None:
-    """用 Lua 原子释放：只删自己持有的锁（value 匹配），防止误删他人锁。"""
+    """用 Lua 原子释放：只删自己持有的锁（value 匹配），防止误删他人锁。
+
+    即使处于降级冷却期也强制尝试一次（_get_redis(force=True)）——
+    否则 Redis 抖动 60s 后研究正常跑完却不释放锁，该会话会在锁 TTL（1 小时）
+    内被「该会话正在研究中」持续拒绝。
+    """
     if not token:
         return
     from .search import _get_redis
 
-    r = _get_redis()
+    r = _get_redis(force=True)
     if r is None:
+        log.warning(f"Redis 不可用，研究锁未能释放（将等 TTL 自动过期）: session={session_id}")
         return
     try:
         await r.eval(_LOCK_RELEASE_LUA, 1, f"lock:research:{session_id}", token)

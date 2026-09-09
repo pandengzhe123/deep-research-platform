@@ -35,17 +35,19 @@ def _safe_print(msg: str) -> None:
             pass
 
 
-def _get_redis():
+def _get_redis(force: bool = False):
     """获取共享 Redis 客户端；不可用时返回 None（调用方降级为不缓存）。
 
     两个关键点：
     1. 客户端与事件循环绑定 —— 进程内多次 asyncio.run() 时旧 client 会失效
        （RuntimeError: Event loop is closed），因此记录创建时的 loop，变化即重建。
     2. 失败后必须丢弃客户端 —— 否则冷却期结束仍返回同一个坏 client，Redis 再也回不来。
+
+    force=True：绕过降级冷却强制尝试一次（用于「锁释放」这类必须尽力完成的操作）。
     """
     global _redis_client, _redis_client_loop, _redis_disabled_until
     now = time.time()
-    if now < _redis_disabled_until:
+    if not force and now < _redis_disabled_until:
         return None
 
     try:

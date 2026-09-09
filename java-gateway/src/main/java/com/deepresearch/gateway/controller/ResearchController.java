@@ -12,11 +12,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.security.core.context.ReactiveSecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
@@ -78,6 +80,10 @@ public class ResearchController {
             if (req.sessionId() != null && !req.sessionId().isBlank()) {
                 session = sessionService.getSession(req.sessionId());
                 if (session == null) session = sessionService.createSession(uid, req.question());
+                else if (!uid.equals(session.getUserId())) {
+                    // 越权防护：不允许往别人的会话追加消息（前端已按用户过滤，此处纵深防御）
+                    throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权访问该会话");
+                }
                 else {
                     sessionService.appendHistory(req.sessionId(), "user", req.question());
                     sessionService.markRunning(req.sessionId());  // 追问：状态改 running + 刷新活动时间
@@ -132,6 +138,13 @@ public class ResearchController {
         if (req.sessionId() != null && !req.sessionId().isBlank()) {
             session = sessionService.getSession(req.sessionId());
             if (session == null) session = sessionService.createSession(uid, req.question());
+            else if (!uid.equals(session.getUserId())) {
+                // 越权防护：不允许往别人的会话追加消息
+                return Flux.just(ServerSentEvent.<String>builder()
+                        .event("error")
+                        .data("{\"message\":\"无权访问该会话\"}")
+                        .build());
+            }
             else {
                 sessionService.appendHistory(req.sessionId(), "user", req.question());
                 sessionService.markRunning(req.sessionId());  // 追问：状态改 running + 刷新活动时间

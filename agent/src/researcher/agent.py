@@ -497,7 +497,14 @@ async def _truncate_context(messages: list[dict], total_chars: int, max_chars: i
         if sum(len(str(m)) for m in messages) > max_chars:
             # 压缩后仍超限：重新计算安全起点（数组结构已变），避免切断配对
             start2 = _safe_window_start(messages, 5)
-            messages = [messages[0]] + messages[start2:]
+            # 保留首条 + 刚生成的压缩摘要 —— 否则第二次截断会把 messages[1]
+            # （[早期对话摘要]）切掉，压缩白做
+            head = messages[:1]
+            if (len(messages) > 1
+                    and messages[1].get("role") == "system"
+                    and str(messages[1].get("content", "")).startswith("[早期对话摘要]")):
+                head = messages[:2]
+            messages = head + messages[max(start2, len(head)):]
         emit({"step": "thinking", "message": f"早期对话已压缩（上下文已用 {sum(len(str(m)) for m in messages) * 100 // max_chars}%）。建议开新会话以保证研究质量", "round": round_num})
 
     return messages, context_warned

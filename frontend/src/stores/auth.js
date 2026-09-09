@@ -25,6 +25,11 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.removeItem('token')
     localStorage.removeItem('username')
     localStorage.removeItem('role')
+    // 清空本账号的会话痕迹，避免换账号登录后看到上一账号的聊天记录（信息泄露）
+    localStorage.removeItem('activeSession')
+    Object.keys(localStorage)
+      .filter(k => k.startsWith('chat_'))
+      .forEach(k => localStorage.removeItem(k))
   }
 
   function kbUserId() {

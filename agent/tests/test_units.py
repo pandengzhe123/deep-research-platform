@@ -302,6 +302,30 @@ def test_truncate_context_hard_truncate_pairing_complete():
     _assert_pairing_complete(new_msgs)
 
 
+def test_truncate_context_keeps_summary_on_hard_truncate():
+    """B6：压缩后仍超限触发硬截断时，必须保留刚生成的压缩摘要。"""
+    class FakeLLM:
+        async def chat(self, system_prompt, user_message, **kw):
+            return "关键约束A"
+
+    msgs = [{"role": "user", "content": "问题" * 100}]
+    for _ in range(10):
+        msgs.append({"role": "assistant", "content": "内容" * 300})
+
+    new_msgs, _ = asyncio.run(_truncate_context(
+        msgs, total_chars=10 ** 6, max_chars=3000,
+        llm=FakeLLM(), emit=lambda e: None, round_num=1, context_warned=False,
+    ))
+    assert new_msgs[0] is msgs[0], "messages[0] 必须保留"
+    has_summary = any(
+        str(m.get("content", "")).startswith("[早期对话摘要]") for m in new_msgs
+    )
+    assert has_summary, (
+        "硬截断后摘要丢失: "
+        + str([str(m.get("content", ""))[:20] for m in new_msgs])
+    )
+
+
 # ============================================================
 # 运行
 # ============================================================
@@ -328,6 +352,7 @@ if __name__ == "__main__":
         test_safe_window_start_multi_tool_calls,
         test_truncate_context_compressed_pairing_complete,
         test_truncate_context_hard_truncate_pairing_complete,
+        test_truncate_context_keeps_summary_on_hard_truncate,
     ]
 
     passed = 0
