@@ -37,14 +37,25 @@ test2.txt
 *.txt
 !agent/eval/*.txt
 
-# 个人文档（全部 docs 本地保留，不上传）
+# 个人文档（简历、面试资料，本地保留不上传）
 docs/
+个人文档/
 INTERVIEW.md
 陈子聪_简历.md
 陈子聪_简历.html
+陈子聪_简历_v2.html
+陈子聪_简历_v3.html
+面试提词器.html
 
 # 生成的报告（测试产出物）
 agent/reports/
 
 # 评测运行产物（报告、judge 结果等，不进仓库）
 agent/src/researcher/evaluation/results/
+
+# 文档备份（合并前快照）
+docs_backup/
+
+# 本地工具与学习工作区（非项目代码）
+.dsh/
+skill-mcp-learning/
