@@ -37,6 +37,11 @@
             <artifactId>postgresql</artifactId>
             <scope>runtime</scope>
         </dependency>
+        <!-- Redis（会话上下文热层：history 消息列表缓存） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
         <!-- Spring Security + JWT -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

@@ -20,12 +20,16 @@ CREATE TABLE IF NOT EXISTS sessions (
     search_mode VARCHAR(20) DEFAULT 'hybrid',
     rag_docs JSONB DEFAULT '[]',
     status VARCHAR(20) DEFAULT 'running',
+    token_usage TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 兼容已有数据库：如果 updated_at 列不存在则添加
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+-- 兼容已有数据库：token_usage 列（SessionEntity 有该字段，早期库可能缺失）
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS token_usage TEXT;
 
 -- 2026-06-26: report 列已从 TEXT 迁移为 JSONB（已完成，无需重复执行）
 

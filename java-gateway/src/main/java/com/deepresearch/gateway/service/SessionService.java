@@ -5,6 +5,7 @@ import com.deepresearch.gateway.model.SessionEntity;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 
@@ -14,13 +15,20 @@ import java.time.format.DateTimeFormatter;
 import java.util.*;
 
 /**
- * 研究会话管理 —— PostgreSQL 持久化。
+ * 研究会话管理 —— PostgreSQL 持久化 + Redis 热层（冷热分层）。
  *
  * 历史消息格式（JSONB 数组，每项是一个对象）：
  * {"role":"user","content":"...","time":"2026-06-26T10:30:00"}
  * {"role":"agent","content":"...","time":"2026-06-26T10:35:00"}
  *
  * 旧格式兼容：纯文本字符串 "用户: xxx" / "Agent: xxx" 在读取时自动识别。
+ *
+ * 冷热分层（TODO R4）：
+ * - PG（冷层/权威）：history JSONB 全量 + report 全文，永久保存
+ * - Redis（热层）：history:{sid} List 存消息，拼 context 时只读它
+ * - 写入：先 PG 后 Redis；压缩/硬截断 → DEL key（下次读时从 PG 重建）
+ * - 一致性：Redis 要么是 PG 的完整镜像，要么不存在，绝无半同步中间态
+ * - report 全文不进 Redis（防内存爆炸），需要时按需回 PG 取
  */
 @Service
 public class SessionService {
@@ -29,13 +37,17 @@ public class SessionService {
     private static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
     private static final int COMPRESS_THRESHOLD = 40;  // 历史消息达此数量时触发压缩
     private static final int KEEP_RECENT = 25;          // 压缩后保留最近 N 条，压缩旧的
+    private static final String HISTORY_KEY_PREFIX = "history:";
+    private static final Duration HISTORY_TTL = Duration.ofHours(24);  // 热层空闲自动回收
 
     private final SessionRepository repo;
     private final WebClient webClient;
+    private final StringRedisTemplate redis;
 
-    public SessionService(SessionRepository repo, WebClient agentWebClient) {
+    public SessionService(SessionRepository repo, WebClient agentWebClient, StringRedisTemplate redis) {
         this.repo = repo;
         this.webClient = agentWebClient;
+        this.redis = redis;
     }
 
     /**
@@ -59,6 +71,8 @@ public class SessionService {
             List<Object> history = fromJson(entity.getHistory());
             history.add(msgObj(role, content));
 
+            boolean restructured = false;   // 是否发生结构性变更（压缩/硬截断）→ 热层需失效
+
             // 超过阈值 → 压缩旧消息
             if (history.size() > COMPRESS_THRESHOLD) {
                 int compressCount = history.size() - KEEP_RECENT;
@@ -76,17 +90,82 @@ public class SessionService {
                     compressed.add(summaryMsg);
                     compressed.addAll(recentMessages);
                     history = compressed;
+                    restructured = true;
                     log.info("历史压缩: session={}, {}→{} 条", sessionId, compressCount + recentMessages.size(), history.size());
                 }
             }
 
             if (history.size() > 50) {
                 history = history.subList(history.size() - 50, history.size());
+                restructured = true;
             }
             entity.setHistory(toJson(history));
             entity.touch();
-            repo.save(entity);
+            repo.save(entity);                                  // ① PG 先落（权威）
+
+            syncHistoryCache(sessionId, msgObj(role, content), restructured);  // ② Redis 后同步
         });
+    }
+
+    /**
+     * 同步 Redis 热层（先 PG 后 Redis 的第二步）。
+     *
+     * - 结构未变 → RPUSH 追加新消息
+     * - 压缩/硬截断 → DEL key（下次读时从 PG 全量重建）
+     * - key 不存在（TTL 过期/首次）→ 不追加，等读取时重建，避免出现「半截列表」
+     * - Redis 异常 → 只记日志，不影响主流程（可用性优先）
+     */
+    private void syncHistoryCache(String sessionId, Map<String, String> newMsg, boolean restructured) {
+        String key = HISTORY_KEY_PREFIX + sessionId;
+        try {
+            if (restructured) {
+                redis.delete(key);
+                log.info("历史结构变更 → 失效 Redis 热层: session={}", sessionId);
+                return;
+            }
+            if (!Boolean.TRUE.equals(redis.hasKey(key))) {
+                // 热层不存在：不写半截列表，交给 loadHistory 从 PG 重建
+                return;
+            }
+            redis.opsForList().rightPush(key, toJson(newMsg));
+            redis.expire(key, HISTORY_TTL);
+        } catch (Exception e) {
+            log.warn("Redis 同步历史失败（不影响主流程）: session={}, err={}", sessionId, e.getMessage());
+        }
+    }
+
+    /**
+     * 读取会话历史消息：Redis 热层优先，miss 则从 PG 重建（冷热分层核心）。
+     * Redis 异常 → 回退 PG，保证功能可用。
+     */
+    @SuppressWarnings("unchecked")
+    private List<Object> loadHistory(String sessionId, SessionEntity entity) {
+        String key = HISTORY_KEY_PREFIX + sessionId;
+        try {
+            List<String> raw = redis.opsForList().range(key, 0, -1);
+            if (raw != null && !raw.isEmpty()) {
+                List<Object> msgs = new ArrayList<>(raw.size());
+                for (String s : raw) {
+                    msgs.add(objectMapper.readValue(s, Map.class));
+                }
+                return msgs;
+            }
+            // 冷启动 / 热层过期 / 压缩后 → 从 PG 全量重建
+            List<Object> history = fromJson(entity.getHistory());
+            if (!history.isEmpty()) {
+                List<String> jsonList = new ArrayList<>(history.size());
+                for (Object m : history) {
+                    jsonList.add(toJson(m));
+                }
+                redis.opsForList().rightPushAll(key, jsonList);
+                redis.expire(key, HISTORY_TTL);
+                log.info("Redis 重建会话历史: session={}, {} 条", sessionId, jsonList.size());
+            }
+            return history;
+        } catch (Exception e) {
+            log.warn("Redis 读取历史失败，回退 PG: session={}, err={}", sessionId, e.getMessage());
+            return fromJson(entity.getHistory());
+        }
     }
 
     /**
@@ -170,7 +249,8 @@ public class SessionService {
     public String getContextHistory(String sessionId) {
         return repo.findById(sessionId)
                 .map(entity -> {
-                    List<Object> history = fromJson(entity.getHistory());
+                    // 冷热分层：history 消息优先从 Redis 热层读（miss 自动从 PG 重建）
+                    List<Object> history = loadHistory(sessionId, entity);
 
                     // 锚点：原始研究问题，永远不丢（独立字段，不受 history 截断影响）
                     String anchor = "=== 研究主题 ===\n" + entity.getQuestion() + "\n\n";

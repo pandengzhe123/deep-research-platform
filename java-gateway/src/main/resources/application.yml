@@ -13,6 +13,14 @@ spring:
   threads:
     virtual:
       enabled: true   # Java 21 虚拟线程
+  data:
+    redis:
+      # 会话上下文热层（history 消息列表）；生产替换为托管 Redis 地址
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 1s
+      connect-timeout: 1s
   datasource:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/deepresearch}
     username: postgres
