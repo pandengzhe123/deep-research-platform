@@ -80,6 +80,38 @@ async def test_cache_stats_fields():
     assert stats["backend"] == "redis"
 
 
+async def test_cross_instance_url_dedup():
+    """R2：共享 dedup_scope 的多个 SearchTool 实例共享 URL 去重（L3/L4 并行场景）。"""
+    from researcher.search import SearchTool, _get_redis
+    scope = "test_r2_scope"
+    key = f"seen_urls:{scope}"
+    await _get_redis().delete(key)
+
+    a = SearchTool(dedup_scope=scope)
+    b = SearchTool(dedup_scope=scope)
+
+    first = await a._filter_new_urls(["http://u1", "http://u2"])
+    assert first == {"http://u1", "http://u2"}, f"首次应全部为新: {first}"
+
+    second = await b._filter_new_urls(["http://u1", "http://u3"])
+    assert second == {"http://u3"}, f"跨实例去重失败（u1 应被跳过）: {second}"
+
+    members = await _get_redis().smembers(key)
+    assert members == {"http://u1", "http://u2", "http://u3"}, f"Redis 集合内容错误: {members}"
+
+    ttl = await _get_redis().ttl(key)
+    assert 0 < ttl <= 6 * 3600, f"去重 key TTL 异常: {ttl}"
+    await _get_redis().delete(key)
+
+
+async def test_dedup_local_fallback():
+    """R2：未提供 dedup_scope 时降级为实例内本地去重（单研究员场景）。"""
+    from researcher.search import SearchTool
+    tool = SearchTool()
+    assert await tool._filter_new_urls(["http://x"]) == {"http://x"}
+    assert await tool._filter_new_urls(["http://x"]) == set(), "本地去重未生效"
+
+
 async def main():
     from researcher.search import _get_redis
 
@@ -101,6 +133,8 @@ async def main():
         test_cache_ttl_applied,
         test_graceful_degradation,
         test_cache_stats_fields,
+        test_cross_instance_url_dedup,
+        test_dedup_local_fallback,
     ]
     passed = 0
     for t in tests:

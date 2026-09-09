@@ -55,11 +55,12 @@ def _mark_redis_failure(msg: str) -> None:
 class SearchTool:
     """封装搜索 + 网页抓取 + LLM 摘要的完整流水线。"""
 
-    def __init__(self, on_progress=None):
+    def __init__(self, on_progress=None, dedup_scope: str | None = None):
         self.tavily = AsyncTavilyClient(api_key=config.tavily_api_key)
         self.llm = LLMClient()
         self.trace = None  # TraceRun 实例，由 Agent 在构造后设置
-        self._seen_urls: set[str] = set()  # 跨轮 URL 去重，避免重复摘要
+        self._seen_urls: set[str] = set()  # 本地 URL 去重（Redis 不可用时的降级路径）
+        self._dedup_scope = dedup_scope  # 一次研究的共享去重域（L3/L4 下多个研究员共用）
         self._cache_ttl = int(os.getenv("SEARCH_CACHE_TTL", "300"))  # 缓存秒数，默认 5 分钟
         self._cache_hits = 0
         self._cache_misses = 0
@@ -163,6 +164,33 @@ class SearchTool:
             "backend": "redis" if _get_redis() is not None else "disabled",
         }
 
+    async def _filter_new_urls(self, urls: list[str]) -> set[str]:
+        """返回本轮首次出现的 URL（跨轮 + 跨研究员共享去重）。
+
+        L3/L4 并行研究时各研究员是独立 SearchTool 实例，本地 set 不共享 →
+        同一 URL 会被多个研究员重复抓取和摘要。Redis Set + SADD 提供全局去重：
+        SADD 返回 1 = 首次出现（处理），返回 0 = 已被处理（跳过）。
+        Redis 不可用时降级为本地去重。
+        """
+        r = _get_redis()
+        if r is None or not self._dedup_scope:
+            new = {u for u in urls if u not in self._seen_urls}
+            self._seen_urls.update(new)
+            return new
+        try:
+            key = f"seen_urls:{self._dedup_scope}"
+            pipe = r.pipeline()                 # 批量 SADD，一次 RTT
+            for u in urls:
+                pipe.sadd(key, u)
+            added = await pipe.execute()
+            await r.expire(key, 6 * 3600)       # 研究结束后自动清理，防 key 堆积
+            return {u for u, ok in zip(urls, added) if ok}
+        except Exception as e:
+            _mark_redis_failure(f"URL 去重失败: {e}")
+            new = {u for u in urls if u not in self._seen_urls}
+            self._seen_urls.update(new)
+            return new
+
     async def search(
         self,
         queries: list[str],
@@ -177,22 +205,19 @@ class SearchTool:
         ]
         all_results = await asyncio.gather(*tasks)
 
-        # 2. 按 URL 去重（同轮内 + 跨轮）
-        seen: dict[str, dict] = {}
-        skipped = 0
+        # 2. 按 URL 去重（同轮内 + 跨轮 + 跨研究员，Redis 不可用时降级本地）
+        url_to_result: dict[str, dict] = {}
         for response in all_results:
             for r in response.get("results", []):
                 url = r.get("url", "")
-                if not url:
-                    continue
-                if url in self._seen_urls or url in seen:
-                    skipped += 1
-                else:
-                    seen[url] = r
-        # 记录本轮新 URL，下一轮不再重复摘要
-        self._seen_urls.update(seen.keys())
+                if url and url not in url_to_result:
+                    url_to_result[url] = r
+
+        new_urls = await self._filter_new_urls(list(url_to_result.keys()))
+        seen = {u: r for u, r in url_to_result.items() if u in new_urls}
+        skipped = len(url_to_result) - len(seen)
         if skipped:
-            print(f"    跨轮去重：跳过 {skipped} 个已处理 URL，本轮新增 {len(seen)} 个")
+            print(f"    去重：跳过 {skipped} 个已处理 URL，本轮新增 {len(seen)} 个")
 
         # 3. 并行抓取网页内容
         items = list(seen.items())

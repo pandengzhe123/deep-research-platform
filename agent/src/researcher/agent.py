@@ -9,6 +9,7 @@ Level 4: Supervisor-Researcher 双层调度（分批派遣 + 研究员压缩 + R
 import asyncio
 import json
 import re
+import uuid
 from datetime import datetime
 
 from .config import config
@@ -570,7 +571,7 @@ WEB_ONLY_SYSTEM = """你是一个研究助手，负责通过互联网搜索研�
 class Level2Agent:
     """Level 2: 搜索-反思循环 Agent"""
 
-    def __init__(self, on_progress=None, kb_enabled: bool = False, user_id: str = "default", llm=None, rag_doc_ids: list[str] = None, search_mode: str = "hybrid", trace=None):
+    def __init__(self, on_progress=None, kb_enabled: bool = False, user_id: str = "default", llm=None, rag_doc_ids: list[str] = None, search_mode: str = "hybrid", trace=None, dedup_scope: str | None = None):
         self.llm = llm or LLMClient()
         if trace:
             self.llm.trace = trace
@@ -578,7 +579,8 @@ class Level2Agent:
         self.user_id = user_id
         self.emit = on_progress or (lambda e: None)
         self.trace = trace
-        self.search_tool = SearchTool(on_progress=self.emit)
+        # dedup_scope：一次研究内多个研究员共享的 URL 去重域（L3/L4 传入；None = 本地去重）
+        self.search_tool = SearchTool(on_progress=self.emit, dedup_scope=dedup_scope)
         self.search_tool.trace = trace
         # trace: 同步 emit 事件自动镜像到 trace
         if trace:
@@ -921,6 +923,9 @@ class Level3Agent:
         print(f"  模式: Level 3（多路并行）")
         print(f"{'='*60}")
 
+        # 一次研究内所有研究员共享 URL 去重域（Redis Set），避免并行重复抓取
+        dedup_scope = f"l3:{uuid.uuid4().hex[:8]}"
+
         # Step 1: LLM 拆题
         print("\n[1/3] 分析问题，拆分子课题...")
         self.emit({"step": "planning", "message": "正在分析问题，拆分子课题..."})
@@ -943,7 +948,7 @@ class Level3Agent:
 
         async def safe_run(topic):
             try:
-                agent = Level2Agent(on_progress=self.emit, kb_enabled=self.kb_enabled, user_id=self.user_id, llm=self.llm, rag_doc_ids=self.rag_doc_ids, search_mode=self.search_mode, trace=self.trace)
+                agent = Level2Agent(on_progress=self.emit, kb_enabled=self.kb_enabled, user_id=self.user_id, llm=self.llm, rag_doc_ids=self.rag_doc_ids, search_mode=self.search_mode, trace=self.trace, dedup_scope=dedup_scope)
                 return (await agent.run(topic), None)
             except Exception as e:
                 print(f"    研究员失败: {topic[:40]}... error={e}")
@@ -1274,6 +1279,9 @@ class Level4Agent:
         print(f"  模式: Level 4（Supervisor-Researcher 双层，最多 {self.max_rounds} 轮）")
         print(f"{'='*60}")
 
+        # 一次研究内所有研究员共享 URL 去重域（Redis Set），避免并行重复抓取
+        dedup_scope = f"l4:{uuid.uuid4().hex[:8]}"
+
         # 生成研究简报（对标原项目 write_research_brief）
         research_brief = await self._generate_research_brief(question)
         self.emit({"step": "planning", "message": f"研究简报已生成 ({len(research_brief)} 字)"})
@@ -1367,7 +1375,7 @@ class Level4Agent:
 
             async def safe_run(topic):
                 try:
-                    agent = Level2Agent(on_progress=self.emit, kb_enabled=self.kb_enabled, user_id=self.user_id, llm=self.llm, rag_doc_ids=self.rag_doc_ids, search_mode=self.search_mode, trace=self.trace)
+                    agent = Level2Agent(on_progress=self.emit, kb_enabled=self.kb_enabled, user_id=self.user_id, llm=self.llm, rag_doc_ids=self.rag_doc_ids, search_mode=self.search_mode, trace=self.trace, dedup_scope=dedup_scope)
                     raw = await agent.run(topic)
                     # 压缩为结构化摘要，给 Supervisor 决策；原始报告保留给最终汇总
                     compressed = await self._compress_research(raw)
