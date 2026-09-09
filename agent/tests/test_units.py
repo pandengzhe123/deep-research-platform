@@ -490,9 +490,23 @@ def test_kb_presearch_keeps_task_anchor_at_index_zero():
         def search(self, q, user_id=None, doc_ids=None, mode=None):
             return "知识库里有：某文档提到 X"
 
-    agent = Level2Agent(llm=FakeLLM(), kb_enabled=True, search_mode="hybrid")
-    agent.kb = FakeKB()
-    asyncio.run(agent.run("测试问题"))
+    # 隔离掉真实 SearchTool：它构造时会 new 一个 LLMClient / TavilyClient，
+    # 没有 API Key 的环境下直接抛 OpenAIError → 这个纯逻辑单测变成"环境依赖"。
+    # 单测不该需要凭据，这里打桩。
+    import researcher.agent as agent_mod
+
+    class StubSearchTool:
+        def __init__(self, *a, **kw):
+            self.trace = None
+
+    saved = agent_mod.SearchTool
+    agent_mod.SearchTool = StubSearchTool
+    try:
+        agent = Level2Agent(llm=FakeLLM(), kb_enabled=True, search_mode="hybrid")
+        agent.kb = FakeKB()
+        asyncio.run(agent.run("测试问题"))
+    finally:
+        agent_mod.SearchTool = saved
 
     msgs = captured["messages"]
     assert msgs[0]["role"] == "user", f"任务锚点被挤走: {msgs[0]}"
