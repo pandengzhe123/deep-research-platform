@@ -62,3 +62,6 @@ skill-mcp-learning/
 
 # 测试临时目录
 .tmp_test/
+
+# uv 本地缓存（沙箱下重定向到工作区）
+.uv_cache/

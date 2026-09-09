@@ -19,6 +19,7 @@ dependencies = [
     "sentence-transformers>=3.0",
     "jieba>=0.42",
     "rank-bm25>=0.2",
+    "redis>=8.1.0",
 ]
 
 [tool.setuptools.packages.find]

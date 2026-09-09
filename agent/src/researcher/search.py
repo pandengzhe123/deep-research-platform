@@ -1,6 +1,7 @@
 """搜索工具 —— 封装 Tavily API + 网页内容抓取 + LLM 摘要。"""
 
 import asyncio
+import json
 import os
 import time
 
@@ -12,6 +13,45 @@ from tavily import AsyncTavilyClient
 from .config import config
 from .llm import LLMClient
 
+
+# ============================================================
+# Redis 客户端（模块级共享连接池 + 失败降级）
+# ============================================================
+
+_redis_client = None
+_redis_disabled_until = 0.0     # 连接失败后的冷却截止时间戳
+
+
+def _get_redis():
+    """获取共享 Redis 客户端；不可用时返回 None（调用方降级为不缓存）。"""
+    global _redis_client, _redis_disabled_until
+    now = time.time()
+    if now < _redis_disabled_until:
+        return None
+    if _redis_client is None:
+        try:
+            import redis.asyncio as aioredis
+            _redis_client = aioredis.from_url(
+                config.redis_url,
+                decode_responses=True,
+                socket_timeout=1,
+                socket_connect_timeout=1,
+                max_connections=50,
+            )
+        except Exception as e:
+            print(f"  ⚠️ Redis 初始化失败，搜索缓存降级为不缓存: {e}")
+            _redis_disabled_until = now + 60
+            return None
+    return _redis_client
+
+
+def _mark_redis_failure(msg: str) -> None:
+    """Redis 操作失败 → 冷却 60 秒后重试，避免每条查询都刷错误日志。"""
+    global _redis_disabled_until
+    print(f"  ⚠️ Redis {msg}，搜索缓存降级为不缓存（60s 后重试）")
+    _redis_disabled_until = time.time() + 60
+
+
 class SearchTool:
     """封装搜索 + 网页抓取 + LLM 摘要的完整流水线。"""
 
@@ -20,7 +60,6 @@ class SearchTool:
         self.llm = LLMClient()
         self.trace = None  # TraceRun 实例，由 Agent 在构造后设置
         self._seen_urls: set[str] = set()  # 跨轮 URL 去重，避免重复摘要
-        self._search_cache: dict[str, tuple[float, dict]] = {}  # key → (timestamp, result)
         self._cache_ttl = int(os.getenv("SEARCH_CACHE_TTL", "300"))  # 缓存秒数，默认 5 分钟
         self._cache_hits = 0
         self._cache_misses = 0
@@ -65,21 +104,37 @@ class SearchTool:
             })
         return {"results": tavily_format, "query": query}
 
-    async def _do_search(self, query: str, max_results: int, include_raw: bool) -> dict:
-        """搜索：先查缓存，Tavily 优先，失败自动降级到 DuckDuckGo。"""
-        # 过期清理 + 归一化 key
-        now = time.time()
-        expired = [k for k, (ts, _) in self._search_cache.items() if now - ts > self._cache_ttl]
-        for k in expired:
-            del self._search_cache[k]
+    async def _cache_get(self, key: str) -> dict | None:
+        """读 Redis 缓存；不可用或读失败 → None（调用方降级直查）。"""
+        r = _get_redis()
+        if r is None:
+            return None
+        try:
+            raw = await r.get(key)
+            return json.loads(raw) if raw else None
+        except Exception as e:
+            _mark_redis_failure(f"读失败: {e}")
+            return None
 
-        cache_key = f"{query.strip().lower()}:{max_results}"
-        if cache_key in self._search_cache:
-            ts, cached = self._search_cache[cache_key]
-            if now - ts < self._cache_ttl:
-                self._cache_hits += 1
-                print(f"    缓存命中: {query[:40]}... (命中率 {self._cache_hits}/{self._cache_hits + self._cache_misses})")
-                return cached
+    async def _cache_set(self, key: str, value: dict) -> None:
+        """写 Redis 缓存（SET key val EX ttl，服务端负责过期）；不可用 → 静默跳过。"""
+        r = _get_redis()
+        if r is None:
+            return
+        try:
+            await r.set(key, json.dumps(value, ensure_ascii=False), ex=self._cache_ttl)
+        except Exception as e:
+            _mark_redis_failure(f"写失败: {e}")
+
+    async def _do_search(self, query: str, max_results: int, include_raw: bool) -> dict:
+        """搜索：先查 Redis 缓存（EX 自动过期），Tavily 优先，失败自动降级到 DuckDuckGo。"""
+        cache_key = f"search:{query.strip().lower()}:{max_results}"
+
+        cached = await self._cache_get(cache_key)
+        if cached is not None:
+            self._cache_hits += 1
+            print(f"    缓存命中: {query[:40]}... (命中率 {self._cache_hits}/{self._cache_hits + self._cache_misses})")
+            return cached
 
         # 未命中缓存，实际搜索
         self._cache_misses += 1
@@ -90,9 +145,9 @@ class SearchTool:
             result = await self._ddg_search(query, max_results)
             fallback_used = True  # 记录降级发生（供恢复率评测）
 
-        # 存入缓存（带降级标记）
+        # 存入 Redis 缓存（TTL 由 Redis 服务端管理，无需手动清理过期项）
         if result.get("results"):
-            self._search_cache[cache_key] = (now, result)
+            await self._cache_set(cache_key, result)
         result["fallback_used"] = fallback_used
         return result
 
@@ -104,8 +159,8 @@ class SearchTool:
             "misses": self._cache_misses,
             "total": total,
             "hit_rate": f"{self._cache_hits / total:.1%}" if total > 0 else "N/A",
-            "cache_size": len(self._search_cache),
             "ttl_seconds": self._cache_ttl,
+            "backend": "redis" if _get_redis() is not None else "disabled",
         }
 
     async def search(

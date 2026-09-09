@@ -41,6 +41,12 @@ class Config:
     # 保留最近几轮合并后的搜索结果
     max_round_results: int = int(os.getenv("MAX_ROUND_RESULTS", "3"))
 
+    # ---- Redis ----
+    # 搜索缓存 / URL 去重 / 会话锁等热数据。
+    # 开发：docker run -d -p 6379:6379 redis:7-alpine
+    # 生产：换成托管 Redis 地址（redis://:password@host:6379/0），代码零改动
+    redis_url: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
 
 # 全局单例
 config = Config()
