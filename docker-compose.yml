@@ -15,12 +15,29 @@ services:
       retries: 20
       start_period: 60s
 
+  # 热数据层：搜索缓存 / URL 去重 / 会话研究锁 / 上下文热层 / 用量限流
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
   agent:
     build: ./agent
     ports:
       - "8000:8000"
+    environment:
+      # 容器内不能用 localhost 连 Redis（那是容器自己）
+      - REDIS_URL=redis://redis:6379/0
     depends_on:
-      - postgres
+      postgres:
+        condition: service_started
+      redis:
+        condition: service_healthy
 
   gateway:
     build: ./java-gateway
@@ -29,11 +46,15 @@ services:
     environment:
       - AGENT_URL=http://agent:8000
       - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/deepresearch
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
     depends_on:
       postgres:
         condition: service_healthy
       agent:
         condition: service_started
+      redis:
+        condition: service_healthy
 
   frontend:
     build: ./frontend

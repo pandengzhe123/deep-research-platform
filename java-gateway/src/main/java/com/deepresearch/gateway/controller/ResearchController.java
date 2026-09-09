@@ -77,6 +77,7 @@ public class ResearchController {
         return Mono.fromCallable(() -> {
             // 1. 创建或继续已有会话
             ResearchSession session;
+            boolean followUp = false;
             if (req.sessionId() != null && !req.sessionId().isBlank()) {
                 session = sessionService.getSession(req.sessionId());
                 if (session == null) session = sessionService.createSession(uid, req.question());
@@ -85,17 +86,20 @@ public class ResearchController {
                     throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权访问该会话");
                 }
                 else {
-                    sessionService.appendHistory(req.sessionId(), "user", req.question());
-                    sessionService.markRunning(req.sessionId());  // 追问：状态改 running + 刷新活动时间
+                    followUp = true;
                 }
             } else {
                 session = sessionService.createSession(uid, req.question());
             }
             log.info("同步研究: session={}", session.getId());
 
-            // 2. 注入 user_id + session_id + 完整上下文
-            // 上下文由后端权威拼接（前端只传 question + session_id，不再传 context）
+            // 2. 先取上下文（此刻不含本轮问题），再把本轮问题写入历史。
+            //    否则 Python 侧「对话历史 + 当前问题」会把同一个问题拼两遍（B28）
             String fullContext = sessionService.getContextHistory(session.getId());
+            if (followUp) {
+                sessionService.appendHistory(session.getId(), "user", req.question());
+                sessionService.markRunning(session.getId());  // 追问：状态改 running + 刷新活动时间
+            }
             ResearchRequest reqWithUser = new ResearchRequest(
                     req.question(), req.level(), req.maxRounds(),
                     req.language(), fullContext, req.kbEnabled(),
@@ -135,6 +139,7 @@ public class ResearchController {
 
         // 1. 创建或继续会话（和 sync 端点一致）
         ResearchSession session;
+        boolean followUp = false;
         if (req.sessionId() != null && !req.sessionId().isBlank()) {
             session = sessionService.getSession(req.sessionId());
             if (session == null) session = sessionService.createSession(uid, req.question());
@@ -146,17 +151,20 @@ public class ResearchController {
                         .build());
             }
             else {
-                sessionService.appendHistory(req.sessionId(), "user", req.question());
-                sessionService.markRunning(req.sessionId());  // 追问：状态改 running + 刷新活动时间
+                followUp = true;
             }
         } else {
             session = sessionService.createSession(uid, req.question());
         }
         final String sessionId = session.getId();
 
-        // 2. 注入 user_id + session_id + context
-        // 上下文由后端权威拼接（前端只传 question + session_id，不再传 context）
+        // 2. 先取上下文（不含本轮问题），再写入历史 —— 避免同一问题被拼两遍（B28）
+        //    上下文由后端权威拼接（前端只传 question + session_id，不再传 context）
         String fullContext = sessionService.getContextHistory(sessionId);
+        if (followUp) {
+            sessionService.appendHistory(sessionId, "user", req.question());
+            sessionService.markRunning(sessionId);  // 追问：状态改 running + 刷新活动时间
+        }
         ResearchRequest reqWithUser = new ResearchRequest(
                 req.question(), req.level(), req.maxRounds(),
                 req.language(), fullContext, req.kbEnabled(),
