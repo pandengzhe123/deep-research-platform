@@ -59,3 +59,6 @@ docs_backup/
 # 本地工具与学习工作区（非项目代码）
 .dsh/
 skill-mcp-learning/
+
+# 测试临时目录
+.tmp_test/
