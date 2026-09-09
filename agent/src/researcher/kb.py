@@ -16,7 +16,24 @@ import chromadb
 # ============================================================
 
 def chunk_text(text: str, chunk_size: int = 500, overlap: int = 100, min_size: int = 300) -> list[str]:
-    """段落优先 → 句子 → 字符，逐级降级切分。太短的 chunk 合并到前一个。"""
+    """段落优先 → 句子 → 字符，逐级降级切分。太短的 chunk 合并到前一个。
+
+    参数自校验（2026-09-09 补）—— 这三个参数互相约束，配错会静默出错：
+
+    - `overlap` 必须小于 `chunk_size`。否则步长 <= 0：步长为 0 时 `range()` 直接抛
+      ValueError；步长为负时更糟 —— 一块都不返回，**内容被静默丢弃**。
+      这里把 overlap 上限钳到 `chunk_size // 2`（保留"相邻块有重叠"的语义，
+      同时保证步长 > 0）。
+    - `min_size` 不能大于 `chunk_size`。否则"合并短块"会把刚切好的块又粘回一整块，
+      等于没切 —— 这正是 `test_chunk_multiple_paragraphs` 暴露的问题。
+    - 合并只在**结果不超过 chunk_size** 时进行，保证 chunk_size 这个契约是真的。
+    """
+    if chunk_size <= 0:
+        raise ValueError(f"chunk_size 必须为正整数，收到 {chunk_size}")
+    overlap = max(0, min(overlap, chunk_size // 2))
+    min_size = max(0, min(min_size, chunk_size))
+    step = chunk_size - overlap
+
     chunks: list[str] = []
 
     for para in text.split("\n\n"):
@@ -33,13 +50,15 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 100, min_size: i
                 if len(sent) <= chunk_size:
                     chunks.append(sent)
                 else:
-                    for i in range(0, len(sent), chunk_size - overlap):
+                    for i in range(0, len(sent), step):
                         chunks.append(sent[i:i + chunk_size])
 
     # 合并太短的 chunk 到前一个，保证每个 chunk 至少有 min_size 字
-    merged = []
+    # （但不允许合并后超过 chunk_size，否则 chunk_size 形同虚设）
+    merged: list[str] = []
     for c in chunks:
-        if merged and len(merged[-1]) < min_size:
+        if (merged and len(merged[-1]) < min_size
+                and len(merged[-1]) + 1 + len(c) <= chunk_size):
             merged[-1] = merged[-1] + "\n" + c
         else:
             merged.append(c)

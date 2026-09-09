@@ -33,10 +33,20 @@ def test_chunk_long_splits_by_sentence():
 
 
 def test_chunk_multiple_paragraphs():
+    """多段落切分：短块会与后续块合并（设计如此），但不得越界、不得粘回一整块。
+
+    旧断言 `chunks[0] == "短段落。"` 与实现语义冲突：min_size(默认300) > chunk_size(100)
+    时合并会把所有块粘成一块，len(chunks)==1。
+    """
     text = "短段落。\n\n" + "长段落。" * 50
     chunks = chunk_text(text, chunk_size=100)
-    assert len(chunks) >= 2
-    assert chunks[0] == "短段落。"
+    assert len(chunks) >= 2, f"应切成多块，实际 {len(chunks)} 块"
+    assert chunks[0].startswith("短段落。"), f"首块应从第一段开始: {chunks[0][:20]!r}"
+    for c in chunks:
+        assert len(c) <= 100, f"chunk 超过 chunk_size: {len(c)}"
+    # 不丢内容
+    joined = "".join(chunks)
+    assert joined.count("长段落。") == 50, f"内容丢失: {joined.count('长段落。')} 段"
 
 
 def test_chunk_empty():
@@ -49,6 +59,23 @@ def test_chunk_size_never_exceeds_limit():
     chunks = chunk_text(text, chunk_size=500, overlap=100)
     for c in chunks:
         assert len(c) <= 600, f"chunk 过长: {len(c)} > 600"
+
+
+def test_chunk_overlap_not_less_than_chunk_size():
+    """回归：overlap >= chunk_size 曾让步长 <= 0 —— 步长为 0 抛 ValueError，
+    步长为负则一块都不返回、内容被静默丢弃。"""
+    chunks = chunk_text("字" * 300, chunk_size=50, overlap=100)
+    assert chunks, "内容被静默丢弃（返回 0 块）"
+    assert sum(len(c) for c in chunks) >= 300, "内容不完整"
+    for c in chunks:
+        assert len(c) <= 50, f"chunk 超过 chunk_size: {len(c)}"
+
+
+def test_chunk_min_size_larger_than_chunk_size():
+    """回归：min_size > chunk_size 曾让合并产出超过 chunk_size 的块（401 > 250）。"""
+    chunks = chunk_text("A" * 200 + "\n\n" + "B" * 200, chunk_size=250)
+    for c in chunks:
+        assert len(c) <= 250, f"chunk 超过 chunk_size: {len(c)}"
 
 
 def test_read_txt_file():
@@ -485,6 +512,8 @@ if __name__ == "__main__":
         test_chunk_multiple_paragraphs,
         test_chunk_empty,
         test_chunk_size_never_exceeds_limit,
+        test_chunk_overlap_not_less_than_chunk_size,
+        test_chunk_min_size_larger_than_chunk_size,
         test_read_txt_file,
         test_read_md_file,
         test_read_file_not_found,
