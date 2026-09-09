@@ -186,6 +186,123 @@ def test_chinese_detection():
 
 
 # ============================================================
+# agent.py —— 压缩窗口 tool_calls 配对安全（TODO 6.4）
+# ============================================================
+
+import asyncio
+
+from researcher.agent import _safe_window_start, _truncate_context
+
+
+def _msg(role, content="", tool_calls=None, tool_call_id=None):
+    m = {"role": role, "content": content}
+    if tool_calls:
+        m["tool_calls"] = tool_calls
+    if tool_call_id:
+        m["tool_call_id"] = tool_call_id
+    return m
+
+
+def _tc(cid):
+    return {"id": cid, "type": "function", "function": {"name": "search", "arguments": "{}"}}
+
+
+def _assert_pairing_complete(messages):
+    """窗口内 assistant(tool_calls) 与 tool 响应必须一一配对（OpenAI 协议不变量）。"""
+    need = set()
+    for m in messages:
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            for tc in m["tool_calls"]:
+                need.add(tc["id"])
+        elif m.get("role") == "tool":
+            tid = m.get("tool_call_id")
+            assert tid in need, f"孤立 tool 消息: {tid}"
+            need.discard(tid)
+    assert not need, f"悬空 tool_calls: {need}"
+
+
+def test_safe_window_start_plain_window():
+    """窗口起点落在普通消息上 → 不扩展"""
+    msgs = [_msg("user", "q")] + [_msg("assistant", f"a{i}") for i in range(10)]
+    assert _safe_window_start(msgs, 5) == len(msgs) - 5
+
+
+def test_safe_window_start_orphan_tool():
+    """起点切在 assistant 与其 tool 响应之间 → 向前扩展包含 assistant"""
+    msgs = [
+        _msg("user", "q"),
+        _msg("assistant", "", tool_calls=[_tc("c1")]),
+        _msg("tool", "r1", tool_call_id="c1"),
+        _msg("assistant", "done"),
+    ]
+    assert _safe_window_start(msgs, 2) == 1  # start=2 是孤立 tool → 扩到 1
+
+
+def test_safe_window_start_aligned_assistant():
+    """起点正好是 assistant(tool_calls)，其响应都在窗口内 → 不扩展"""
+    msgs = [
+        _msg("user", "q"),
+        _msg("assistant", "old"),
+        _msg("user", "q2"),
+        _msg("assistant", "", tool_calls=[_tc("c1")]),
+        _msg("tool", "r1", tool_call_id="c1"),
+    ]
+    assert _safe_window_start(msgs, 3) == 2
+
+
+def test_safe_window_start_multi_tool_calls():
+    """一个 assistant 发起多个 tool_calls → 全部响应在窗口内才安全"""
+    msgs = [
+        _msg("user", "q"),
+        _msg("assistant", "", tool_calls=[_tc("c1"), _tc("c2")]),
+        _msg("tool", "r1", tool_call_id="c1"),
+        _msg("tool", "r2", tool_call_id="c2"),
+        _msg("assistant", "done"),
+    ]
+    assert _safe_window_start(msgs, 2) == 1
+    assert _safe_window_start(msgs, 4) == 1
+
+
+def _build_tool_loop_messages(rounds=8):
+    """构造 len=1+2*rounds 的消息：user + (assistant tool_calls, tool 响应)*rounds"""
+    msgs = [_msg("user", "问题" * 50)]
+    for i in range(rounds):
+        msgs.append(_msg("assistant", "", tool_calls=[_tc(f"c{i}")]))
+        msgs.append(_msg("tool", "结果" * 50, tool_call_id=f"c{i}"))
+    return msgs
+
+
+def test_truncate_context_compressed_pairing_complete():
+    """集成：超限压缩后，窗口内配对必须完整"""
+    class FakeLLM:
+        async def chat(self, system_prompt, user_message, **kw):
+            return "压缩摘要"
+
+    msgs = _build_tool_loop_messages()
+    new_msgs, _ = asyncio.run(_truncate_context(
+        msgs, total_chars=10 ** 6, max_chars=100,
+        llm=FakeLLM(), emit=lambda e: None, round_num=1, context_warned=False,
+    ))
+    assert len(new_msgs) < len(msgs), "应发生压缩"
+    assert new_msgs[0] is msgs[0], "messages[0] 必须保留"
+    _assert_pairing_complete(new_msgs)
+
+
+def test_truncate_context_hard_truncate_pairing_complete():
+    """集成：压缩失败走硬截断，配对同样必须完整"""
+    class FailLLM:
+        async def chat(self, *a, **kw):
+            raise RuntimeError("LLM 不可用")
+
+    msgs = _build_tool_loop_messages()
+    new_msgs, _ = asyncio.run(_truncate_context(
+        msgs, total_chars=10 ** 6, max_chars=100,
+        llm=FailLLM(), emit=lambda e: None, round_num=1, context_warned=False,
+    ))
+    _assert_pairing_complete(new_msgs)
+
+
+# ============================================================
 # 运行
 # ============================================================
 
@@ -205,6 +322,12 @@ if __name__ == "__main__":
         test_search_result_format,
         test_source_label_citation,
         test_chinese_detection,
+        test_safe_window_start_plain_window,
+        test_safe_window_start_orphan_tool,
+        test_safe_window_start_aligned_assistant,
+        test_safe_window_start_multi_tool_calls,
+        test_truncate_context_compressed_pairing_complete,
+        test_truncate_context_hard_truncate_pairing_complete,
     ]
 
     passed = 0

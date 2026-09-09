@@ -407,6 +407,38 @@ def _assistant_msg(msg):
     }
 
 
+def _safe_window_start(messages: list[dict], keep: int) -> int:
+    """找安全的保留窗口起点：窗口内 assistant(tool_calls) 与其 tool 响应必须配对完整。
+
+    压缩/硬截断会保留末尾 keep 条消息。若窗口起点切断了 tool_calls 配对
+    （assistant 悬空 或 tool 孤立），向前扩展起点，直到配对完整。
+    messages[0] 固定保留，因此起点至少为 1。
+
+    返回可安全保留的窗口起点下标。
+    """
+    end = len(messages)
+    start = max(1, end - keep)
+    while start > 1:
+        need: set[str] = set()          # 等待响应的 tool_call_id
+        ok = True
+        for m in messages[start:end]:
+            role = m.get("role")
+            if role == "assistant" and m.get("tool_calls"):
+                for tc in m["tool_calls"]:
+                    need.add(tc.get("id"))
+            elif role == "tool":
+                tid = m.get("tool_call_id")
+                if tid in need:
+                    need.discard(tid)
+                else:
+                    ok = False          # 孤立 tool：对应 assistant 被切在窗口外
+                    break
+        if ok and not need:
+            return start
+        start -= 1
+    return start
+
+
 async def _truncate_context(messages: list[dict], total_chars: int, max_chars: int,
                              llm, emit, round_num: int, context_warned: bool,
                              compressed_summaries: list[str] | None = None) -> tuple[list[dict], bool]:
@@ -418,8 +450,10 @@ async def _truncate_context(messages: list[dict], total_chars: int, max_chars: i
     if total_chars > max_chars:
         print(f"  [WARN] 历史过长 ({total_chars} 字符)，压缩旧内容")
         emit({"step": "thinking", "message": "上下文已满，正在压缩早期对话以保留关键信息...", "round": round_num})
+        # 保留窗口起点必须落在 tool_calls 配对边界上，否则下一轮 chat_with_tools 会 400
+        start = _safe_window_start(messages, 5)
         try:
-            old_msgs = messages[1:-5]
+            old_msgs = messages[1:start]
             if old_msgs:
                 raw = "\n".join(str(m) for m in old_msgs)
                 summary = await llm.chat(
@@ -454,13 +488,15 @@ async def _truncate_context(messages: list[dict], total_chars: int, max_chars: i
                     user_message=f"请压缩以下对话，保留关键信息：\n\n{raw}",
                 )
                 if summary:
-                    messages = [messages[0], {"role": "system", "content": f"[早期对话摘要] {summary}"}] + messages[-5:]
+                    messages = [messages[0], {"role": "system", "content": f"[早期对话摘要] {summary}"}] + messages[start:]
                     if compressed_summaries is not None:
                         compressed_summaries.append(f"[第{round_num}轮压缩] {summary}")
         except Exception:
             pass
         if sum(len(str(m)) for m in messages) > max_chars:
-            messages = [messages[0]] + messages[-5:]
+            # 压缩后仍超限：重新计算安全起点（数组结构已变），避免切断配对
+            start2 = _safe_window_start(messages, 5)
+            messages = [messages[0]] + messages[start2:]
         emit({"step": "thinking", "message": f"早期对话已压缩（上下文已用 {sum(len(str(m)) for m in messages) * 100 // max_chars}%）。建议开新会话以保证研究质量", "round": round_num})
 
     return messages, context_warned
