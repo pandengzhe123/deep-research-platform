@@ -1,6 +1,6 @@
 # Deep Research Platform
 
-> 全栈深度研究 AI Agent 平台 | 零框架手写 | Python + Java + Vue + Docker | 完整评测体系
+> 全栈深度研究 AI Agent 平台 | 零框架手写 | Python + Java + Vue + PostgreSQL/Redis + Docker | 完整评测体系
 
 输入问题 → Agent 自主搜索网络+知识库 → SSE 实时推送进度 → 生成带引用的深度研究报告。自建 RAGAS 四大指标+A/B 对照+LLM-as-Judge+消融实验+回归测试，数据驱动优化。
 
@@ -22,6 +22,7 @@ cp agent/.env.example agent/.env
 
 ```bash
 docker compose up
+# 一键起 5 个服务：nginx(前端) · Java 网关 · Python Agent · PostgreSQL · Redis
 # 浏览器打开 http://localhost:3000
 ```
 
@@ -50,8 +51,14 @@ python -m src.researcher.agent "量子计算对密码学的影响" 2
               Python Agent (FastAPI :8000)
               四级 Agent · RAG 知识库 · 搜索工具 · Trace 追踪
                     │
-                    ▼
-         DeepSeek · Tavily/DuckDuckGo · Chroma · PostgreSQL
+      ┌─────────────┴─────────────┐
+      ▼                           ▼
+PostgreSQL（唯一权威存储）    Redis（加速层 + 并发控制）
+sessions：history/report      搜索缓存 · 跨研究员 URL 去重
+JSONB · token_usage           会话研究锁 · 上下文热层 · 用量限流
+      │
+      ▼
+DeepSeek · Tavily/DuckDuckGo · Chroma
 ```
 
 ---
@@ -75,7 +82,7 @@ python -m src.researcher.agent "量子计算对密码学的影响" 2
 - **回调解耦**：`self.emit = on_progress or (lambda e: None)`，同一 Agent 类同时支持 SSE 流式、同步接口、命令行测试
 - **全异步**：AsyncOpenAI + asyncio.gather 并行 + Queue + create_task 后台任务
 - **容错三层**：LLM 重试（429/5xx 指数退避，4xx/超时不重试）→ Tavily→DDG 自动降级 → Agent 单轮异常跳过继续
-- **上下文管理**：100 万字符三级保护（80%预警→LLM结构化压缩→硬截断），原始问题锚点独立字段永不丢失
+- **上下文管理**：100 万字符三级保护（80% 预警 → LLM 结构化压缩 → 硬截断）。压缩切点必须落在 `tool_calls` 配对边界（`_safe_window_start`，差分数组 O(n)），每轮调 LLM 前清理尾部悬空/残缺 `tool_calls`（`_drop_dangling_tail`）——违反配对协议后端直接 400；压缩摘要用 `user` 角色（对话中段的 `system` 部分后端拒绝）；原始问题锚点独立字段永不丢失
 - **Trace 追踪**：自研 JSONL 调用链路记录，每次 LLM 调用自动捕获 token/耗时/模型，每次搜索记录 query/结果数/去重数/耗时
 
 ### RAG 知识库
@@ -94,11 +101,31 @@ python -m src.researcher.agent "量子计算对密码学的影响" 2
 
 ### 搜索流水线
 
-Tavily 优先 → DuckDuckGo 降级 · 跨轮 URL 去重 · 5 分钟搜索缓存 · 批量 LLM 摘要（N→1 次调用） · structured_output 强制 JSON
+Tavily 优先 → DuckDuckGo 降级 · 跨轮 + 跨研究员 URL 去重（Redis Set） · 5 分钟搜索缓存（Redis String + `EX`，缓存 key 含 `max_results`/`include_raw` 维度） · 批量 LLM 摘要（N→1 次调用） · structured_output 强制 JSON
+
+### Redis：加速层 + 并发控制（5 个落点）
+
+每个落点都是「先有缺陷，后有 Redis」：
+
+| 落点 | Redis 用法 | 解决的缺陷 |
+|------|-----------|-----------|
+| 搜索缓存 | String + `SET EX 300` | 原内存 dict：重启即丢、多进程不共享、TTL 手写清理 |
+| 跨研究员 URL 去重 | Set + `SADD`（pipeline 批量） | L3/L4 并行研究员各自独立实例 → 同一 URL 重复抓取 + 重复 LLM 摘要 |
+| 会话研究锁 | `SET NX EX` + Lua 释放 + 后台续期 | 同会话并发研究（多标签/超时重试/多实例）→ 报告错乱 + 双倍 token |
+| 上下文冷热分层 | List + `RPUSH` + 压缩时 `DEL` | 每次对话读 PG 整行（含全部报告全文 JSONB），而拼 context 只需 history 消息 |
+| 用量统计 / 限流 | `INCR` + `ZINCRBY` + pipeline `EXPIRE` | 多用户配额与防刷；超限返回 429 + `Retry-After` |
+
+**设计要点**：
+
+- **分场景容错**：缓存类降级放行（只变慢不变错）、锁/限流类放行 + 告警（可用性优先，Redis 故障不该让研究功能整体不可用）
+- **一致性模型「镜像或不存在」**：Redis 要么是 PG 的完整镜像、要么不存在（压缩/硬截断时 `DEL` → 下次读从 PG 重建），绝不出现半同步中间态
+- **锁要续期**：锁 TTL 1 小时，深研究可能更久 —— 到期后锁自动消失、并发研究趁虚而入，故每 `TTL/3` 用 Lua 校验 token 后续期（锁易主即自行退出）
+- **报告全文不进 Redis**（防内存爆炸），需要时按需回 PG
+- **部署解耦**：`REDIS_URL`（Python）/ `REDIS_HOST`（Java）环境变量，开发用本地容器、生产换托管 Redis 零代码改动
 
 ### 记忆与持久化
 
-PostgreSQL 会话管理：history JSONB 存对话链 + report JSONB 数组存历史报告（永不被截断）。超 40 条自动 LLM 压缩。追问时 report 去重兜底 history 截断。压缩摘要跟随报告持久化，下次追问自动补回。
+PostgreSQL 会话管理：history JSONB 存对话链 + report JSONB 数组存历史报告（永不被截断）。超 40 条自动 LLM 压缩。追问时 report 去重兜底 history 截断。压缩摘要跟随报告持久化，下次追问自动补回。**拼上下文时优先读 Redis 热层**（List，miss 自动从 PG 重建并续期 TTL），PG 仍是唯一权威存储。
 
 ---
 
@@ -138,34 +165,52 @@ python -m src.researcher.evaluation.run_regression --mode format     # 格式层
 
 ---
 
+## 工程质量
+
+| 项 | 内容 |
+|---|---|
+| 代码审查 | 一次以「找 bug」为目标的三方交叉审查（Python / Java / Vue），产出 **43 项**缺陷并**全部修复**：Redis 客户端状态机、URL 去重语义、冷热层一致性、越权防护、Netty 事件循环阻塞、分布式锁续期、`tool_calls` 协议不变量、错误码语义、前端缓存跨账号泄漏 |
+| 单元 / 集成测试 | `test_units.py`（28 例：压缩配对、悬空 `tool_calls` 清理、KB 注入不变量）+ `test_redis_cache.py`（19 例：缓存 TTL/降级、跨实例去重、锁互斥/续期、限流/错误码）+ `test_quality.py` |
+| 一致性验证 | 冷热层「先 PG 后 Redis」+ Lua 原子追加 + 压缩 `DEL` 重建；Redis 故障全链路降级 |
+| 部署 | `docker compose up` 一键起 前端 / 网关 / Agent / PostgreSQL / Redis |
+
+---
+
 ## 代码量
 
 | 子项目 | 语言 | 行数 |
 |--------|------|:---:|
-| Python Agent + RAG + 评测 + Trace | Python | ~3,500 |
-| Java 网关 | Java 21 | ~1,200 |
-| Vue 前端 | Vue 3 | ~900 |
-| **合计** | | **~5,600** |
+| Python Agent + RAG | Python | ~3,400 |
+| 评测体系（四指标 + Judge + A/B + 消融 + 回归） | Python | ~3,100 |
+| 测试（单元 + Redis 集成 + 质量） | Python | ~930 |
+| Java 网关 | Java 21 | ~1,400 |
+| Vue 前端 | Vue 3 | ~1,100 |
+| **合计** | | **~9,900** |
 
 ### 核心文件
 
 ```
 agent/src/researcher/
-├── agent.py           四级 Agent + 19 Prompt（~1,430 行）
-├── kb.py              Chroma + 5 种检索模式 + embedding（~530 行）
-├── server.py          FastAPI + SSE（~380 行）
-├── search.py          Tavily + DDG + 批量摘要 + 缓存（~300 行）
-├── llm.py             AsyncOpenAI + 重试（~170 行）
-├── trace.py           JSONL 结构化调用链路（~200 行）
-├── config.py          环境变量（~50 行）
-├── retrievers/        BM25 + RRF + CrossEncoder + 查询改写（~190 行）
-└── evaluation/        四指标 + Judge + A/B + 消融 + 回归（~1,500 行）
+├── agent.py           四级 Agent + 19 Prompt（~1,450 行）
+├── kb.py              Chroma + 5 种检索模式 + embedding（~455 行）
+├── server.py          FastAPI + SSE + 会话锁/限流/用量（~510 行）
+├── search.py          Tavily + DDG + Redis 缓存 + 跨实例去重（~440 行）
+├── trace.py           JSONL 结构化调用链路（~230 行）
+├── llm.py             AsyncOpenAI + 重试（~155 行）
+├── config.py          环境变量（~35 行）
+├── retrievers/        BM25 + RRF + CrossEncoder + 查询改写（~140 行）
+└── evaluation/        四指标 + Judge + A/B + 消融 + 回归（~3,060 行）
 
 java-gateway/.../
-├── ResearchController.java   SSE 透传 + 会话管理 + JWT
-├── SessionService.java       会话 CRUD + 自动压缩 + 僵尸清理 + 上下文锚点
+├── ResearchController.java   SSE 透传 + 会话管理 + JWT + 虚拟线程调度
+├── SessionService.java       会话 CRUD + 自动压缩 + 冷热分层 + 僵尸清理 + 上下文锚点
 ├── SecurityConfig.java       WebFlux Security + JWT Filter
 └── JwtTokenProvider.java     JWT 签发/验证
+
+frontend/src/
+├── views/ResearchView.vue    SSE 消费 + 会话切换 + 本地缓存
+├── utils/api.js              统一鉴权 + 401 清理
+└── utils/session-cache.js    登录痕迹/会话缓存清理（换账号不串数据）
 ```
 
 ---

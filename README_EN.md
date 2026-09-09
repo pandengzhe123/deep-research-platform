@@ -1,6 +1,6 @@
 # Deep Research Platform
 
-> Full-stack AI Agent for deep research | Zero-framework, hand-written | Python + Java + Vue + Docker | Built-in evaluation system
+> Full-stack AI Agent for deep research | Zero-framework, hand-written | Python + Java + Vue + PostgreSQL/Redis + Docker | Built-in evaluation system
 
 Ask a question → Agent autonomously searches the web + knowledge base → SSE real-time progress → cited research report. Self-built RAGAS metrics + A/B comparison + LLM-as-Judge + ablation + regression testing.
 
@@ -22,6 +22,7 @@ cp agent/.env.example agent/.env
 
 ```bash
 docker compose up
+# Brings up 5 services: nginx (frontend) · Java gateway · Python agent · PostgreSQL · Redis
 # Open http://localhost:3000
 ```
 
@@ -50,8 +51,14 @@ Browser (Vue 3) → nginx (:80)
                Python Agent (FastAPI :8000)
                Four-level Agent · RAG KB · Search tools · Trace
                      │
-                     ▼
-          DeepSeek · Tavily/DuckDuckGo · Chroma · PostgreSQL
+       ┌─────────────┴─────────────┐
+       ▼                           ▼
+PostgreSQL (source of truth)   Redis (acceleration + concurrency)
+sessions: history/report       search cache · cross-researcher URL dedup
+JSONB · token_usage            research lock · context hot layer · rate limit
+       │
+       ▼
+DeepSeek · Tavily/DuckDuckGo · Chroma
 ```
 
 ---
@@ -75,7 +82,7 @@ Browser (Vue 3) → nginx (:80)
 - **Callback decoupling**: `self.emit = on_progress or (lambda e: None)` — same Agent class for SSE streaming, sync API, and CLI
 - **Fully async**: AsyncOpenAI + asyncio.gather parallel + Queue + create_task background tasks
 - **Three-layer fault tolerance**: LLM retry (429/5xx exponential backoff, 4xx/timeout no retry) → Tavily→DDG fallback → Agent per-round try/except
-- **Context management**: Three-level protection (80% warning → LLM structured compression → hard truncation), original question anchor never lost via independent DB field
+- **Context management**: Three-level protection (80% warning → LLM structured compression → hard truncation). Compression cut points must land on `tool_calls` pairing boundaries (`_safe_window_start`, O(n) difference-array scan), and dangling/partial `tool_calls` at the tail are stripped before every LLM call (`_drop_dangling_tail`) — violating the pairing protocol makes OpenAI-compatible backends return 400; compression summaries use the `user` role (mid-conversation `system` is rejected by some backends); the original question anchor lives in its own DB field and is never lost
 - **Trace**: JSONL call-chain recording — token usage, timing, model, success/fail per LLM call; query count, dedup, timing per search
 
 ### RAG Knowledge Base
@@ -94,11 +101,31 @@ Dual embedding pipelines (MiniLM + Aliyun), multi-tenant per-user Collection iso
 
 ### Search Pipeline
 
-Tavily primary → DuckDuckGo fallback · Cross-round URL dedup · 5-min search cache · Batch LLM summarization (N→1 call)
+Tavily primary → DuckDuckGo fallback · Cross-round + cross-researcher URL dedup (Redis Set) · 5-min search cache (Redis String + `EX`; cache key includes `max_results`/`include_raw` dimensions) · Batch LLM summarization (N→1 call) · structured_output enforced JSON
+
+### Redis: acceleration layer + concurrency control (5 use sites)
+
+Every use site started from a concrete defect:
+
+| Use site | Redis primitive | Defect it fixes |
+|------|-----------|-----------|
+| Search cache | String + `SET EX 300` | In-process dict: lost on restart, not shared across workers, hand-rolled TTL sweep |
+| Cross-researcher URL dedup | Set + `SADD` (pipelined) | L3/L4 researchers each own a `SearchTool` instance → same URL fetched and summarized repeatedly |
+| Session research lock | `SET NX EX` + Lua release + background renewal | Concurrent research on one session (multi-tab / retry / multi-instance) → corrupted reports + doubled token cost |
+| Context hot/cold tiering | List + `RPUSH`, `DEL` on compression | Every turn read a full PG row (including all report text in JSONB) just to build context |
+| Usage stats / rate limit | `INCR` + `ZINCRBY` + pipelined `EXPIRE` | Per-user quota and abuse protection; 429 + `Retry-After` on limit |
+
+**Design notes**:
+
+- **Failure policy per use site**: cache-class failures degrade and let traffic through (slower, never wrong); lock/limit-class failures let traffic through **and alert** (availability first — a Redis outage must not take research down)
+- **Consistency model = "mirror or absent"**: Redis is either a complete mirror of PostgreSQL or the key does not exist (on compression/hard truncation we `DEL` and rebuild from PG) — never a half-synced intermediate state
+- **The lock must be renewed**: TTL is 1 hour but deep L3/L4 research can run longer — once it expires, a second request slips in, which is exactly what the lock prevents. A background task renews every `TTL/3` via a Lua token check (and exits if the lock has changed hands)
+- **Report text never goes into Redis** (memory blow-up); fetched from PG on demand
+- **Deployment decoupled**: `REDIS_URL` (Python) / `REDIS_HOST` (Java) env vars — local container in dev, managed Redis in prod, zero code change
 
 ### Memory & Persistence
 
-PostgreSQL: history JSONB for conversation chain + report JSONB array for all reports (never truncated). Auto LLM compression at 40+ messages. Report array auto-fills truncated history on follow-up queries. Compressed summaries persisted with reports.
+PostgreSQL: history JSONB for conversation chain + report JSONB array for all reports (never truncated). Auto LLM compression at 40+ messages. Report array auto-fills truncated history on follow-up queries. Compressed summaries persisted with reports. **Context building reads the Redis hot layer first** (List; on miss it rebuilds from PG and renews the TTL) — PostgreSQL remains the single source of truth.
 
 ---
 
@@ -138,34 +165,52 @@ python -m src.researcher.evaluation.run_regression --mode format     # 2min
 
 ---
 
+## Engineering Quality
+
+| Item | Detail |
+|---|---|
+| Code review | A dedicated "find the bugs" cross-review of Python / Java / Vue produced **43 defects, all fixed**: Redis client state machine, URL-dedup semantics, hot/cold-layer consistency, authorization checks, blocking calls on the Netty event loop, distributed-lock renewal, `tool_calls` protocol invariants, error-code semantics, cross-account frontend cache leak |
+| Unit / integration tests | `test_units.py` (28 cases: compression pairing, dangling `tool_calls` cleanup, KB-injection invariant) + `test_redis_cache.py` (19 cases: cache TTL/degradation, cross-instance dedup, lock exclusion/renewal, rate limit/error codes) + `test_quality.py` |
+| Consistency verification | "PG first, Redis second" + Lua atomic append + `DEL`-and-rebuild on compression; full-stack degradation when Redis is down |
+| Deployment | `docker compose up` brings up frontend / gateway / agent / PostgreSQL / Redis |
+
+---
+
 ## Codebase
 
 | Module | Language | Lines |
 |--------|------|:---:|
-| Python Agent + RAG + Evaluation + Trace | Python | ~3,500 |
-| Java Gateway | Java 21 | ~1,200 |
-| Vue Frontend | Vue 3 | ~900 |
-| **Total** | | **~5,600** |
+| Python Agent + RAG | Python | ~3,400 |
+| Evaluation (4 metrics + Judge + A/B + ablation + regression) | Python | ~3,100 |
+| Tests (unit + Redis integration + quality) | Python | ~930 |
+| Java Gateway | Java 21 | ~1,400 |
+| Vue Frontend | Vue 3 | ~1,100 |
+| **Total** | | **~9,900** |
 
 ### Core Files
 
 ```
 agent/src/researcher/
-├── agent.py     Four-level Agent + 19 Prompts (~1,430 lines)
-├── kb.py        Chroma + 5 retrieval modes + embedding (~530 lines)
-├── server.py    FastAPI + SSE (~380 lines)
-├── search.py    Tavily + DDG + batch summary + dedup + cache (~300 lines)
-├── llm.py       AsyncOpenAI + retry (~170 lines)
-├── trace.py     JSONL structured tracing (~200 lines)
-├── config.py    Environment variables (~50 lines)
-├── retrievers/  BM25 + RRF + CrossEncoder + query rewriting (~190 lines)
-└── evaluation/  4 metrics + Judge + A/B + ablation + regression (~1,500 lines)
+├── agent.py     Four-level Agent + 19 Prompts (~1,450 lines)
+├── kb.py        Chroma + 5 retrieval modes + embedding (~455 lines)
+├── server.py    FastAPI + SSE + session lock / rate limit / usage (~510 lines)
+├── search.py    Tavily + DDG + Redis cache + cross-instance dedup (~440 lines)
+├── trace.py     JSONL structured tracing (~230 lines)
+├── llm.py       AsyncOpenAI + retry (~155 lines)
+├── config.py    Environment variables (~35 lines)
+├── retrievers/  BM25 + RRF + CrossEncoder + query rewriting (~140 lines)
+└── evaluation/  4 metrics + Judge + A/B + ablation + regression (~3,060 lines)
 
 java-gateway/.../
-├── ResearchController.java   SSE passthrough + session management
-├── SessionService.java       Session CRUD + auto compression + context anchor
+├── ResearchController.java   SSE passthrough + session mgmt + JWT + virtual-thread scheduling
+├── SessionService.java       Session CRUD + auto compression + hot/cold tiering + stale cleanup + anchor
 ├── SecurityConfig.java       WebFlux Security + JWT Filter
 └── JwtTokenProvider.java     JWT signing/verification
+
+frontend/src/
+├── views/ResearchView.vue    SSE consumption + session switching + local cache
+├── utils/api.js              Unified auth + 401 cleanup
+└── utils/session-cache.js    Credential/chat-cache cleanup (no leakage across accounts)
 ```
 
 ---
