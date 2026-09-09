@@ -81,7 +81,10 @@ async def test_cache_stats_fields():
 
 
 async def test_cross_instance_url_dedup():
-    """R2：共享 dedup_scope 的多个 SearchTool 实例共享 URL 去重（L3/L4 并行场景）。"""
+    """R2：共享 dedup_scope 的多个 SearchTool 实例共享 URL 去重（L3/L4 并行场景）。
+
+    语义：`_filter_seen_urls` 只查询；`_mark_urls_processed` 在抓取+摘要成功后标记。
+    """
     from researcher.search import SearchTool, _get_redis
     scope = "test_r2_scope"
     key = f"seen_urls:{scope}"
@@ -90,14 +93,19 @@ async def test_cross_instance_url_dedup():
     a = SearchTool(dedup_scope=scope)
     b = SearchTool(dedup_scope=scope)
 
-    first = await a._filter_new_urls(["http://u1", "http://u2"])
+    # 首次：两个 URL 都未被处理
+    first = await a._filter_seen_urls(["http://u1", "http://u2"])
     assert first == {"http://u1", "http://u2"}, f"首次应全部为新: {first}"
 
-    second = await b._filter_new_urls(["http://u1", "http://u3"])
-    assert second == {"http://u3"}, f"跨实例去重失败（u1 应被跳过）: {second}"
+    # 只标记 u1 成功（u2 模拟抓取失败 → 不标记，B3 修复点）
+    await a._mark_urls_processed(["http://u1"])
+
+    # 另一实例：u1 被跳过，u2 仍可重试
+    second = await b._filter_seen_urls(["http://u1", "http://u2", "http://u3"])
+    assert second == {"http://u2", "http://u3"}, f"去重/可重试语义错误: {second}"
 
     members = await _get_redis().smembers(key)
-    assert members == {"http://u1", "http://u2", "http://u3"}, f"Redis 集合内容错误: {members}"
+    assert members == {"http://u1"}, f"只应标记成功的 URL: {members}"
 
     ttl = await _get_redis().ttl(key)
     assert 0 < ttl <= 6 * 3600, f"去重 key TTL 异常: {ttl}"
@@ -108,8 +116,52 @@ async def test_dedup_local_fallback():
     """R2：未提供 dedup_scope 时降级为实例内本地去重（单研究员场景）。"""
     from researcher.search import SearchTool
     tool = SearchTool()
-    assert await tool._filter_new_urls(["http://x"]) == {"http://x"}
-    assert await tool._filter_new_urls(["http://x"]) == set(), "本地去重未生效"
+    assert await tool._filter_seen_urls(["http://x"]) == {"http://x"}
+    await tool._mark_urls_processed(["http://x"])
+    assert await tool._filter_seen_urls(["http://x"]) == set(), "本地去重未生效"
+
+
+async def test_redis_client_rebuilds_on_loop_change():
+    """B1：事件循环变化时重建客户端（避免旧 client 绑旧 loop 抛 Event loop is closed）。"""
+    import researcher.search as sm
+    from researcher.search import _get_redis
+
+    r1 = _get_redis()
+    assert r1 is not None and await r1.ping()
+    sm._redis_client_loop = None          # 模拟 loop 变化
+    r2 = _get_redis()
+    assert r2 is not None and await r2.ping(), "重建后应可用"
+    assert sm._redis_client_loop is not None, "应记录新 loop"
+
+
+async def test_redis_client_discarded_on_failure():
+    """B1：失败后必须丢弃客户端（否则冷却结束仍返回同一个坏 client → 永久降级）。"""
+    import time as _t
+    import researcher.search as sm
+    from researcher.search import _get_redis
+
+    r = _get_redis()
+    assert r is not None
+    sm._mark_redis_failure("测试失败", connection_level=False)
+    assert sm._redis_client is None, "失败后应丢弃客户端"
+    assert sm._redis_disabled_until < _t.time(), "数据级失败不应触发 60s 冷却"
+    r2 = _get_redis()
+    assert r2 is not None and await r2.ping(), "应能重建客户端"
+
+
+async def test_cache_get_rejects_non_dict():
+    """B11：缓存内容非 dict / 非法 JSON 时返回 None（不让调用方 AttributeError）。"""
+    import json
+    from researcher.search import SearchTool, _get_redis
+
+    tool = SearchTool()
+    key = "search:test_non_dict:5"
+    r = _get_redis()
+    await r.set(key, json.dumps([1, 2, 3]), ex=60)
+    assert await tool._cache_get(key) is None, "非 dict 应被拒绝"
+    await r.set(key, "not-json", ex=60)
+    assert await tool._cache_get(key) is None, "非法 JSON 应被拒绝"
+    await r.delete(key)
 
 
 async def test_research_lock_mutual_exclusion():
@@ -232,6 +284,9 @@ async def main():
         test_cache_stats_fields,
         test_cross_instance_url_dedup,
         test_dedup_local_fallback,
+        test_redis_client_rebuilds_on_loop_change,
+        test_redis_client_discarded_on_failure,
+        test_cache_get_rejects_non_dict,
         test_research_lock_mutual_exclusion,
         test_lock_release_only_own_token,
         test_rate_limit_and_usage,

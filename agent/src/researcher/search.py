@@ -19,15 +19,45 @@ from .llm import LLMClient
 # ============================================================
 
 _redis_client = None
+_redis_client_loop = None       # client 绑定的事件循环（loop 变化时重建）
 _redis_disabled_until = 0.0     # 连接失败后的冷却截止时间戳
 
 
+def _safe_print(msg: str) -> None:
+    """编码安全的日志输出 —— Windows GBK 控制台对 emoji 会抛 UnicodeEncodeError，
+    而降级路径本身崩溃会冒泡打断研究流程。"""
+    try:
+        print(msg)
+    except Exception:
+        try:
+            print(msg.encode("ascii", "replace").decode("ascii"))
+        except Exception:
+            pass
+
+
 def _get_redis():
-    """获取共享 Redis 客户端；不可用时返回 None（调用方降级为不缓存）。"""
-    global _redis_client, _redis_disabled_until
+    """获取共享 Redis 客户端；不可用时返回 None（调用方降级为不缓存）。
+
+    两个关键点：
+    1. 客户端与事件循环绑定 —— 进程内多次 asyncio.run() 时旧 client 会失效
+       （RuntimeError: Event loop is closed），因此记录创建时的 loop，变化即重建。
+    2. 失败后必须丢弃客户端 —— 否则冷却期结束仍返回同一个坏 client，Redis 再也回不来。
+    """
+    global _redis_client, _redis_client_loop, _redis_disabled_until
     now = time.time()
     if now < _redis_disabled_until:
         return None
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    # 事件循环变化（或已被丢弃）→ 丢弃旧客户端，下一步重建
+    if _redis_client is not None and _redis_client_loop is not loop:
+        _redis_client = None
+        _redis_client_loop = None
+
     if _redis_client is None:
         try:
             import redis.asyncio as aioredis
@@ -38,18 +68,27 @@ def _get_redis():
                 socket_connect_timeout=1,
                 max_connections=50,
             )
+            _redis_client_loop = loop
         except Exception as e:
-            print(f"  ⚠️ Redis 初始化失败，搜索缓存降级为不缓存: {e}")
+            _safe_print(f"  [WARN] Redis 初始化失败，搜索缓存降级为不缓存: {e}")
             _redis_disabled_until = now + 60
             return None
     return _redis_client
 
 
-def _mark_redis_failure(msg: str) -> None:
-    """Redis 操作失败 → 冷却 60 秒后重试，避免每条查询都刷错误日志。"""
-    global _redis_disabled_until
-    print(f"  ⚠️ Redis {msg}，搜索缓存降级为不缓存（60s 后重试）")
-    _redis_disabled_until = time.time() + 60
+def _mark_redis_failure(msg: str, connection_level: bool = True) -> None:
+    """Redis 操作失败 → 丢弃客户端并冷却后重建。
+
+    connection_level=True（连接/超时类）：全局冷却 60s（Redis 疑似不可用）。
+    connection_level=False（单条数据类，如某条缓存 JSON 非法）：只丢弃客户端，
+    不冷却 —— 避免一条脏数据让整个 Redis 层停摆 60 秒。
+    """
+    global _redis_client, _redis_client_loop, _redis_disabled_until
+    _safe_print(f"  [WARN] Redis {msg}，降级（{'60s 后重建' if connection_level else '下次操作重建'}）")
+    _redis_client = None            # 关键：丢弃坏客户端，否则永远返回同一个死 client
+    _redis_client_loop = None
+    if connection_level:
+        _redis_disabled_until = time.time() + 60
 
 
 class SearchTool:
@@ -106,13 +145,24 @@ class SearchTool:
         return {"results": tavily_format, "query": query}
 
     async def _cache_get(self, key: str) -> dict | None:
-        """读 Redis 缓存；不可用或读失败 → None（调用方降级直查）。"""
+        """读 Redis 缓存；不可用 / 内容非法 → None（调用方降级直查）。"""
         r = _get_redis()
         if r is None:
             return None
         try:
             raw = await r.get(key)
-            return json.loads(raw) if raw else None
+            if not raw:
+                return None
+            data = json.loads(raw)
+            # 缓存可能被外部污染：只接受「含 results 的 dict」这一种合法形态，
+            # 否则调用方 .get("results") 会抛 AttributeError
+            if not isinstance(data, dict) or "results" not in data:
+                _mark_redis_failure(f"缓存内容非法（{type(data).__name__}）", connection_level=False)
+                return None
+            return data
+        except json.JSONDecodeError as e:
+            _mark_redis_failure(f"缓存 JSON 解析失败: {e}", connection_level=False)
+            return None
         except Exception as e:
             _mark_redis_failure(f"读失败: {e}")
             return None
@@ -164,32 +214,46 @@ class SearchTool:
             "backend": "redis" if _get_redis() is not None else "disabled",
         }
 
-    async def _filter_new_urls(self, urls: list[str]) -> set[str]:
-        """返回本轮首次出现的 URL（跨轮 + 跨研究员共享去重）。
+    async def _filter_seen_urls(self, urls: list[str]) -> set[str]:
+        """返回**尚未处理过**的 URL（只查询，不标记）。
 
         L3/L4 并行研究时各研究员是独立 SearchTool 实例，本地 set 不共享 →
-        同一 URL 会被多个研究员重复抓取和摘要。Redis Set + SADD 提供全局去重：
-        SADD 返回 1 = 首次出现（处理），返回 0 = 已被处理（跳过）。
-        Redis 不可用时降级为本地去重。
+        用 Redis Set 做全局去重。注意：这里只读，真正的标记在抓取+摘要成功后
+        （`_mark_urls_processed`），否则一次抓取失败会让该 URL 在本次研究内
+        被永久跳过，把暂时性失败变成信息永久丢失。
         """
         r = _get_redis()
         if r is None or not self._dedup_scope:
-            new = {u for u in urls if u not in self._seen_urls}
-            self._seen_urls.update(new)
-            return new
+            return {u for u in urls if u not in self._seen_urls}
         try:
             key = f"seen_urls:{self._dedup_scope}"
-            pipe = r.pipeline()                 # 批量 SADD，一次 RTT
+            pipe = r.pipeline()                 # 批量 SISMEMBER，一次 RTT
+            for u in urls:
+                pipe.sismember(key, u)
+            flags = await pipe.execute()
+            return {u for u, seen in zip(urls, flags) if not seen}
+        except Exception as e:
+            _mark_redis_failure(f"URL 去重查询失败: {e}")
+            return {u for u in urls if u not in self._seen_urls}
+
+    async def _mark_urls_processed(self, urls: list[str]) -> None:
+        """标记 URL 已成功处理（抓取 + 摘要成功后才调用）。"""
+        if not urls:
+            return
+        r = _get_redis()
+        if r is None or not self._dedup_scope:
+            self._seen_urls.update(urls)
+            return
+        try:
+            key = f"seen_urls:{self._dedup_scope}"
+            pipe = r.pipeline()
             for u in urls:
                 pipe.sadd(key, u)
-            added = await pipe.execute()
-            await r.expire(key, 6 * 3600)       # 研究结束后自动清理，防 key 堆积
-            return {u for u, ok in zip(urls, added) if ok}
+            pipe.expire(key, 6 * 3600)          # 与 SADD 同 pipeline，避免无 TTL 残留
+            await pipe.execute()
         except Exception as e:
-            _mark_redis_failure(f"URL 去重失败: {e}")
-            new = {u for u in urls if u not in self._seen_urls}
-            self._seen_urls.update(new)
-            return new
+            _mark_redis_failure(f"URL 标记失败: {e}")
+            self._seen_urls.update(urls)
 
     async def search(
         self,
@@ -213,11 +277,23 @@ class SearchTool:
                 if url and url not in url_to_result:
                     url_to_result[url] = r
 
-        new_urls = await self._filter_new_urls(list(url_to_result.keys()))
-        seen = {u: r for u, r in url_to_result.items() if u in new_urls}
+        candidates = await self._filter_seen_urls(list(url_to_result.keys()))
+        seen = {u: r for u, r in url_to_result.items() if u in candidates}
         skipped = len(url_to_result) - len(seen)
         if skipped:
             print(f"    去重：跳过 {skipped} 个已处理 URL，本轮新增 {len(seen)} 个")
+
+        if not seen:
+            # 全部 URL 已在本次研究中处理过 —— 与「网上没资料」是两回事，
+            # 必须区分，否则 LLM 会误判并据此改写 query 或提前停止
+            if self.trace:
+                await self.trace.record_search(
+                    queries=queries, result_count=0, deduped_count=skipped,
+                    total_duration_ms=int((time.time() - t0) * 1000),
+                    success=True,
+                )
+            return ("本轮搜索结果均已在本次研究中处理过，无新增内容。"
+                    "请换一个查询角度，或基于已有信息作答。")
 
         # 3. 并行抓取网页内容
         items = list(seen.items())
@@ -236,6 +312,11 @@ class SearchTool:
             return "未找到相关结果。"
 
         summaries = await self._batch_summarize(valid)
+
+        # 4.5 标记「真正处理成功」的 URL（抓取 + 摘要都成功才标记）。
+        # 失败的不标记，留给后续轮次/其他研究员重试 —— 否则暂时性失败
+        # 会让该 URL 在本次研究内被永久跳过。
+        await self._mark_urls_processed([s["url"] for s in summaries if s])
 
         # 5. 格式化输出
         output_parts = ["# 搜索结果\n"]
