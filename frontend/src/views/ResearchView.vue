@@ -160,7 +160,7 @@ const needClarify = ref(false)
 const showLogoutModal = ref(false)
 
 const quickQuestions = ['量子计算是什么？', 'Java 21 虚拟线程的优势', '2025年AI领域的重要事件']
-let contextHistory = ''  // 累积对话历史，传给后端
+// 上下文由后端权威拼接（Java SessionService.getContextHistory），前端只传 question + session_id
 let _activeResearch = null  // { sessionId, messages } 正在进行的研究，供 switchSession 识别
 let _abortController = null  // 用于中断 fetch 连接
 
@@ -258,12 +258,10 @@ async function start() {
         if (thinkIdx >= 0) myMessages.splice(thinkIdx, 1)
         if (d.need_clarify) {
           myMessages.push({ role: 'assistant', content: '需要澄清：' + (d.question || '') })
-          contextHistory += (contextHistory ? '\n\n' : '') + '用户: ' + q + '\nAgent: （追问）' + (d.question || '')
         } else if (d.report) {
           const elapsed = Math.floor((Date.now() - startTime.value) / 1000)
           const timeStr = `${Math.floor(elapsed/60)}分${String(elapsed%60).padStart(2,'0')}秒`
           myMessages.push({ role: 'assistant', content: `> 研究耗时 ${timeStr}\n\n${d.report}` })
-          contextHistory += (contextHistory ? '\n\n' : '') + '用户: ' + q + '\nAgent: ' + (d.report || '')
         }
         // 无论用户是否在看，都存 localStorage
         if (mySessionId) {
@@ -300,7 +298,7 @@ async function start() {
       },
       body: JSON.stringify({
         question: q, level: level.value, search_mode: searchMode.value,
-        context: contextHistory, session_id: currentSessionId.value || undefined,
+        session_id: currentSessionId.value || undefined,
         rag_doc_ids: searchMode.value !== 'web_only' ? selectedDocs.value : [],
       }),
     })
@@ -414,7 +412,7 @@ async function switchSession(s) {
       const cached = JSON.parse(saved)
       const lastMsg = cached[cached.length - 1]
       if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content && lastMsg.content.length > 500) {
-        messages.value = cached; contextHistory = ''; scrollDown(); return
+        messages.value = cached; scrollDown(); return
       }
     } catch(e) {}
   }
@@ -447,14 +445,12 @@ async function switchSession(s) {
       { role: 'user', content: s.question || '' },
       { role: 'assistant', content: fullReport || '（报告已丢失）' }
     ]
-    contextHistory = msgs.map(m => `[${m.time || ''}] ${m.role === 'user' ? '用户' : 'Agent'}: ${m.content}`).join('\n')
     localStorage.setItem('chat_' + s.id, JSON.stringify(messages.value))  // 缓存到本地
   } catch (e) {
     messages.value = [
       { role: 'user', content: s.question || '' },
       { role: 'assistant', content: s.report || '（报告已丢失）' }
     ]
-    contextHistory = `用户: ${s.question || ''}\nAgent: ${s.report || ''}`
   }
   scrollDown()
 }
@@ -463,7 +459,6 @@ function newChat() {
   messages.value = []
   currentSessionId.value = ''
   question.value = ''
-  contextHistory = ''
   localStorage.removeItem('activeSession')
   localStorage.removeItem('chat_' + currentSessionId.value)
 }

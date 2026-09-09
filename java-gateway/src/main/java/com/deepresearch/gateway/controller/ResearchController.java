@@ -88,9 +88,8 @@ public class ResearchController {
             log.info("同步研究: session={}", session.getId());
 
             // 2. 注入 user_id + session_id + 完整上下文
-            String dbContext = sessionService.getContextHistory(session.getId());
-            String fullContext = (req.context() != null && !req.context().isBlank())
-                    ? req.context() : dbContext;
+            // 上下文由后端权威拼接（前端只传 question + session_id，不再传 context）
+            String fullContext = sessionService.getContextHistory(session.getId());
             ResearchRequest reqWithUser = new ResearchRequest(
                     req.question(), req.level(), req.maxRounds(),
                     req.language(), fullContext, req.kbEnabled(),
@@ -143,9 +142,8 @@ public class ResearchController {
         final String sessionId = session.getId();
 
         // 2. 注入 user_id + session_id + context
-        String dbContext = sessionService.getContextHistory(sessionId);
-        String fullContext = (req.context() != null && !req.context().isBlank())
-                ? req.context() : dbContext;
+        // 上下文由后端权威拼接（前端只传 question + session_id，不再传 context）
+        String fullContext = sessionService.getContextHistory(sessionId);
         ResearchRequest reqWithUser = new ResearchRequest(
                 req.question(), req.level(), req.maxRounds(),
                 req.language(), fullContext, req.kbEnabled(),
