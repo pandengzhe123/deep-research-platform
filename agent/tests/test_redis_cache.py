@@ -112,6 +112,50 @@ async def test_dedup_local_fallback():
     assert await tool._filter_new_urls(["http://x"]) == set(), "本地去重未生效"
 
 
+async def test_research_lock_mutual_exclusion():
+    """R3：同会话互斥（第二个请求被拒），不同会话互不影响。"""
+    from researcher.search import _get_redis
+    from researcher.server import acquire_research_lock, release_research_lock
+
+    sid = "test_lock_mutex"
+    await _get_redis().delete(f"lock:research:{sid}")
+
+    ok1, tok1 = await acquire_research_lock(sid)
+    assert ok1 and tok1, "首次应获取成功"
+
+    ok2, tok2 = await acquire_research_lock(sid)
+    assert ok2 is False and tok2 == "", "同会话并发应被拒绝"
+
+    ok3, tok3 = await acquire_research_lock("test_lock_mutex_other")
+    assert ok3 and tok3, "不同会话不应受影响"
+    await release_research_lock("test_lock_mutex_other", tok3)
+
+    await release_research_lock(sid, tok1)
+    assert await _get_redis().exists(f"lock:research:{sid}") == 0
+
+
+async def test_lock_release_only_own_token():
+    """R3：Lua 释放只删自己持有的锁，错误 token 不得误删他人锁。"""
+    from researcher.search import _get_redis
+    from researcher.server import acquire_research_lock, release_research_lock
+
+    sid = "test_lock_token"
+    key = f"lock:research:{sid}"
+    await _get_redis().delete(key)
+
+    ok, tok = await acquire_research_lock(sid, ttl=100)
+    assert ok and tok
+
+    await release_research_lock(sid, "wrong-token")
+    assert await _get_redis().exists(key) == 1, "错误 token 不应删掉锁"
+
+    ttl = await _get_redis().ttl(key)
+    assert 0 < ttl <= 100, f"TTL 异常: {ttl}"
+
+    await release_research_lock(sid, tok)
+    assert await _get_redis().exists(key) == 0, "正确 token 应释放锁"
+
+
 async def main():
     from researcher.search import _get_redis
 
@@ -135,6 +179,8 @@ async def main():
         test_cache_stats_fields,
         test_cross_instance_url_dedup,
         test_dedup_local_fallback,
+        test_research_lock_mutual_exclusion,
+        test_lock_release_only_own_token,
     ]
     passed = 0
     for t in tests:

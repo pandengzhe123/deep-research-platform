@@ -60,12 +60,70 @@ class ResearchRequest(BaseModel):
     search_mode: str = "hybrid"  # "hybrid" | "web_only" | "rag_only"
     user_id: str = "default"
     rag_doc_ids: list[str] = []  # 用户勾选的文档 ID，空=搜全部
+    session_id: str = ""  # 会话 ID（用于会话研究锁，防同会话并发研究）
 
 
 class ProgressEvent(BaseModel):
     event: str
     message: str = ""
     data: dict | None = None
+
+# ============================================================
+# 会话研究锁 —— 防止同一会话被并发研究
+# ============================================================
+
+_LOCK_RELEASE_LUA = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('del', KEYS[1])
+else
+    return 0
+end
+"""
+
+
+async def acquire_research_lock(session_id: str, ttl: int = 3600) -> tuple[bool, str]:
+    """尝试获取会话研究锁。
+
+    返回 (acquired, token)：
+      (True,  token) → 拿到锁，研究结束后必须释放
+      (False, "")    → 该会话正在研究中，应拒绝本次请求
+      (True,  "")    → Redis 不可用 → 放行（不持锁，无需释放）
+                      可用性优先：Redis 故障不应让整个研究功能不可用；
+                      最坏后果是并发研究导致报告错乱，而非数据损坏。
+    """
+    from .search import _get_redis
+
+    r = _get_redis()
+    if r is None:
+        log.warning("Redis 不可用，跳过会话研究锁（放行）")
+        return True, ""
+
+    token = uuid.uuid4().hex
+    try:
+        ok = await r.set(f"lock:research:{session_id}", token, nx=True, ex=ttl)
+        if ok:
+            log.info(f"获取研究锁: session={session_id}")
+            return True, token
+        return False, ""
+    except Exception as e:
+        log.warning(f"获取研究锁失败，放行: {e}")
+        return True, ""
+
+
+async def release_research_lock(session_id: str, token: str) -> None:
+    """用 Lua 原子释放：只删自己持有的锁（value 匹配），防止误删他人锁。"""
+    if not token:
+        return
+    from .search import _get_redis
+
+    r = _get_redis()
+    if r is None:
+        return
+    try:
+        await r.eval(_LOCK_RELEASE_LUA, 1, f"lock:research:{session_id}", token)
+        log.info(f"释放研究锁: session={session_id}")
+    except Exception as e:
+        log.warning(f"释放研究锁失败: {e}")
 
 # ============================================================
 # 核心 —— 用 asyncio.Queue 把 Agent 的进度事件转成 SSE 流
@@ -229,6 +287,38 @@ async def run_agent_with_sse(
 
 
 # ============================================================
+# 带会话锁的研究执行
+# ============================================================
+
+async def _run_with_lock(req: "ResearchRequest", cancel: aio.Event) -> AsyncGenerator[dict, None]:
+    """在会话研究锁保护下执行研究。
+
+    同一会话并发研究 → 报告错乱 + 双倍 token，故第二个请求直接拒绝；
+    不同会话/不同用户互不影响（锁粒度为 session_id）。
+    """
+    session_id = (req.session_id or "").strip()
+    lock_token = ""
+    if session_id:
+        acquired, lock_token = await acquire_research_lock(session_id)
+        if not acquired:
+            yield {"event": "error", "data": json.dumps({
+                "message": "该会话正在研究中，请等待完成后再试",
+            }, ensure_ascii=False)}
+            return
+    try:
+        async for event in run_agent_with_sse(
+            question=req.question, level=req.level,
+            max_rounds=req.max_rounds, language=req.language,
+            context=req.context, kb_enabled=req.kb_enabled, user_id=req.user_id,
+            rag_doc_ids=req.rag_doc_ids, search_mode=req.search_mode, cancel=cancel,
+        ):
+            yield event
+    finally:
+        if lock_token:
+            await release_research_lock(session_id, lock_token)
+
+
+# ============================================================
 # API 端点
 # ============================================================
 
@@ -252,12 +342,7 @@ async def research_sync(req: ResearchRequest):
     """同步接口 —— 收集 SSE 事件，等 done 后返回 JSON。"""
     cancel = aio.Event()
     result = []
-    async for event in run_agent_with_sse(
-        question=req.question, level=req.level,
-        max_rounds=req.max_rounds, language=req.language,
-        context=req.context, kb_enabled=req.kb_enabled, user_id=req.user_id,
-        rag_doc_ids=req.rag_doc_ids, search_mode=req.search_mode, cancel=cancel,
-    ):
+    async for event in _run_with_lock(req, cancel):
         if event["event"] == "done":
             result.append(json.loads(event["data"]))
         elif event["event"] == "error":
@@ -271,12 +356,7 @@ async def research_sync(req: ResearchRequest):
 async def research_stream(req: ResearchRequest):
     """SSE 流式接口。"""
     cancel = aio.Event()
-    return EventSourceResponse(run_agent_with_sse(
-        question=req.question, level=req.level,
-        max_rounds=req.max_rounds, language=req.language,
-        context=req.context, kb_enabled=req.kb_enabled, user_id=req.user_id,
-        rag_doc_ids=req.rag_doc_ids, search_mode=req.search_mode, cancel=cancel,
-    ))
+    return EventSourceResponse(_run_with_lock(req, cancel))
 
 
 @app.delete("/research/{task_id}")
