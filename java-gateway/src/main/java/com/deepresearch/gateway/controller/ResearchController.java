@@ -181,13 +181,24 @@ public class ResearchController {
                                         try {
                                             JsonNode node = objectMapper.readTree(data);
                                             String report = node.has("report") ? node.get("report").asText() : "";
-                                            sessionService.appendReport(sessionId, report);
-                                            sessionService.appendHistory(sessionId, "agent", report);
+                                            boolean needClarify = node.has("need_clarify")
+                                                    && node.get("need_clarify").asBoolean();
+                                            if (needClarify) {
+                                                // 澄清追问：没有报告，只记一条 agent 消息（与同步端点一致）
+                                                String clarifyQuestion = node.has("question")
+                                                        ? node.get("question").asText() : "";
+                                                sessionService.appendHistory(sessionId, "agent",
+                                                        "（追问）" + clarifyQuestion);
+                                                log.info("流式研究需澄清: session={}", sessionId);
+                                            } else {
+                                                sessionService.appendReport(sessionId, report);
+                                                sessionService.appendHistory(sessionId, "agent", report);
+                                                log.info("流式研究完成: session={}, report_len={}", sessionId, report.length());
+                                            }
                                             if (node.has("tokenUsage")) {
                                                 sessionService.updateTokenUsage(sessionId,
                                                         objectMapper.writeValueAsString(node.get("tokenUsage")));
                                             }
-                                            log.info("流式研究完成: session={}, report_len={}", sessionId, report.length());
                                         } catch (Exception e) {
                                             log.error("解析报告失败: {}", e.getMessage());
                                         }

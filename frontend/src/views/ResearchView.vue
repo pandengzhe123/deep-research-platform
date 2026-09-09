@@ -353,7 +353,12 @@ async function start() {
       myMessages.push({ role: 'assistant', content: '研究已停止。如需继续，请重新提问。' })
     } else {
       let errMsg = '请求失败，请重试'
-      if (e.message?.includes('401') || e.message?.includes('403')) errMsg = '登录已过期，请重新登录'
+      if (e.message?.includes('401') || e.message?.includes('403')) {
+        errMsg = '登录已过期，请重新登录'
+        // 这个接口走原生 fetch，不经过 axios 拦截器 → 需手动清凭据并跳登录
+        auth.logout()
+        router.push('/login')
+      }
       else if (e.message?.includes('timeout')) errMsg = '研究超时，请尝试简化问题或降低 Level'
       else if (e.message?.includes('Failed to fetch')) errMsg = '网络连接失败，请检查网络后重试'
       myMessages.push({ role: 'assistant', content: '错误：' + errMsg })
@@ -456,11 +461,12 @@ async function switchSession(s) {
 }
 
 function newChat() {
+  const oldSessionId = currentSessionId.value   // 先保存：清空后删的是空键 'chat_'
   messages.value = []
   currentSessionId.value = ''
   question.value = ''
   localStorage.removeItem('activeSession')
-  localStorage.removeItem('chat_' + currentSessionId.value)
+  if (oldSessionId) localStorage.removeItem('chat_' + oldSessionId)
 }
 
 // ========== KB ==========

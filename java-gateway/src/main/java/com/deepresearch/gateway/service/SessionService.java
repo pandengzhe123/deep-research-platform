@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 
@@ -39,6 +40,20 @@ public class SessionService {
     private static final int KEEP_RECENT = 25;          // 压缩后保留最近 N 条，压缩旧的
     private static final String HISTORY_KEY_PREFIX = "history:";
     private static final Duration HISTORY_TTL = Duration.ofHours(24);  // 热层空闲自动回收
+
+    /**
+     * 追加消息的原子脚本：key 存在才 RPUSH + EXPIRE（B10/B21）。
+     * 两步分开会有两个问题：① exists 与 rpush 之间 key 过期 → 写出「半截列表」；
+     * ② rpush 成功但 expire 失败 → key 无 TTL 永久驻留。
+     */
+    private static final DefaultRedisScript<Long> APPEND_HISTORY_SCRIPT = new DefaultRedisScript<>(
+            "if redis.call('exists', KEYS[1]) == 1 then "
+                    + "  redis.call('rpush', KEYS[1], ARGV[1]) "
+                    + "  redis.call('expire', KEYS[1], ARGV[2]) "
+                    + "  return 1 "
+                    + "end "
+                    + "return 0",
+            Long.class);
 
     private final SessionRepository repo;
     private final WebClient webClient;
@@ -123,14 +138,22 @@ public class SessionService {
                 log.info("历史结构变更 → 失效 Redis 热层: session={}", sessionId);
                 return;
             }
-            if (!Boolean.TRUE.equals(redis.hasKey(key))) {
-                // 热层不存在：不写半截列表，交给 loadHistory 从 PG 重建
-                return;
+            // 原子脚本：key 存在才 RPUSH + EXPIRE（避免半截列表 / 无 TTL 残留）
+            Long appended = redis.execute(
+                    APPEND_HISTORY_SCRIPT, List.of(key),
+                    toJson(newMsg), String.valueOf(HISTORY_TTL.getSeconds()));
+            if (appended == null || appended == 0L) {
+                // 热层不存在（TTL 过期/首次）→ 不写半截列表，交给 loadHistory 重建
+                log.debug("Redis 热层不存在，跳过追加（下次读取时重建）: session={}", sessionId);
             }
-            redis.opsForList().rightPush(key, toJson(newMsg));
-            redis.expire(key, HISTORY_TTL);
         } catch (Exception e) {
-            log.warn("Redis 同步历史失败（不影响主流程）: session={}, err={}", sessionId, e.getMessage());
+            log.warn("Redis 同步历史失败，丢弃热层（下次读重建）: session={}, err={}", sessionId, e.getMessage());
+            // 宁可下次从 PG 重建，也不要留下「PG 有、Redis 没有」的脏镜像
+            try {
+                redis.delete(key);
+            } catch (Exception ignore) {
+                // best-effort，忽略
+            }
         }
     }
 
@@ -144,18 +167,26 @@ public class SessionService {
         try {
             List<String> raw = redis.opsForList().range(key, 0, -1);
             if (raw != null && !raw.isEmpty()) {
-                List<Object> msgs = new ArrayList<>(raw.size());
-                for (String s : raw) {
-                    msgs.add(objectMapper.readValue(s, Map.class));
+                try {
+                    List<Object> msgs = new ArrayList<>(raw.size());
+                    for (String s : raw) {
+                        msgs.add(objectMapper.readValue(s, Map.class));
+                    }
+                    return msgs;
+                } catch (Exception parseErr) {
+                    // 热层内容损坏（如旧格式纯文本条目 "用户: xxx" 无法反序列化为 Map）
+                    // → 丢弃该 key，走下面从 PG 重建，避免每次读都异常回退、热层永不生效
+                    log.warn("Redis 热层内容不可解析，丢弃重建: session={}, err={}", sessionId, parseErr.getMessage());
+                    redis.delete(key);
                 }
-                return msgs;
             }
-            // 冷启动 / 热层过期 / 压缩后 → 从 PG 全量重建
+            // 冷启动 / 热层过期 / 内容损坏 / 压缩后 → 从 PG 全量重建
             List<Object> history = fromJson(entity.getHistory());
             if (!history.isEmpty()) {
                 List<String> jsonList = new ArrayList<>(history.size());
                 for (Object m : history) {
-                    jsonList.add(toJson(m));
+                    // 规范化：纯文本旧格式条目经 toMsgObject 转成 {role,content,time}
+                    jsonList.add(toJson(toMsgObject(m)));
                 }
                 redis.opsForList().rightPushAll(key, jsonList);
                 redis.expire(key, HISTORY_TTL);

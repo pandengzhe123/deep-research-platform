@@ -155,9 +155,12 @@ async def check_rate_limit(user_id: str) -> tuple[bool, int]:
     try:
         bucket = int(time.time()) // 60          # 按分钟分桶
         key = f"rate:research:{user_id}:{bucket}"
-        cnt = await r.incr(key)
-        if cnt == 1:
-            await r.expire(key, 120)             # 跨桶安全：2 分钟后自动清理
+        # INCR + EXPIRE 放同一 pipeline（MULTI/EXEC）原子执行：
+        # 原来分两步，若 INCR 成功后 EXPIRE 失败，key 无 TTL 会永久残留 → 用户被永久限流
+        pipe = r.pipeline()
+        pipe.incr(key)
+        pipe.expire(key, 120)                    # 跨桶安全：2 分钟后自动清理
+        cnt, _ = await pipe.execute()
         remaining = RATE_LIMIT_PER_MINUTE - cnt
         return cnt <= RATE_LIMIT_PER_MINUTE, max(0, remaining)
     except Exception as e:
@@ -166,7 +169,7 @@ async def check_rate_limit(user_id: str) -> tuple[bool, int]:
 
 
 async def record_usage(user_id: str, question: str = "") -> None:
-    """累计用量：用户研究总次数（永久计数）+ 热门主题榜（ZSet）。"""
+    """累计用量：用户研究总次数（永久计数）+ 热门主题榜（ZSet，保留 Top 100）。"""
     from .search import _get_redis
 
     r = _get_redis()
@@ -176,6 +179,8 @@ async def record_usage(user_id: str, question: str = "") -> None:
         await r.incr(f"usage:research:{user_id}")
         if question:
             await r.zincrby("hot:topics", 1, question[:50])
+            await r.zremrangebyrank("hot:topics", 0, -101)   # 只保留 Top 100，防无限增长
+            await r.expire("hot:topics", 30 * 24 * 3600)     # 长期不用自动回收
     except Exception as e:
         log.warning(f"用量统计失败（不影响主流程）: {e}")
 
@@ -349,20 +354,11 @@ async def _run_with_lock(req: "ResearchRequest", cancel: aio.Event) -> AsyncGene
 
     同一会话并发研究 → 报告错乱 + 双倍 token，故第二个请求直接拒绝；
     不同会话/不同用户互不影响（锁粒度为 session_id）。
-    执行前先做每用户限流（Redis INCR 固定窗口）。
+
+    执行顺序：① 会话锁 → ② 限流 → ③ 用量统计 → ④ 执行。
+    限流放在锁之后：被锁拒绝的请求不应消耗配额（否则同会话重复点击会刷爆限额）。
     """
-    # ① 限流：每用户每分钟上限（Redis 不可用时放行）
-    allowed, remaining = await check_rate_limit(req.user_id)
-    if not allowed:
-        yield {"event": "error", "data": json.dumps({
-            "message": f"请求过于频繁，每分钟最多 {RATE_LIMIT_PER_MINUTE} 次研究，请稍后再试",
-        }, ensure_ascii=False)}
-        return
-
-    # ② 用量统计：研究开始即计数（含热门主题榜）
-    await record_usage(req.user_id, req.question)
-
-    # ③ 会话研究锁
+    # ① 会话研究锁（拿不到直接拒绝，不计配额）
     session_id = (req.session_id or "").strip()
     lock_token = ""
     if session_id:
@@ -373,6 +369,17 @@ async def _run_with_lock(req: "ResearchRequest", cancel: aio.Event) -> AsyncGene
             }, ensure_ascii=False)}
             return
     try:
+        # ② 限流：每用户每分钟上限（Redis 不可用时放行）
+        allowed, remaining = await check_rate_limit(req.user_id)
+        if not allowed:
+            yield {"event": "error", "data": json.dumps({
+                "message": f"请求过于频繁，每分钟最多 {RATE_LIMIT_PER_MINUTE} 次研究，请稍后再试",
+            }, ensure_ascii=False)}
+            return
+
+        # ③ 用量统计：真正开始研究才计数（含热门主题榜）
+        await record_usage(req.user_id, req.question)
+
         async for event in run_agent_with_sse(
             question=req.question, level=req.level,
             max_rounds=req.max_rounds, language=req.language,
