@@ -1,0 +1,11 @@
+# 换行符策略
+#
+# Windows 批处理必须用 CRLF：cmd.exe 解析 LF-only 的 .bat 会失效 ——
+# 实测（2026-09-09）LF-only 时 `cd /d "%~dp0"` 不生效，脚本在错误目录执行，
+# 于是 `if not exist node_modules` 判断错、`npm run dev` / `mvn` 找不到项目。
+# 这里强制 .bat/.cmd 检出为 CRLF，避免换机器 / 换 clone 后再次踩到。
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Shell 脚本相反，必须是 LF（CRLF 会让 shebang 失效：bad interpreter）
+*.sh text eol=lf
