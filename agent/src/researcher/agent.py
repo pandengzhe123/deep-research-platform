@@ -24,39 +24,6 @@ def _today_str() -> str:
 # Prompt 模板
 # ============================================================
 
-PLAN_PROMPT = """你是一个研究规划助手。用户会提出一个问题，你需要：
-
-1. 理解用户真正想了解什么
-2. 列出 2-4 个搜索查询词来查找相关信息
-3. 不要追问用户，直接基于已有信息规划搜索
-
-请返回 JSON：
-{{
-    "understanding": "你对用户问题的理解（一句话）",
-    "search_queries": ["查询词1", "查询词2", "查询词3"]
-}}
-
-注意：
-- 搜索词用中英文皆可，优先用与用户问题相同的语言
-- 搜索词应该多样化、覆盖问题的不同方面
-- 返回有效的 JSON，不要加其他内容
-"""
-
-PLAN_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "understanding": {"type": "string"},
-        "search_queries": {
-            "type": "array",
-            "items": {"type": "string"},
-            "minItems": 2,
-            "maxItems": 4,
-        },
-    },
-    "required": ["understanding", "search_queries"],
-    "additionalProperties": False,
-}
-
 REPORT_PROMPT = """你是一个深度研究报告撰写助手。基于用户的问题和搜索结果，生成一份全面深入的报告。每个方面都应充分展开——人们使用深度研究报告，期待完整、详细的答案。
 
 用户问题：{question}
@@ -303,48 +270,6 @@ class FastLevel1Agent:
     async def _kb_search(self, query: str) -> str:
         """异步知识库检索，在线程池中执行避免阻塞事件循环。"""
         return await asyncio.to_thread(lambda: self.kb.search(query, user_id=self.user_id, doc_ids=self.rag_doc_ids or None, mode="full"))
-
-
-
-class Level1Agent:
-    """Level 1: 分析问题 → 规划搜索词 → 搜索 → 生成报告（多次 LLM 调用）"""
-
-    def __init__(self):
-        self.llm = LLMClient()
-        self.search = SearchTool(on_progress=self.emit)
-
-    async def run(self, question: str) -> str:
-        print(f"\n{'='*60}")
-        print(f"  问题: {question}")
-        print(f"{'='*60}")
-
-        # Step 1: 规划搜索词
-        print("\n[1/3] 分析问题，规划搜索...")
-        plan = await self.llm.structured_output(
-            system_prompt=PLAN_PROMPT,
-            user_message=f"用户问题：{question}\n\n今天日期：{_today_str()}",
-            schema=PLAN_SCHEMA,
-        )
-        queries = plan.get("search_queries", [question])
-        print(f"  理解: {plan.get('understanding', '')}")
-        print(f"  搜索词: {queries}")
-
-        # Step 2: 执行搜索
-        print(f"\n[2/3] 搜索中...")
-        search_results = await self.search.search(queries)
-        print(f"  搜索完成")
-
-        # Step 3: 生成报告
-        print(f"\n[3/3] 生成报告...")
-        report = await self.llm.chat(
-            system_prompt="你是专业的深度研究报告撰写助手。",
-            user_message=REPORT_PROMPT.format(
-                question=question,
-                search_results=search_results,
-            ),
-        )
-        return report
-
 
 
 # ============================================================
