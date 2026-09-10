@@ -124,7 +124,7 @@ Every use site started from a concrete defect:
 | Search cache | String + `SET EX 300` | In-process dict: lost on restart, not shared across workers, hand-rolled TTL sweep |
 | Cross-researcher URL dedup | Set + `SADD` (pipelined) | L3/L4 researchers each own a `SearchTool` instance → same URL fetched and summarized repeatedly |
 | Session research lock | `SET NX EX` + Lua release + background renewal | Concurrent research on one session (multi-tab / retry / multi-instance) → corrupted reports + doubled token cost |
-| Context hot/cold tiering | List + `RPUSH`, `DEL` on compression | Every turn read a full PG row (including all report text in JSONB) just to build context |
+| Context hot/cold tiering | List + `RPUSH`, `DEL` on compression | Original defect: every turn read a full PG row (incl. all report text in JSONB) just to build context. ⚠️ **Net benefit is currently ~zero** — `getContextHistory()` still opens with `findById()` (no lazy fields on the entity), so a projection query is needed to actually deliver it; see `docs/memory-system.md` §3.7 |
 | Usage stats / rate limit | `INCR` + `ZINCRBY` + pipelined `EXPIRE` | Per-user quota and abuse protection; 429 + `Retry-After` on limit |
 
 **Design notes**:

@@ -124,7 +124,7 @@ Tavily 优先 → DuckDuckGo 降级 · 跨轮 + 跨研究员 URL 去重（Redis 
 | 搜索缓存 | String + `SET EX 300` | 原内存 dict：重启即丢、多进程不共享、TTL 手写清理 |
 | 跨研究员 URL 去重 | Set + `SADD`（pipeline 批量） | L3/L4 并行研究员各自独立实例 → 同一 URL 重复抓取 + 重复 LLM 摘要 |
 | 会话研究锁 | `SET NX EX` + Lua 释放 + 后台续期 | 同会话并发研究（多标签/超时重试/多实例）→ 报告错乱 + 双倍 token |
-| 上下文冷热分层 | List + `RPUSH` + 压缩时 `DEL` | 每次对话读 PG 整行（含全部报告全文 JSONB），而拼 context 只需 history 消息 |
+| 上下文冷热分层 | List + `RPUSH` + 压缩时 `DEL` | 原缺陷：每轮读 PG 整行（含全部报告全文 JSONB）只为拼 context。⚠️ **净收益目前接近 0** —— `getContextHistory()` 仍以 `findById()` 开场读整行（实体无懒加载），需改投影查询才能兑现，见 `docs/memory-system.md` 3.7 |
 | 用量统计 / 限流 | `INCR` + `ZINCRBY` + pipeline `EXPIRE` | 多用户配额与防刷；超限返回 429 + `Retry-After` |
 
 **设计要点**：
