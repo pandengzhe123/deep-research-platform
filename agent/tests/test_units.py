@@ -515,6 +515,33 @@ def test_kb_presearch_keeps_task_anchor_at_index_zero():
     assert all(m.get("role") != "system" for m in msgs), "messages 中不应出现 system 消息"
 
 
+def test_normalize_queries_string_not_split():
+    """回归：queries 是字符串时必须当成「一条查询」，绝不能逐字符拆开。
+
+    事故现场（2026-09-10）：LLM 违反 schema 传 {"queries": "AI 未来十年发展趋势"}，
+    `for q in queries` 逐字符迭代 → 一条查询变成 40 次单字符搜索，Tavily/DDG 全失败，
+    整轮搜索报销 + 白烧 40 次请求（把额度打空）。
+    """
+    from researcher.search import normalize_queries
+
+    got = normalize_queries("AI 未来十年发展趋势")
+    assert got == ["AI 未来十年发展趋势"], got
+    assert len(got) == 1, f"被拆成了 {len(got)} 条搜索"
+
+
+def test_normalize_queries_types_and_edges():
+    """归一规则：str→[str]、strip、去空与非字符串、非法类型→[]"""
+    from researcher.search import normalize_queries
+
+    assert normalize_queries(["a", "b"]) == ["a", "b"]
+    assert normalize_queries(["  a  ", "b "]) == ["a", "b"], "应 strip"
+    assert normalize_queries(["a", "", "   ", None, 3]) == ["a"], "应去空与非字符串"
+    assert normalize_queries(("a", "b")) == ["a", "b"], "应容忍 tuple"
+    assert normalize_queries(None) == []
+    assert normalize_queries(123) == []
+    assert normalize_queries([]) == []
+
+
 # ============================================================
 # 运行
 # ============================================================
@@ -553,6 +580,8 @@ if __name__ == "__main__":
         test_truncate_context_summary_role_is_user,
         test_truncate_context_drops_dangling_tail,
         test_kb_presearch_keeps_task_anchor_at_index_zero,
+        test_normalize_queries_string_not_split,
+        test_normalize_queries_types_and_edges,
     ]
 
     passed = 0

@@ -93,6 +93,29 @@ def _mark_redis_failure(msg: str, connection_level: bool = True) -> None:
         _redis_disabled_until = time.time() + 60
 
 
+def normalize_queries(queries) -> list[str]:
+    """把 queries 归一成「非空字符串列表」。
+
+    为什么需要（2026-09-10 实测事故）：工具参数由 LLM 生成，schema 声明是数组，
+    但模型偶尔直接给一个字符串 —— `{"queries": "AI 未来十年发展趋势"}`。
+    此时 `for q in queries` 会**逐字符迭代字符串**：一条查询被拆成 40 次单字符搜索，
+    Tavily/DDG 对单字符必然失败 → 整轮搜索报销，还白烧 40 次请求、把额度打空。
+
+    这里做类型归一 + 去空 + strip，让上层不必再关心模型给的是 str 还是 list。
+    """
+    if queries is None:
+        return []
+    if isinstance(queries, str):
+        queries = [queries]
+    elif not isinstance(queries, (list, tuple, set)):
+        return []
+    out: list[str] = []
+    for q in queries:
+        if isinstance(q, str) and q.strip():
+            out.append(q.strip())
+    return out
+
+
 class SearchTool:
     """封装搜索 + 网页抓取 + LLM 摘要的完整流水线。"""
 
@@ -265,6 +288,11 @@ class SearchTool:
         max_results: int = 5,
     ) -> str:
         """执行搜索、抓取网页、摘要，返回格式化结果。"""
+        # 归一 + 兜底：str 会被逐字符迭代（见 normalize_queries 的事故说明）
+        queries = normalize_queries(queries)
+        if not queries:
+            return ("搜索失败：没有收到有效的查询词。"
+                    "请提供 2-4 个不同角度的查询词（数组）后重试。")
         t0 = time.time()
         # 1. 并行搜索（Tavily 优先，失败自动降级 DDG）
         tasks = [
@@ -354,6 +382,9 @@ class SearchTool:
         max_results: int = 3,
     ) -> str:
         """快速搜索 —— 跳过 LLM 摘要，Tavily 优先，失败降级 DDG。"""
+        queries = normalize_queries(queries)
+        if not queries:
+            return "搜索失败：没有收到有效的查询词。"
         t0 = time.time()
         tasks = [
             self._do_search(q, max_results, False)

@@ -14,7 +14,7 @@ from datetime import datetime
 
 from .config import config
 from .llm import LLMClient
-from .search import SearchTool
+from .search import SearchTool, normalize_queries
 
 
 def _today_str() -> str:
@@ -725,13 +725,20 @@ class Level2Agent:
                             messages.append({
                                 "role": "tool",
                                 "tool_call_id": tc.id,
-                                "content": f"JSON 解析失败，请检查参数格式后重试。原始参数: {raw_args[:200]}",
+                                "content": (
+                                    f"参数不是合法 JSON，本轮跳过。原始参数: {raw_args[:200]}\n"
+                                    "请严格按 schema 重新调用，例如："
+                                    '{"queries": ["查询词1", "查询词2"], "max_results": 5}'
+                                    "（queries 必须是字符串数组，不能是单个字符串）"
+                                ),
                             })
                             continue
 
                     try:
                         if name == "search":
-                            queries = args.get("queries", [question])
+                            # 模型偶尔把 queries 给成字符串（违反 schema）→ 归一，
+                            # 否则 for q in queries 会逐字符搜索（见 normalize_queries）
+                            queries = normalize_queries(args.get("queries")) or [question]
                             print(f"  搜索: {queries}")
                             # tool + queries 一起入 trace，轨迹评估靠这个还原工具调用
                             self.emit({"step": "searching", "message": f"搜索: {', '.join(queries)}", "round": round_num, "tool": "search", "tool_args": queries})
