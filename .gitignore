@@ -65,3 +65,9 @@ skill-mcp-learning/
 
 # uv 本地缓存（沙箱下重定向到工作区）
 .uv_cache/
+
+# 数据库备份（含真实会话数据，绝不入库）
+.backup/
+
+# Chroma 运行时数据（根目录，启动时可能被创建）
+chroma_data/
