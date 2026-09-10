@@ -203,7 +203,7 @@ python -m src.researcher.evaluation.run_regression --mode format     # 2min
 
 ```
 agent/src/researcher/
-├── agent.py     Four-level Agent + 19 Prompts (~1,450 lines)
+├── agent.py     Four-level Agent (Fast L1 / L2 / L3 / L4) + 19 Prompts (~1,390 lines)
 ├── kb.py        Chroma + 5 retrieval modes + embedding (~455 lines)
 ├── server.py    FastAPI + SSE + session lock / rate limit / usage (~510 lines)
 ├── search.py    Tavily + DDG + Redis cache + cross-instance dedup (~440 lines)

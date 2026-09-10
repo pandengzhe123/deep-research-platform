@@ -203,7 +203,7 @@ python -m src.researcher.evaluation.run_regression --mode format     # 格式层
 
 ```
 agent/src/researcher/
-├── agent.py           四级 Agent + 19 Prompt（~1,450 行）
+├── agent.py           四级 Agent（L1 Fast / L2 / L3 / L4）+ 19 Prompt（~1,390 行）
 ├── kb.py              Chroma + 5 种检索模式 + embedding（~455 行）
 ├── server.py          FastAPI + SSE + 会话锁/限流/用量（~510 行）
 ├── search.py          Tavily + DDG + Redis 缓存 + 跨实例去重（~440 行）
