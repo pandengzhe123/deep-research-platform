@@ -59,10 +59,86 @@ public class SessionService {
     private final WebClient webClient;
     private final StringRedisTemplate redis;
 
+    /**
+     * 同步失败过的会话 —— Redis 恢复后必须补删其热层 key（B49）。
+     *
+     * 故障注入实测（2026-09-10）：Redis 停机 40s 期间完成一次研究 →
+     * `syncHistoryCache` 的 catch 里虽然调了 `redis.delete(key)`，但**删除本身也依赖 Redis**
+     * → 旧 key 原样留存；Redis 重启后从 RDB 恢复停机那一刻的快照 →
+     * 「PG 6 条 / Redis 4 条」分叉，而 `loadHistory` 只判断「存在且可解析」→
+     * 直接把过期列表当有效镜像用，**下次对话静默缺少停机期间的两轮问答**。
+     *
+     * 所以把「同步失败」这个事实记在进程内，等 Redis 一回来就把这些 key 删掉，
+     * 让下次读取走 PG 重建（正好是设计好的恢复路径）。
+     */
+    private final Set<String> pendingEvict = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** 进程启动后是否已做过一次热层清空；Redis 不可用时保持 false，等下一轮补做。 */
+    private volatile boolean hotLayerPurged = false;
+
     public SessionService(SessionRepository repo, WebClient agentWebClient, StringRedisTemplate redis) {
         this.repo = repo;
         this.webClient = agentWebClient;
         this.redis = redis;
+    }
+
+    /**
+     * 热层自愈维护（每 30s）—— 两道防线（B49）。
+     *
+     * ① **启动即清空热层**：进程崩溃可能停在「PG 已写、Redis 未同步」之间，
+     *    这种残留没有任何进程内记录可查；热层只是缓存，清空代价 = 每个活跃会话
+     *    多一次 PG 重建读。宁可重建，不留可疑镜像。
+     * ② **补删同步失败的 key**：覆盖「Redis 停机期间有写入」这个已复现场景
+     *    （含"停机 → 恢复 → 又被成功追加过"的交错情况）。
+     *
+     * 残留窗口（诚实记录）：进程崩溃后、启动清空前的那几秒。彻底方案是读侧版本校验
+     * （PG `updated_at` 与 Redis 副本比对），与 TODO「R4-兑现」的投影查询一起做更划算。
+     */
+    @org.springframework.scheduling.annotation.Scheduled(fixedDelay = 10_000)
+    public void maintainHotLayer() {
+        if (!hotLayerPurged) {
+            long n = purgeHistoryKeys();
+            if (n < 0) return;              // Redis 还不可用 → 下一轮再试
+            hotLayerPurged = true;
+            if (n > 0) log.warn("启动清空热层: 删除 {} 个 history key（进程重启可能留下未同步的镜像）", n);
+        }
+        if (pendingEvict.isEmpty()) return;
+
+        // 遍历全部待失效会话：单个失败不中断整轮（原来 return 会让后面的会话一直排不上）
+        for (String sid : new ArrayList<>(pendingEvict)) {
+            try {
+                redis.delete(HISTORY_KEY_PREFIX + sid);
+                pendingEvict.remove(sid);
+                log.info("补删热层（此前同步失败，已失效）: session={}", sid);
+            } catch (Exception e) {
+                log.debug("补删热层失败，下一轮重试: session={}, err={}", sid, e.getMessage());
+            }
+        }
+    }
+
+    /** 用 SCAN 删除全部热层 key（不用 KEYS，避免阻塞 Redis）。返回删除数；Redis 不可用返回 -1。 */
+    private long purgeHistoryKeys() {
+        try {
+            List<String> keys = new ArrayList<>();
+            org.springframework.data.redis.core.ScanOptions opts =
+                    org.springframework.data.redis.core.ScanOptions.scanOptions()
+                            .match(HISTORY_KEY_PREFIX + "*").count(500).build();
+            redis.execute((org.springframework.data.redis.core.RedisCallback<Void>) conn -> {
+                try (org.springframework.data.redis.core.Cursor<byte[]> cursor =
+                             conn.keyCommands().scan(opts)) {
+                    while (cursor.hasNext()) {
+                        keys.add(new String(cursor.next(), java.nio.charset.StandardCharsets.UTF_8));
+                    }
+                }
+                return null;
+            });
+            if (keys.isEmpty()) return 0;
+            Long deleted = redis.delete(keys);
+            return deleted != null ? deleted : 0;
+        } catch (Exception e) {
+            log.debug("热层清空跳过（Redis 不可用）: {}", e.getMessage());
+            return -1;
+        }
     }
 
     /**
@@ -153,11 +229,14 @@ public class SessionService {
             }
         } catch (Exception e) {
             log.warn("Redis 同步历史失败，丢弃热层（下次读重建）: session={}, err={}", sessionId, e.getMessage());
-            // 宁可下次从 PG 重建，也不要留下「PG 有、Redis 没有」的脏镜像
+            // 标记待失效（B49）：停机时下面这句 delete 同样会失败，旧 key 会原样留存，
+            // Redis 重启后会变成「过期镜像」被 loadHistory 当成有效数据用。
+            // 交给 maintainHotLayer() 在 Redis 恢复后补删。
+            pendingEvict.add(sessionId);
             try {
                 redis.delete(key);
             } catch (Exception ignore) {
-                // best-effort，忽略
+                // best-effort，忽略（真正的保证在 pendingEvict）
             }
         }
     }
@@ -169,40 +248,61 @@ public class SessionService {
     @SuppressWarnings("unchecked")
     private List<Object> loadHistory(String sessionId, SessionEntity entity) {
         String key = HISTORY_KEY_PREFIX + sessionId;
-        try {
-            List<String> raw = redis.opsForList().range(key, 0, -1);
-            if (raw != null && !raw.isEmpty()) {
-                try {
-                    List<Object> msgs = new ArrayList<>(raw.size());
-                    for (String s : raw) {
-                        msgs.add(objectMapper.readValue(s, Map.class));
+
+        // 该会话此前同步失败过（pendingEvict）→ 热层内容不可信，直接走 PG 重建（B49）。
+        // 这一步是**读路径上的即时防线**：不等定时任务，从写入失败那一刻起就不再信任这份热层。
+        // （多实例场景仍靠 maintainHotLayer 真删 key，否则别的实例不知道它脏了。）
+        boolean dirty = pendingEvict.contains(sessionId);
+
+        if (!dirty) {
+            try {
+                List<String> raw = redis.opsForList().range(key, 0, -1);
+                if (raw != null && !raw.isEmpty()) {
+                    try {
+                        List<Object> msgs = new ArrayList<>(raw.size());
+                        for (String s : raw) {
+                            msgs.add(objectMapper.readValue(s, Map.class));
+                        }
+                        redis.expire(key, HISTORY_TTL);   // 命中即续期：活跃会话不应被空闲回收（B23）
+                        return msgs;
+                    } catch (Exception parseErr) {
+                        // 热层内容损坏（如旧格式纯文本条目 "用户: xxx" 无法反序列化为 Map）
+                        // → 丢弃该 key，走下面从 PG 重建，避免每次读都异常回退、热层永不生效
+                        log.warn("Redis 热层内容不可解析，丢弃重建: session={}, err={}", sessionId, parseErr.getMessage());
+                        redis.delete(key);
                     }
-                    redis.expire(key, HISTORY_TTL);   // 命中即续期：活跃会话不应被空闲回收（B23）
-                    return msgs;
-                } catch (Exception parseErr) {
-                    // 热层内容损坏（如旧格式纯文本条目 "用户: xxx" 无法反序列化为 Map）
-                    // → 丢弃该 key，走下面从 PG 重建，避免每次读都异常回退、热层永不生效
-                    log.warn("Redis 热层内容不可解析，丢弃重建: session={}, err={}", sessionId, parseErr.getMessage());
-                    redis.delete(key);
                 }
+            } catch (Exception e) {
+                log.warn("Redis 读取历史失败，回退 PG: session={}, err={}", sessionId, e.getMessage());
+                return fromJson(entity.getHistory());
             }
-            // 冷启动 / 热层过期 / 内容损坏 / 压缩后 → 从 PG 全量重建
-            List<Object> history = fromJson(entity.getHistory());
-            if (!history.isEmpty()) {
-                List<String> jsonList = new ArrayList<>(history.size());
-                for (Object m : history) {
-                    // 规范化：纯文本旧格式条目经 toMsgObject 转成 {role,content,time}
-                    jsonList.add(toJson(toMsgObject(m)));
-                }
-                redis.opsForList().rightPushAll(key, jsonList);
-                redis.expire(key, HISTORY_TTL);
-                log.info("Redis 重建会话历史: session={}, {} 条", sessionId, jsonList.size());
-            }
-            return history;
-        } catch (Exception e) {
-            log.warn("Redis 读取历史失败，回退 PG: session={}, err={}", sessionId, e.getMessage());
-            return fromJson(entity.getHistory());
         }
+
+        // 冷启动 / 热层过期 / 内容损坏 / 压缩后 / 曾同步失败 → 从 PG 全量重建
+        List<Object> history = fromJson(entity.getHistory());
+        if (history.isEmpty()) {
+            return history;
+        }
+        List<String> jsonList = new ArrayList<>(history.size());
+        for (Object m : history) {
+            // 规范化：纯文本旧格式条目经 toMsgObject 转成 {role,content,time}
+            jsonList.add(toJson(toMsgObject(m)));
+        }
+        try {
+            if (dirty) {
+                // 先清掉那份过期镜像，再重建 —— 顺序不能反，否则可能留下「旧+新」混合列表
+                redis.delete(key);
+            }
+            redis.opsForList().rightPushAll(key, jsonList);
+            redis.expire(key, HISTORY_TTL);
+            pendingEvict.remove(sessionId);      // 已重建为完整镜像 → 解除不可信标记
+            log.info("Redis 重建会话历史: session={}, {} 条{}", sessionId, jsonList.size(),
+                    dirty ? "（此前同步失败，已失效重建）" : "");
+        } catch (Exception e) {
+            // 重建失败 → 保留标记，下次读取继续走 PG（不影响本次返回）
+            log.warn("Redis 重建历史失败（标记保留，下次再试）: session={}, err={}", sessionId, e.getMessage());
+        }
+        return history;
     }
 
     /**
