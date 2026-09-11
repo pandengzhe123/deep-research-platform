@@ -181,7 +181,7 @@ python -m src.researcher.evaluation.run_regression --mode format     # 格式层
 
 | 项 | 内容 |
 |---|---|
-| 代码审查 | 一次以「找 bug」为目标的三方交叉审查（Python / Java / Vue），产出 **43 项**缺陷并**全部修复**：Redis 客户端状态机、URL 去重语义、冷热层一致性、越权防护、Netty 事件循环阻塞、分布式锁续期、`tool_calls` 协议不变量、错误码语义、前端缓存跨账号泄漏 |
+| 代码审查 | 一次以「找 bug」为目标的三方交叉审查（Python / Java / Vue），产出 **49 项**缺陷（B1–B49）并**全部修复**：Redis 客户端状态机、URL 去重语义、冷热层一致性、越权防护、Netty 事件循环阻塞、分布式锁续期、`tool_calls` 协议不变量、错误码语义、前端缓存跨账号泄漏 |
 | 单元 / 集成测试 | `test_units.py`（28 例：压缩配对、悬空 `tool_calls` 清理、KB 注入不变量）+ `test_redis_cache.py`（19 例：缓存 TTL/降级、跨实例去重、锁互斥/续期、限流/错误码）+ `test_quality.py` |
 | 一致性验证 | 冷热层「先 PG 后 Redis」+ Lua 原子追加 + 压缩 `DEL` 重建；Redis 故障全链路降级 |
 | 部署 | `docker compose up` 一键起 前端 / 网关 / Agent / PostgreSQL / Redis |
