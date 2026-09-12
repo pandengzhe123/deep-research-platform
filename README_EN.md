@@ -181,7 +181,7 @@ python -m src.researcher.evaluation.run_regression --mode format     # 2min
 
 | Item | Detail |
 |---|---|
-| Code review | A dedicated "find the bugs" cross-review of Python / Java / Vue produced **49 defects (B1-B49), all fixed**: Redis client state machine, URL-dedup semantics, hot/cold-layer consistency, authorization checks, blocking calls on the Netty event loop, distributed-lock renewal, `tool_calls` protocol invariants, error-code semantics, cross-account frontend cache leak |
+| Code review | A dedicated "find the bugs" cross-review of Python / Java / Vue accounts for the bulk of these defects — **43 in the first round (B1-B43)**; the remaining **6** came from later doc cross-checking, running the system on a different machine, and fault injection (B49 "a write during Redis downtime resurrects as a stale mirror" was found by fault injection). **49 in total, all fixed**: Redis client state machine, URL-dedup semantics, hot/cold-layer consistency, authorization checks, blocking calls on the Netty event loop, distributed-lock renewal, `tool_calls` protocol invariants, error-code semantics, cross-account frontend cache leak |
 | Unit / integration tests | `test_units.py` (28 cases: compression pairing, dangling `tool_calls` cleanup, KB-injection invariant) + `test_redis_cache.py` (19 cases: cache TTL/degradation, cross-instance dedup, lock exclusion/renewal, rate limit/error codes) + `test_quality.py` |
 | Consistency verification | "PG first, Redis second" + Lua atomic append + `DEL`-and-rebuild on compression; full-stack degradation when Redis is down |
 | Deployment | `docker compose up` brings up frontend / gateway / agent / PostgreSQL / Redis |
