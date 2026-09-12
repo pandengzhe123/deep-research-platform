@@ -312,6 +312,11 @@ async def run_agent_with_sse(
                     "total_prompt_tokens": trace._total_prompt_tokens,
                     "total_completion_tokens": trace._total_completion_tokens,
                     "search_calls": trace._search_calls,
+                    # 成本归因：prompt 缓存命中部分按折扣价计费，命中率决定真实成本。
+                    # 随 done 事件上报 → 网关落到 sessions.token_usage(JSONB) → 前端/评测可直接看。
+                    "cache_hit_tokens": trace._total_cache_hit_tokens,
+                    "billable_prompt_tokens": trace._total_prompt_tokens - trace._total_cache_hit_tokens,
+                    "cache_hit_rate": round(trace.cache_hit_rate, 4),
                 }
                 await queue.put({"type": "done", "report": result, "tokenUsage": token_summary})
             except aio.CancelledError:
