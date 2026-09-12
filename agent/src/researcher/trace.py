@@ -42,6 +42,12 @@ class TraceRun:
         self._search_errors = 0
         self._total_prompt_tokens = 0
         self._total_completion_tokens = 0
+        # Prompt 缓存命中（供应商侧前缀缓存）：命中部分按折扣价计费。
+        # 实测（89 份 trace / 925 次调用）总命中率 59.7%，但 L4 只有 52%，
+        # 而按「每次调用复用上一次 prompt」推算上限约 91% —— 缺口来自上下文前缀不稳定
+        # （压缩改变前缀、研究员之间上下文切换、最终报告重新拼装）。
+        # 只累加不汇总的话，「这次为什么贵」只能靠翻 JSONL，故提到汇总层。
+        self._total_cache_hit_tokens = 0
         self._rounds_completed = 0
         self._query_history: list[str] = []  # 轨迹评估：历史 query，用于循环检测
         self._max_query_similarity = 0.0     # 本轮 query 与历史的最大相似度
@@ -83,6 +89,10 @@ class TraceRun:
                 "search_errors": self._search_errors,
                 "total_prompt_tokens": self._total_prompt_tokens,
                 "total_completion_tokens": self._total_completion_tokens,
+                # 缓存命中：命中部分按折扣价计费，全价部分才是真实成本大头
+                "total_cache_hit_tokens": self._total_cache_hit_tokens,
+                "billable_prompt_tokens": self._total_prompt_tokens - self._total_cache_hit_tokens,
+                "cache_hit_rate": round(self.cache_hit_rate, 4),
                 "rounds_completed": self._rounds_completed,
                 "max_query_similarity": round(self._max_query_similarity, 3),  # 循环检测指标
             },
@@ -117,6 +127,7 @@ class TraceRun:
         if usage:
             self._total_prompt_tokens += usage.get("prompt_tokens", 0)
             self._total_completion_tokens += usage.get("completion_tokens", 0)
+            self._total_cache_hit_tokens += self._cache_hit_of(usage)
 
         self._llm_calls += 1
         if not success:
@@ -242,6 +253,33 @@ class TraceRun:
     # 内部方法
     # ================================================================
 
+    @property
+    def cache_hit_rate(self) -> float:
+        """prompt 缓存命中率（0.0–1.0）。没有 prompt 时返回 0.0。"""
+        if self._total_prompt_tokens <= 0:
+            return 0.0
+        return self._total_cache_hit_tokens / self._total_prompt_tokens
+
+    @staticmethod
+    def _cache_hit_of(usage: dict) -> int:
+        """从一次调用的 usage 里取「prompt 缓存命中」token 数。
+
+        不同供应商字段名不同：OpenAI 风格放在 prompt_tokens_details.cached_tokens，
+        DashScope/Qwen 另有顶层的 prompt_cache_hit_tokens（本项目实测用的是这个）。
+        两者都取不到就按 0 处理（视为未命中），任何异常也不影响主流程。
+        """
+        if not isinstance(usage, dict):
+            return 0
+        hit = usage.get("prompt_cache_hit_tokens")
+        if hit is None:
+            details = usage.get("prompt_tokens_details")
+            if isinstance(details, dict):
+                hit = details.get("cached_tokens")
+        try:
+            return int(hit or 0)
+        except (TypeError, ValueError):
+            return 0
+
     def _append(self, event: dict):
         """线程安全地追加事件到内存缓冲。"""
         line = json.dumps(event, ensure_ascii=False)
@@ -263,4 +301,6 @@ class TraceRun:
         print(f"     搜索调用 {self._search_calls} 次 (失败 {self._search_errors})")
         print(f"     总 prompt tokens: {self._total_prompt_tokens}")
         print(f"     总 completion tokens: {self._total_completion_tokens}")
+        print(f"     prompt 缓存命中: {self._total_cache_hit_tokens} "
+              f"({self.cache_hit_rate:.1%})，全价计费 {self._total_prompt_tokens - self._total_cache_hit_tokens}")
         print(f"     完成轮次: {self._rounds_completed}")
