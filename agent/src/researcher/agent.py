@@ -98,8 +98,11 @@ CLARIFY_SCHEMA = {
 class ClarifyHelper:
     """澄清助手：研究开始前判断是否需要追问。"""
 
-    def __init__(self):
+    def __init__(self, trace=None):
         self.llm = LLMClient()
+        # 澄清也是一次真实的 LLM 调用（有 token 成本）→ 必须进 trace。
+        # 早先它建在 TraceRun 之前，天然拿不到 trace，成本归因里就少了这一块。
+        self.llm.trace = trace
 
     async def check(self, question: str) -> dict:
         return await self.llm.structured_output(

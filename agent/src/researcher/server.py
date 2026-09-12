@@ -256,11 +256,23 @@ async def run_agent_with_sse(
         except aio.QueueFull:
             pass
 
+    # ---- 先创建 TraceRun（必须早于澄清）----
+    # 澄清本身是一次真实的 LLM 调用（有 token 成本）；原来它创建在 TraceRun 之前，
+    # 导致澄清调用的 token 不进 trace，成本归因少一块。放在 try 外还顺带避免了
+    # 「澄清阶段抛异常时 except 里 trace 尚未定义」。
+    reports_dir = Path(__file__).parent.parent.parent / "reports" / datetime.now().strftime("%Y%m%d_%H%M%S")
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    trace = TraceRun(
+        question=question, output_dir=str(reports_dir),
+        level=level, model=config.llm_model, search_mode=search_mode,
+    )
+    await trace.__aenter__()
+
     try:
         # ---- 澄清（Level 2/3/4 默认开启） ----
         if level != 1:
             full_context = context + "\n\n---\n用户最新消息：" + question if context else question
-            clarify = ClarifyHelper()
+            clarify = ClarifyHelper(trace=trace)
             check = await clarify.check(full_context)
             if check.get("need_clarify"):
                 yield {"event": "status", "data": json.dumps({
@@ -271,20 +283,12 @@ async def run_agent_with_sse(
                     "report": "", "language": language,
                     "need_clarify": True, "question": check.get("question", ""),
                 })}
+                await trace.__aexit__(None, None, None)   # 澄清轮也要落 trace（记录澄清调用成本）
                 return
             on_progress({"step": "planned", "message": f"需求明确: {check.get('summary', '')}"})
 
-        # ---- 创建 TraceRun + Agent（走 agent.py 的真 Agent） ----
+        # ---- 创建 Agent（走 agent.py 的真 Agent） ----
         # 从 search_mode 推导 kb_enabled（前端不再传 kb_enabled 旧字段）
-        reports_dir = Path(__file__).parent.parent.parent / "reports" / datetime.now().strftime("%Y%m%d_%H%M%S")
-        reports_dir.mkdir(parents=True, exist_ok=True)
-
-        trace = TraceRun(
-            question=question, output_dir=str(reports_dir),
-            level=level, model=config.llm_model, search_mode=search_mode,
-        )
-        await trace.__aenter__()
-
         _kb = kb_enabled or (search_mode in ("hybrid", "rag_only"))
         _kw = dict(on_progress=on_progress, kb_enabled=_kb, user_id=user_id, rag_doc_ids=rag_doc_ids, search_mode=search_mode, trace=trace)
         if level == 1:

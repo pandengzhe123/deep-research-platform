@@ -119,10 +119,28 @@ def normalize_queries(queries) -> list[str]:
 class SearchTool:
     """封装搜索 + 网页抓取 + LLM 摘要的完整流水线。"""
 
+    @property
+    def trace(self):
+        """TraceRun 实例。用属性而非普通字段，是为了赋值时同步给内部 LLMClient。
+
+        为什么必须同步（实测的成本归因缺口）：网页摘要走的是 `self.llm.structured_output`，
+        而 `record_llm` 只在 `LLMClient.trace` 有值时才写。原来只设了 `SearchTool.trace`
+        （供 record_search 用）→ **每次搜索的批量摘要调用完全没进 trace**，
+        而它是"全新网页内容 + 一次性 prompt"，单次 prompt 可达上万 token。
+        """
+        return self._trace
+
+    @trace.setter
+    def trace(self, value):
+        self._trace = value
+        llm = getattr(self, "llm", None)
+        if llm is not None:
+            llm.trace = value
+
     def __init__(self, on_progress=None, dedup_scope: str | None = None):
         self.tavily = AsyncTavilyClient(api_key=config.tavily_api_key)
         self.llm = LLMClient()
-        self.trace = None  # TraceRun 实例，由 Agent 在构造后设置
+        self.trace = None  # TraceRun 实例，由 Agent 在构造后设置（会同步给 self.llm）
         self._seen_urls: set[str] = set()  # 本地 URL 去重（Redis 不可用时的降级路径）
         self._dedup_scope = dedup_scope  # 一次研究的共享去重域（L3/L4 下多个研究员共用）
         self._cache_ttl = int(os.getenv("SEARCH_CACHE_TTL", "300"))  # 缓存秒数，默认 5 分钟
