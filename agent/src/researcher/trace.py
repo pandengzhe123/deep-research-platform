@@ -264,8 +264,9 @@ class TraceRun:
     def _cache_hit_of(usage: dict) -> int:
         """从一次调用的 usage 里取「prompt 缓存命中」token 数。
 
-        不同供应商字段名不同：OpenAI 风格放在 prompt_tokens_details.cached_tokens，
-        DashScope/Qwen 另有顶层的 prompt_cache_hit_tokens（本项目实测用的是这个）。
+        不同供应商字段名不同：本项目实测的模型是 deepseek-v4-flash，
+        它返回顶层的 prompt_cache_hit_tokens / prompt_cache_miss_tokens；
+        OpenAI 风格则放在 prompt_tokens_details.cached_tokens。
         两者都取不到就按 0 处理（视为未命中），任何异常也不影响主流程。
         """
         if not isinstance(usage, dict):
