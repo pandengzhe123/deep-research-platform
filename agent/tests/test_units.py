@@ -4,6 +4,7 @@
 """
 
 import os
+import random
 import re
 import shutil
 import sys
@@ -426,6 +427,204 @@ def test_drop_dangling_tail_keeps_complete():
     assert _drop_dangling_tail(msgs) == msgs
 
 
+# ============================================================
+# 上下文保护 —— 差分对拍与退化输入
+# 手工构造的用例只能覆盖「想得到的」形状；切点逻辑一旦退化（比如差分数组
+# 边界写错），漏掉的往往正是想不到的形状。这里用暴力参考实现对拍。
+# ============================================================
+
+def _pairing_ok(messages):
+    """独立实现的协议检查器（刻意不复用被测代码的差分思路）。
+
+    返回 (是否合法, 原因)。合法性 = 每个 assistant 的 tool_calls 都有响应，
+    且每个 tool 都能找到它的 assistant。
+    """
+    need = {}
+    for idx, m in enumerate(messages):
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            for tc in m["tool_calls"]:
+                need[tc["id"]] = idx
+        elif m.get("role") == "tool":
+            tid = m.get("tool_call_id")
+            if tid not in need:
+                return False, f"孤立 tool {tid!r} @{idx}"
+            del need[tid]
+    if need:
+        return False, f"悬空 tool_calls {sorted(need)}"
+    return True, ""
+
+
+def _true_window(msgs, s):
+    """_truncate_context 实际保留的东西：messages[0] 单独保留 + messages[s:]。
+
+    只检查 msgs[s:] 会把「其 assistant 恰好是 messages[0]」的 tool 误判成孤立。
+    """
+    return [msgs[0]] + msgs[s:]
+
+
+def _bf_safe_start(msgs, keep):
+    """暴力参考：最大的合法切点 s ∈ [1, max(1,n-keep)]；无解返回 None。
+
+    O(n²)，只用于对拍，不用于生产。
+    """
+    start0 = max(1, len(msgs) - keep)
+    for s in range(start0, 0, -1):
+        if _pairing_ok(_true_window(msgs, s))[0]:
+            return s
+    return None
+
+
+def _gen_wellformed(rnd, defect=0.0):
+    """生成对话：默认每个 assistant 的 tool_calls 都被紧随其后的 tool 全部应答。
+
+    defect=0  → 良构（等价于生产中的稳态：每轮追加完整的 tool 组）
+    defect>0  → 按概率注入真实故障：中断的组、孤立 tool
+    """
+    msgs = [_msg("user", "任务锚点")]
+    for i in range(rnd.randint(1, 8)):
+        if rnd.random() < 0.30:
+            msgs.append(_msg("assistant", "思考文本"))
+            continue
+        k = rnd.randint(1, 3)
+        msgs.append(_msg("assistant", "", tool_calls=[_tc(f"g{i}_{j}") for j in range(k)]))
+        n_resp = k if rnd.random() >= defect else rnd.randint(0, max(0, k - 1))
+        for j in range(n_resp):
+            msgs.append(_msg("tool", "结果", tool_call_id=f"g{i}_{j}"))
+        if rnd.random() < defect * 0.5:
+            msgs.append(_msg("tool", "结果", tool_call_id=f"orphan{i}"))
+    return msgs
+
+
+def test_safe_window_start_matches_bruteforce_wellformed():
+    """差分对拍（良构 3000 例）：切点必须与暴力解一致、协议合法、且最小。
+
+    三个性质缺一不可：
+      一致   —— 结果是暴力解的同一个 s
+      合法   —— 用独立检查器验真实窗口 [messages[0]] + messages[s:]
+      最小   —— 结果与理想起点之间不存在合法 s（不得比必要多丢历史）
+    良构输入下「无解」应恒为 0：否则说明切点算法存在无法处理的常态形状。
+    """
+    rnd = random.Random(20260913)
+    nosol = 0
+    for _ in range(3000):
+        msgs = _gen_wellformed(rnd, defect=0.0)
+        keep = rnd.randint(1, 8)
+        got = _safe_window_start(msgs, keep)
+        want = _bf_safe_start(msgs, keep)
+        roles = [m.get("role") for m in msgs]
+
+        assert want is not None, f"良构输入竟无合法切点: keep={keep} roles={roles}"
+        assert got == want, f"与暴力解不一致: keep={keep} got={got} want={want} roles={roles}"
+        ok, why = _pairing_ok(_true_window(msgs, got))
+        assert ok, f"结果协议非法: keep={keep} s={got} {why} roles={roles}"
+        start0 = max(1, len(msgs) - keep)
+        for s in range(got + 1, start0 + 1):
+            assert not _pairing_ok(_true_window(msgs, s))[0], (
+                f"不最小：s={s} 也合法，却丢了更多历史 (got={got}) keep={keep} roles={roles}"
+            )
+    assert nosol == 0
+
+
+def test_safe_window_start_matches_bruteforce_with_defects():
+    """差分对拍（注入缺陷 3000 例）：残缺组/孤立 tool 下，只要有解就必须一致且合法。
+
+    缺陷输入可能真的「无解」（任何切点都会切断某组配对）——这是上游异常残留，
+    生产由 _drop_dangling_tail 在出口处清理尾部。本测试只约束「有解时」的行为，
+    并记录无解比例，防止未来改动悄悄放大这一比例。
+    """
+    rnd = random.Random(20260913)
+    nosol = 0
+    checked = 0
+    for _ in range(3000):
+        msgs = _gen_wellformed(rnd, defect=0.25)
+        keep = rnd.randint(1, 8)
+        got = _safe_window_start(msgs, keep)
+        want = _bf_safe_start(msgs, keep)
+        roles = [m.get("role") for m in msgs]
+
+        if want is None:
+            nosol += 1
+            continue
+        checked += 1
+        assert got == want, f"与暴力解不一致: keep={keep} got={got} want={want} roles={roles}"
+        ok, why = _pairing_ok(_true_window(msgs, got))
+        assert ok, f"结果协议非法: keep={keep} s={got} {why} roles={roles}"
+
+    assert checked > 0, "对拍未真正执行"
+    assert nosol < 3000 * 0.6, f"无解比例异常膨胀: {nosol}/3000"
+
+
+def _tail_defect(rnd, body):
+    """构造上游异常残留在**尾部**的三种故障（真实发生位置）。
+
+    孤立 tool 必须先确保它自成一段尾部 tool 游程 —— 若它紧跟在「完整组的 tool 响应」
+    后面，两者会连成同一段游程，落进 _drop_dangling_tail 的一个已知缺口（见文件末尾
+    「已知缺口」注释）：该分支只校验 asked ⊆ answered，不校验 answered 中的多余项。
+    这里用一条无 tool_calls 的 assistant 把游程隔开，使测试只覆盖实现真正承诺的契约。
+    """
+    kind = rnd.randint(0, 2)
+    if kind == 0:      # 悬空 assistant：有 tool_calls，无任何响应
+        return [_msg("assistant", "", tool_calls=[_tc("tail_d")])]
+    if kind == 1:      # 残缺组：2 个 tool_calls 只回 1 条
+        return [_msg("assistant", "", tool_calls=[_tc("tail_p1"), _tc("tail_p2")]),
+                _msg("tool", "结果", tool_call_id="tail_p1")]
+    # 孤立 tool：对应 assistant 已被切掉
+    sep = [] if (not body or body[-1].get("role") != "tool") else [_msg("assistant", "分隔")]
+    return sep + [_msg("tool", "结果", tool_call_id="tail_orphan")]
+
+
+def test_drop_dangling_tail_is_idempotent():
+    """幂等：清理过的数组再清理一次必须不变（每轮都调用，不该反复抖动）。
+
+    注意不断言「全数组配对完整」——按设计中部配对由 _safe_window_start 保证，
+    _drop_dangling_tail 只负责尾部。这里刻意混入中部孤立 tool 来验证它不会
+    越权改动中部内容，同时保持幂等。
+    """
+    rnd = random.Random(7)
+    for _ in range(500):
+        msgs = _gen_wellformed(rnd, defect=0.3)
+        once = _drop_dangling_tail(list(msgs))
+        twice = _drop_dangling_tail(list(once))
+        assert once == twice, "非幂等"
+
+
+def test_drop_dangling_tail_cleans_tail_defects():
+    """良构主体 + 尾部故障 → 清理后全数组配对必须完整。
+
+    这是生产真实形态：正常轮次累积出完整对话，某一轮被上游异常（工具超时、
+    任务取消、输出截断）打断，在尾部留下残缺分组。清理不干净会直接 400。
+    """
+    rnd = random.Random(11)
+    for _ in range(500):
+        body = _gen_wellformed(rnd, defect=0.0)
+        msgs = body + _tail_defect(rnd, body)
+        out = _drop_dangling_tail(list(msgs))
+        _assert_pairing_complete(out)
+        assert out, "不应删空（主体是良构的）"
+        assert out[0] is msgs[0], "首条（任务锚点）被误删"
+
+
+def test_drop_dangling_tail_degenerate_inputs():
+    """退化输入不得抛异常，且不得产出协议非法数组。
+
+    「全 tool」「只有悬空 assistant」会整体删空——这是正确的：没有对应的
+    assistant 就一条都不该留；返回空数组由上层决定如何处理。
+    """
+    cases = {
+        "空": ([], 0),
+        "仅 user": ([_msg("user", "q")], 1),
+        "全 tool": ([_msg("tool", "r", tool_call_id="x")], 0),
+        "只有悬空 assistant": ([_msg("assistant", "", tool_calls=[_tc("a")])], 0),
+        "完整组": ([_msg("user", "q"),
+                    _msg("assistant", "", tool_calls=[_tc("a")]),
+                    _msg("tool", "r", tool_call_id="a")], 3),
+    }
+    for name, (msgs, want_len) in cases.items():
+        out = _drop_dangling_tail(list(msgs))
+        assert len(out) == want_len, f"{name}: 期望 {want_len} 条，实际 {len(out)}"
+        _assert_pairing_complete(out)
+
+
 def test_truncate_context_summary_role_is_user():
     """B32：压缩摘要必须是 user 角色（对话中段的 system 会被部分后端拒绝）"""
     class FakeLLM:
@@ -543,6 +742,45 @@ def test_normalize_queries_types_and_edges():
 
 
 # ============================================================
+# 已知缺口（离线探针 2026-09-13 发现，尚未修复，故不作为断言）
+# ============================================================
+#
+# 缺口 1：_drop_dangling_tail 不清理混进完整组的孤立 tool
+#
+#   最小复现（尾部 tool 游程把两者连成一段）：
+#       [..., assistant(tool_calls=[g]), tool(g), tool(orphan)]
+#   i 回退到 assistant(g)，asked={g} ⊆ answered={g, orphan} → 判定完整、原样返回，
+#   orphan 存活 → 下一轮 chat_with_tools 400 invalid_request_error。
+#   该分支只校验 asked ⊆ answered，未校验 answered 中是否存在多余项。
+#
+# 缺口 2：_truncate_context 不保证把总量压到 max_chars 以下
+#
+#   a) 丢弃单位是「消息条数」(keep=5) 而非「体积」。一条 tool 结果可达
+#      MAX_RESULTS_CHARS(300000)，即整个 MAX_HISTORY_CHARS(1000000) 的 30%，
+#      保留 5 条巨型消息必然超标。实测：600K x 5 轮 → 3,600,986 压到 2,400,692
+#      仍超 1,400,692。
+#   b) _safe_window_start 返回 1 时整段压缩退化为 no-op：old_msgs = messages[1:1]
+#      为空 → 不压缩；硬截断 head=messages[:1] 且 start2=1 →
+#      messages[:1] + messages[1:] 与原数组相同。实测 300K x 3 轮：
+#      1,200,606 → 1,200,606（一字未减），但仍已发出 80% 告警。
+#   c) 无失败出口：压不下去只 emit 一句「上下文仍接近上限（已用 X%，X 可 >100）」，
+#      随后仍把超预算 payload 发给模型。真实模型将返回 context_length_exceeded。
+#
+# 缺口 3：压缩链是 lossy-on-lossy
+#
+#   第二次及以后的压缩，输入里含的是上一版 [早期对话摘要]（已实测确认），
+#   原始消息早已不在窗口内；摘要文本还自带「请在后续回答中继续遵守…」的元指令，
+#   会被反复再摘要。信息单调衰减且不可恢复，连续触发时每轮白烧一次 LLM 调用。
+#
+# 缺口 4：record_compress 是死代码
+#
+#   trace.py 定义了 record_compress，但全项目零调用 → 轨迹评测
+#   trajectory_eval.py 统计的 compress_events 结构性恒为 0，显示出来像
+#   「压缩 0 次，一切正常」。实测：全部 89 份 report 中
+#   「<!-- 上下文压缩记录 -->」零命中 —— 压缩在历史运行中一次都没成功触发过。
+
+
+# ============================================================
 # 运行
 # ============================================================
 
@@ -574,6 +812,11 @@ if __name__ == "__main__":
         test_drop_dangling_tail_partial_group,
         test_drop_dangling_tail_orphan_tool,
         test_drop_dangling_tail_keeps_complete,
+        test_safe_window_start_matches_bruteforce_wellformed,
+        test_safe_window_start_matches_bruteforce_with_defects,
+        test_drop_dangling_tail_is_idempotent,
+        test_drop_dangling_tail_cleans_tail_defects,
+        test_drop_dangling_tail_degenerate_inputs,
         test_truncate_context_compressed_pairing_complete,
         test_truncate_context_hard_truncate_pairing_complete,
         test_truncate_context_keeps_summary_on_hard_truncate,
