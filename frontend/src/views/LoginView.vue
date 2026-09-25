@@ -12,7 +12,8 @@
         <div class="input-group">
           <input v-model="password" type="password" placeholder="密码" @keyup.enter="doLogin" />
         </div>
-        <div class="input-group">
+        <!-- 邀请码只在注册开放时才出现：关闭时摆一个填不了的框只会让人困惑 -->
+        <div class="input-group" v-if="registerOpen === true">
           <input v-model="inviteCode" placeholder="邀请码（仅注册需要）" @keyup.enter="doRegister" />
         </div>
 
@@ -22,9 +23,12 @@
 
         <div class="divider"><span>或</span></div>
 
-        <button class="btn-register" @click="doRegister" :disabled="loading">
-          注册新账号
+        <button class="btn-register" @click="doRegister" :disabled="loading || registerOpen !== true">
+          {{ registerBtnText }}
         </button>
+        <p v-if="registerOpen === false" class="notice">
+          本站已关闭注册。需要账号请联系管理员。
+        </p>
 
         <p v-if="msg" :class="['msg', msgType]">{{ msg }}</p>
       </div>
@@ -33,7 +37,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import api from '../utils/api'
@@ -47,32 +51,55 @@ const msg = ref('')
 const msgType = ref('')
 const loading = ref(false)
 
+// null = 还在查询服务端；true/false = 服务端返回的真实状态
+const registerOpen = ref(null)
+
+const registerBtnText = computed(() => {
+  if (registerOpen.value === null) return '检查中…'
+  return registerOpen.value ? '注册新账号' : '注册已关闭'
+})
+
+// 空字段必须显式提示：这两个函数原先在字段为空时直接 return，
+// 界面上表现为「点了按钮完全没反应」，用户无从判断是没填、坏了、还是被禁用。
+function fail(text) {
+  msg.value = text
+  msgType.value = 'error'
+}
+
+onMounted(async () => {
+  try {
+    const { data } = await api.get('/auth/register-open')
+    registerOpen.value = !!data.open
+  } catch {
+    // 查不到就按「关闭」处理：宁可提示需联系管理员，也不给一个点了必然失败的按钮
+    registerOpen.value = false
+  }
+})
+
 async function doLogin() {
-  if (!username.value || !password.value) return
+  if (!username.value || !password.value) { fail('请输入用户名和密码'); return }
   loading.value = true; msg.value = ''
   try {
     const { data } = await api.post('/auth/login', { username: username.value, password: password.value })
     if (data.token) { auth.login(data.token, data.username, data.role); router.push('/') }
-    else { msg.value = data.message || '登录失败'; msgType.value = 'error' }
-  } catch (e) { msg.value = e.response?.data?.message || '网络错误'; msgType.value = 'error' }
+    else { fail(data.message || '登录失败') }
+  } catch (e) { fail(e.response?.data?.message || '网络错误') }
   finally { loading.value = false }
 }
 
 async function doRegister() {
-  if (!username.value || !password.value) return
-  // 与服务端 AuthController.MIN_PASSWORD_LENGTH 保持一致（原来两边都是 4 位）
-  if (password.value.length < 8) { msg.value = '密码至少 8 位'; msgType.value = 'error'; return }
-  if (!inviteCode.value) { msg.value = '请填写邀请码'; msgType.value = 'error'; return }
+  if (!username.value || !password.value) { fail('请先填写用户名和密码'); return }
+  // 与服务端 AuthController.MIN_PASSWORD_LENGTH 保持一致
+  if (password.value.length < 8) { fail('密码至少 8 位'); return }
+  if (!inviteCode.value) { fail('请填写邀请码'); return }
   loading.value = true; msg.value = ''
   try {
-    // 服务端默认关闭注册（未配置 REGISTER_INVITE_CODE 时），错误信息会经
-    // ResponseStatusAdvice 回传，这里直接展示即可。
     const { data } = await api.post('/auth/register', {
       username: username.value, password: password.value, inviteCode: inviteCode.value,
     })
     if (data.token) { auth.login(data.token, data.username, data.role); router.push('/') }
-    else { msg.value = data.message || '注册失败'; msgType.value = 'error' }
-  } catch (e) { msg.value = e.response?.data?.message || '网络错误'; msgType.value = 'error' }
+    else { fail(data.message || '注册失败') }
+  } catch (e) { fail(e.response?.data?.message || '网络错误') }
   finally { loading.value = false }
 }
 </script>
@@ -93,6 +120,8 @@ h1 { font-size: 1.6rem; font-weight: 800; color: #1e293b; margin-bottom: 4px; }
 .divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: #e2e8f0; }
 .btn-register { width: 100%; padding: 14px; background: #fff; color: #6366f1; border: 2px solid #e2e8f0; border-radius: 12px; font-size: 15px; font-weight: 600; cursor: pointer; transition: all .12s; }
 .btn-register:hover { border-color: #6366f1; background: #eef2ff; }
+.btn-register:disabled { color: #94a3b8; border-color: #e2e8f0; background: #f8fafc; cursor: not-allowed; }
+.notice { margin-top: 10px; font-size: 12px; color: #94a3b8; line-height: 1.5; }
 .msg { margin-top: 16px; font-size: 13px; }
 .error { color: #dc2626; }
 </style>

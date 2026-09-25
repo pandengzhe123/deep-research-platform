@@ -11,6 +11,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -54,6 +55,21 @@ public class AuthController {
         if (this.inviteCode.isBlank()) {
             log.info("未配置 REGISTER_INVITE_CODE，注册接口已关闭（本站为演示站时这是预期行为）");
         }
+    }
+
+    /**
+     * 公开告知「注册是否开放」。
+     *
+     * <p>加这个端点的原因：注册默认关闭，而登录页上仍摆着一个可以点的「注册新账号」按钮 ——
+     * 用户只能靠点下去、拿到 403 才知道关着，体验上就是「点了没反应 / 莫名其妙失败」。
+     * 让前端如实反映服务端状态，是这类困惑最省事的解法。
+     *
+     * <p>返回这个信息不构成信息泄露：任何人直接调一次注册接口就能得到同样的结论。
+     * permitAll 已覆盖 /api/auth/**，无需额外配置。
+     */
+    @GetMapping("/register-open")
+    public ResponseEntity<Map<String, Object>> registerOpen() {
+        return ResponseEntity.ok(Map.of("open", !inviteCode.isBlank()));
     }
 
     /** 注册。需要邀请码；未配置邀请码时接口整体关闭。 */
