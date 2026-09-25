@@ -24,13 +24,47 @@ cp agent/.env.example agent/.env
 ### 2. 启动
 
 ```bash
-docker compose up
+docker compose up -d --build
 # 一键起 5 个服务：nginx(前端) · Java 网关 · Python Agent · PostgreSQL · Redis
 # 浏览器打开 http://localhost:3000
 # agent/.env 存在时由 compose 自动注入容器（env_file, required: false）
 ```
 
-首次启动需下载镜像和依赖（约 10 分钟），后续启动几秒。
+首次构建约 2~3 分钟（镜像已精简到 1GB 量级），后续启动几秒。
+
+> **只有 frontend 发布宿主端口**。agent / gateway / PostgreSQL / Redis 一律不对外暴露 ——
+> agent 自身没有任何鉴权，发布出去等于绕过网关的全部鉴权与限流。详见 [USAGE.md](USAGE.md)。
+
+### 3. 建第一个账号（不读这步会卡在登录页）
+
+**注册默认是关闭的。** 打开 http://localhost:3000 只会看到登录页，没有账号可以注册 ——
+这是刻意的默认姿态：公网可自由注册 = 把你的付费 API 额度开放给全世界（单次 L4 研究实测
+消耗 232 万 prompt token）。
+
+**邀请码就是「注册许可」**：只有当它被设置、且注册者填对了这个串，注册接口才会放行。
+没设置时注册接口直接返回 403「本站已关闭注册」。
+
+需要账号时，临时把它打开：
+
+```bash
+# 1) 写进根目录 .env（不入库），然后重启网关
+echo "REGISTER_INVITE_CODE=临时邀请码" >> .env
+docker compose up -d gateway
+
+# 2) 浏览器打开 http://localhost:3000，填「用户名 + 密码(≥8位) + 上面这个邀请码」完成注册
+
+# 3) 要管理员权限就把角色改掉
+docker compose exec postgres psql -U postgres -d deepresearch \
+  -c "UPDATE users SET role='admin' WHERE username='你的用户名';"
+
+# 4) 用完关掉注册：把 .env 里这一行改成空值（不要删行，见 USAGE.md），再重启
+#    改完内容应为：  REGISTER_INVITE_CODE=
+docker compose up -d gateway
+```
+
+完整操作手册见 **[USAGE.md](USAGE.md)**。
+
+### 4. 命令行 / 不用 Docker
 
 **不用 Docker 时**，三个 `start.bat` 可直接双击（自动切到脚本所在目录，换机器/换路径都能跑）：
 
@@ -40,7 +74,7 @@ docker compose up
 | `java-gateway/start.bat` | Java 网关（含编译） | 8080 |
 | `frontend/start.bat` | Vue 前端（缺 node_modules 自动 `npm install`） | 3000 |
 
-### 3. 命令行（不启动 Docker 也能跑）
+纯命令行跑 Agent：
 
 ```bash
 cd agent
@@ -105,11 +139,14 @@ DeepSeek · Tavily/DuckDuckGo · Chroma
 |------|------|------|
 | v2 | 阿里云 text-embedding-v4 纯向量 | 基线，1024 维，0.22s |
 | hybrid | 向量 + BM25（jieba 分词 + RRF 融合） | 关键词补语义盲区 |
-| rerank | 向量粗召回 + CrossEncoder（bge-reranker-base）精排 | 排序精度提升 |
-| full | 查询改写（LLM）→ 双路混合 → CrossEncoder | 全链路最优但最慢 |
-| default | MiniLM 本地 384 维 | 兼容旧数据，零费用 |
+| rerank | 向量粗召回 + 阿里云 gte-rerank-v2 精排 | 排序精度提升 |
+| full | 查询改写（LLM）→ 双路混合 → 阿里云精排 | 全链路最优但最慢（生产默认） |
+| default | 等同于 v2 | 保留该入参名以兼容旧调用方 |
 
-双 Embedding 管线共存（MiniLM + 阿里云），多租户 per-user Collection 物理隔离。
+单管线（阿里云 text-embedding-v4）、多租户 per-user Collection 物理隔离。
+**本地模型（sentence-transformers / MiniLM / bge-reranker-base）已于 2026-09 全部移除**，
+embedding 与精排均改走阿里云 API —— 镜像因此从 9.08GB 降到 1.04GB，且构建不再依赖
+huggingface.co（国内不可达，会导致镜像根本构建不出来）。详见 [USAGE.md](USAGE.md)。
 
 ### 搜索流水线
 
@@ -210,14 +247,19 @@ agent/src/researcher/
 ├── trace.py           JSONL 结构化调用链路（~230 行）
 ├── llm.py             AsyncOpenAI + 重试（~155 行）
 ├── config.py          环境变量（~35 行）
-├── retrievers/        BM25 + RRF + CrossEncoder + 查询改写（~140 行）
+├── retrievers/        BM25 + RRF + 阿里云精排 + 查询改写（~215 行）
 └── evaluation/        四指标 + Judge + A/B + 消融 + 回归（~3,060 行）
 
 java-gateway/.../
-├── ResearchController.java   SSE 透传 + 会话管理 + JWT + 虚拟线程调度
+├── ResearchController.java   SSE 透传 + 会话管理 + JWT + 虚拟线程调度 + L4 闸门
+├── KbController.java         知识库代理（user_id 一律取自 JWT，堵掉 /kb/ 旁路越权）
 ├── SessionService.java       会话 CRUD + 自动压缩 + 冷热分层 + 僵尸清理 + 上下文锚点
+├── AuthController.java       注册（邀请码）/ 登录 + 密码策略 + 限流
+├── AuthRateLimiter.java      认证端点每 IP 每分钟限流
+├── RequestUserResolver.java  统一的「从 JWT 解析 uid / role」
+├── ResponseStatusAdvice.java 把拒绝原因回传前端（不靠 include-message=always）
 ├── SecurityConfig.java       WebFlux Security + JWT Filter
-└── JwtTokenProvider.java     JWT 签发/验证
+└── JwtTokenProvider.java     JWT 签发/验证（无硬编码默认密钥：未配置则随机生成）
 
 frontend/src/
 ├── views/ResearchView.vue    SSE 消费 + 会话切换 + 本地缓存
