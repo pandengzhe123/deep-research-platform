@@ -133,11 +133,18 @@ public class ResearchController {
                 sessionService.appendReport(session.getId(), resp.report() != null ? resp.report() : "");
                 sessionService.appendHistory(session.getId(), "agent", resp.report() != null ? resp.report() : "");
             }
+            // 记录 token 用量 —— 此前只有 SSE 路径（persistEvent）会写，同步路径漏了，
+            // 导致后台「累计 Token 消耗」只统计流式那一半。澄清轮没有真实研究消耗，
+            // 但 Agent 仍会返回该轮的调用成本，一并记上更准。
+            if (resp.tokenUsage() != null && !resp.tokenUsage().isEmpty()) {
+                sessionService.updateTokenUsage(session.getId(),
+                        objectMapper.writeValueAsString(resp.tokenUsage()));
+            }
             log.info("研究完成: session={}, report_len={}", session.getId(),
                     resp.report() != null ? resp.report().length() : 0);
             return new ResearchResponse(
                     resp.report(), resp.language(), resp.needClarify(),
-                    resp.question(), session.getId()
+                    resp.question(), session.getId(), resp.tokenUsage()
             );
         }).subscribeOn(VIRTUAL);
     }

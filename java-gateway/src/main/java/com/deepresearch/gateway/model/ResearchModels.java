@@ -3,6 +3,7 @@ package com.deepresearch.gateway.model;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 请求 & 响应模型 —— 与 Python Agent 的 API 契约完全一致。
@@ -45,6 +46,11 @@ public class ResearchModels {
     /**
      * Python Agent 返回的研究结果。
      * 对应 POST /research 的响应体。
+     *
+     * <p>{@code tokenUsage} 是后补的：Agent 的同步响应里本来就带这个字段，但此前
+     * record 里没有对应属性，Jackson 按 {@code ignoreUnknown} 把它静默丢掉了 ——
+     * 于是同步研究路径永远不写 sessions.token_usage，后台的 Token 统计只统计到
+     * 走 SSE 的那部分。这类「字段名对不上就被静默丢弃」是统计数据失真的常见来源。
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record ResearchResponse(
@@ -52,7 +58,8 @@ public class ResearchModels {
             String language,
             @JsonProperty("need_clarify") Boolean needClarify,
             String question,
-            @JsonProperty("session_id") String sessionId
+            @JsonProperty("session_id") String sessionId,
+            @JsonProperty("tokenUsage") Map<String, Object> tokenUsage
     ) {}
 
     // ========== 会话 ==========
