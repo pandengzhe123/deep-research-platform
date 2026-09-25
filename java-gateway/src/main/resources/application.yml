@@ -5,9 +5,17 @@ server:
 agent:
   url: ${AGENT_URL:http://localhost:8000}
 
+# JWT 配置。密钥仅供本地开发留空（此时网关随机生成，重启即失效）；
+# 生产必须在环境变量 JWT_SECRET 中注入固定值，否则每次重启用户都要重新登录。
+# 切记不要把任何默认密钥写在这里 —— 本仓库是公开的。
+jwt:
+  secret: ${JWT_SECRET:}
+  expiration-ms: ${JWT_EXPIRATION_MS:86400000}
+
 logging:
   level:
-    com.deepresearch: DEBUG
+    # 生产用 INFO；DEBUG 会在公网服务日志里留下大量内部细节
+    com.deepresearch: ${LOG_LEVEL:DEBUG}
 
 spring:
   threads:
@@ -23,8 +31,9 @@ spring:
       connect-timeout: 1s
   datasource:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/deepresearch}
-    username: postgres
-    password: deepresearch
+    username: ${SPRING_DATASOURCE_USERNAME:postgres}
+    # 密码必须可被环境变量覆盖：原来硬编码在文件里，线上无法在不改代码的前提下更换
+    password: ${SPRING_DATASOURCE_PASSWORD:deepresearch}
     driver-class-name: org.postgresql.Driver
     hikari:
       connection-timeout: 10000      # 等 PG 就绪，最多 10s

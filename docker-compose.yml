@@ -1,11 +1,19 @@
+# 生产部署：复制根目录 .env.example 为 .env 并填入真实密钥（.env 已在 .gitignore 中）。
+# 本地开发无需 .env —— 下面所有 ${VAR:-默认值} 的默认值就是本地开发用的。
+#
+# 暴露面原则：只有 frontend 发布到公网端口，其余三个服务一律不发布。
+# agent 自身没有任何鉴权（user_id 由客户端传入），一旦发布到公网就等于
+# 绕过网关的全部鉴权与限流；postgres/redis 只绑回环，需要直连时走 SSH 隧道：
+#   ssh -L 5432:127.0.0.1:5432 user@host
 services:
   postgres:
     image: postgres:16
+    restart: unless-stopped
     environment:
-      POSTGRES_PASSWORD: deepresearch
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-deepresearch}
       POSTGRES_DB: deepresearch
     ports:
-      - "5432:5432"
+      - "127.0.0.1:${PG_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -18,21 +26,28 @@ services:
   # 热数据层：搜索缓存 / URL 去重 / 会话研究锁 / 上下文热层 / 用量限流
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
+    # 未授权的 Redis 是自动化挖矿木马的头号目标，必须设密码
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-deepresearch-dev-redis}"]
     ports:
-      - "6379:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      # 设了 requirepass 后不带 -a 的 ping 会返回 NOAUTH → 容器被标记 unhealthy
+      # → 依赖它的 agent/gateway 永远起不来。健康检查必须带密码。
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD:-deepresearch-dev-redis}", "ping"]
       interval: 3s
       timeout: 3s
       retries: 20
 
   agent:
     build: ./agent
-    ports:
-      - "8000:8000"
+    restart: unless-stopped
+    # 只在 compose 内网可达，不发布到宿主端口
+    expose:
+      - "8000"
     environment:
       # 容器内不能用 localhost 连 Redis（那是容器自己）
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-deepresearch-dev-redis}@redis:6379/0
     # 真实 API Key 从 agent/.env 注入；文件不存在也能起（required: false），
     # 这样「clone 后直接 docker compose up」不再需要先手动 cp .env.example
     env_file:
@@ -46,13 +61,20 @@ services:
 
   gateway:
     build: ./java-gateway
-    ports:
-      - "8080:8080"
+    restart: unless-stopped
+    expose:
+      - "8080"
     environment:
       - AGENT_URL=http://agent:8000
       - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/deepresearch
+      - SPRING_DATASOURCE_PASSWORD=${POSTGRES_PASSWORD:-deepresearch}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-deepresearch-dev-redis}
+      # 生产必须设置：留空时网关会随机生成密钥，重启后所有登录立即失效
+      - JWT_SECRET=${JWT_SECRET:-}
+      # 生产用 INFO：DEBUG 会打印大量内部细节
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     depends_on:
       postgres:
         condition: service_healthy
@@ -63,8 +85,10 @@ services:
 
   frontend:
     build: ./frontend
+    restart: unless-stopped
+    # 唯一发布到公网的端口。生产设 FRONTEND_PORT=80（配好 HTTPS 后改 443）
     ports:
-      - "3000:80"
+      - "${FRONTEND_PORT:-3000}:80"
     depends_on:
       - gateway
       - agent
