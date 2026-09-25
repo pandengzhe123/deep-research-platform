@@ -3,7 +3,7 @@ from researcher.kb import kb
 
 for user in ["default"]:
     try:
-        coll = kb._get_collection(user)
+        coll = kb._client.get_or_create_collection(kb._v2_collection_name(user))
         data = coll.get()
         docs = data["documents"] or []
         metas = data["metadatas"] or []

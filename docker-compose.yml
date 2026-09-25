@@ -45,6 +45,11 @@ services:
     # 只在 compose 内网可达，不发布到宿主端口
     expose:
       - "8000"
+    volumes:
+      # Chroma 向量库落盘位置（kb.py 的 persist_dir 默认 ./chroma_data，
+      # 相对 WORKDIR /app）。不挂卷的话数据只存在于容器可写层 ——
+      # 每次 docker compose up 重建容器，用户上传的知识库就全没了。
+      - chroma:/app/chroma_data
     environment:
       # 容器内不能用 localhost 连 Redis（那是容器自己）
       - REDIS_URL=redis://:${REDIS_PASSWORD:-deepresearch-dev-redis}@redis:6379/0
@@ -95,3 +100,4 @@ services:
 
 volumes:
   pgdata:
+  chroma:

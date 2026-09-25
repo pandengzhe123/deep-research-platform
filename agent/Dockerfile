@@ -15,12 +15,12 @@ COPY src/ src/
 # 原先这里还重复列了一遍包名，结果 python-multipart / pymupdf / python-docx
 # 只写在 Dockerfile 里、pyproject 里没有 → pip install -e . 路径下缺依赖，
 # Agent 起不来（FastAPI 建 UploadFile 路由时 RuntimeError）。
+#
+# 原先这里还有两步「预下载 Embedding / Cross-Encoder 模型打进镜像」。
+# 已整体删除：embedding 与精排都改为调用阿里云 API，不再需要任何本地模型。
+# 那两步的代价是 —— 必须访问 huggingface.co（国内不可达，镜像根本构建不出来），
+# 且 sentence-transformers 会带进 torch 及约 3~4GB 的 CUDA 库，把镜像撑到 9GB。
 RUN pip install --default-timeout=100 --no-cache-dir -e .
-
-# 预下载 Embedding 模型，打进镜像（~120MB），运行时无需联网
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')"
-# 预下载 Cross-Encoder 精排模型（~700MB）
-RUN python -c "from sentence_transformers import CrossEncoder; CrossEncoder('BAAI/bge-reranker-base')"
 
 # 复制模板而不是 .env：.env 被 gitignore，仓库里不存在，
 # 原先 `COPY .env .env` 让「clone 后直接 docker compose up」必然失败。

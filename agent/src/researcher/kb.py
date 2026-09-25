@@ -1,13 +1,10 @@
-"""知识库模块 —— Chroma 向量存储 + sentence-transformers embedding + 检索。"""
+"""知识库模块 —— Chroma 向量存储 + 阿里云 embedding + 检索。"""
 
 from __future__ import annotations
 
 import os
 import uuid
 from pathlib import Path
-
-os.environ["HF_HUB_DISABLE_SSL_VERIFY"] = "1"
-os.environ["HF_HUB_OFFLINE"] = "1"  # 不从 HuggingFace 联网检查更新，加速启动
 
 import chromadb
 
@@ -91,36 +88,12 @@ def read_file(file_path: Path) -> str:
 
 
 # ============================================================
-# 旧版 Embedding（MiniLM，本地）
+# Embedding（阿里云 text-embedding-v4，API）
 # ============================================================
-
-_EMBED_MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
-
-
-def _embed_semantic(texts: list[str]) -> list[list[float]]:
-    """用 sentence-transformers 生成语义向量（384 维，中英文）。模型缓存在内存。"""
-    if not hasattr(_embed_semantic, "_model"):
-        from sentence_transformers import SentenceTransformer
-
-        try:
-            _embed_semantic._model = SentenceTransformer(_EMBED_MODEL_NAME, local_files_only=True)
-        except Exception:
-            print(f"  ⚠️ Embedding 模型未缓存，正在下载 {_EMBED_MODEL_NAME}（约 120MB，仅首次）...")
-            try:
-                _embed_semantic._model = SentenceTransformer(_EMBED_MODEL_NAME)
-                print(f"  [OK] 模型下载完成，后续启动将使用本地缓存")
-            except Exception as e:
-                raise RuntimeError(
-                    f"Embedding 模型加载失败: {e}\n"
-                    f"请手动下载：python -c \"from sentence_transformers import SentenceTransformer; "
-                    f"SentenceTransformer('{_EMBED_MODEL_NAME}')\""
-                ) from e
-    return _embed_semantic._model.encode(texts, show_progress_bar=False).tolist()
-
-
-# ============================================================
-# v2 Embedding（阿里云 text-embedding-v4，API）
-# ============================================================
+# 原先这里还有一套本地 MiniLM（sentence-transformers）实现和对应的 v1 检索管线。
+# 已整体移除：它会让镜像多背 torch + 约 3~4GB CUDA 库、构建时必须访问
+# huggingface.co（国内不可达，镜像构建直接失败）、运行时再常驻约 1GB 内存。
+# 而且它在生产里早已是死代码 —— 所有检索模式走的都是下面的阿里云实现。
 
 class _DashScopeEmbeddings:
     """阿里云 embedding 封装（OpenAI 兼容格式）。"""
@@ -162,28 +135,17 @@ class _DashScopeEmbeddings:
 # ============================================================
 
 class KnowledgeBase:
-    """Chroma 向量库封装。旧版 MiniLM + 新版阿里云 embedding 两条管线共存。"""
+    """Chroma 向量库封装（阿里云 embedding 单管线）。"""
 
     def __init__(self, persist_dir: str = "./chroma_data"):
         self._persist_dir = persist_dir
         self._client = chromadb.PersistentClient(path=persist_dir)
-        self._embedder = _embed_semantic
-        self._collections: dict[str, object] = {}
         self._v2_embedder = None
         self._trace = None  # TraceRun 实例，由 Agent 在调用前设置
 
     # ================================================================
     # 基础方法
     # ================================================================
-
-    def _collection_name(self, user_id: str) -> str:
-        return f"kb_{user_id}"
-
-    def _get_collection(self, user_id: str):
-        name = self._collection_name(user_id)
-        if name not in self._collections:
-            self._collections[name] = self._client.get_or_create_collection(name)
-        return self._collections[name]
 
     def _v2_collection_name(self, user_id: str) -> str:
         return f"kb_{user_id}_v2"
@@ -261,51 +223,11 @@ class KnowledgeBase:
         return "\n".join(lines)
 
     # ================================================================
-    # 旧版 ingest + search（MiniLM）
-    # ================================================================
-
-    def ingest(self, file_path: str, user_id: str = "default", doc_id: str | None = None) -> dict:
-        """上传文件 → 切块 → MiniLM embedding → 入库。"""
-        path = Path(file_path)
-        if not path.exists():
-            return {"status": "error", "message": f"文件不存在: {file_path}"}
-
-        text = read_file(path)
-        chunks = chunk_text(text)
-        if not chunks:
-            return {"status": "error", "message": "文件内容为空"}
-
-        EMBED_MAX_LEN = 256
-        embed_input = [c[:EMBED_MAX_LEN] for c in chunks]
-        embeddings = self._embedder(embed_input)
-
-        doc_id = doc_id or path.name
-        try:
-            collection = self._get_collection(user_id)
-            try:
-                old = collection.get(where={"doc_id": doc_id})
-                if old.get("ids"):
-                    collection.delete(ids=old["ids"])
-            except Exception:
-                pass
-        except Exception as e:
-            return {"status": "error", "message": f"Chroma 连接失败: {e}"}
-
-        chunk_ids = [f"{doc_id}_{uuid.uuid4().hex[:6]}" for _ in chunks]
-        collection.add(
-            documents=chunks,
-            embeddings=embeddings,
-            metadatas=[{"user_id": user_id, "doc_id": doc_id} for _ in chunks],
-            ids=chunk_ids,
-        )
-        return {"status": "ok", "doc_id": doc_id, "chunks": len(chunks), "characters": len(text)}
-
-    # ================================================================
-    # 新版 ingest_v2（阿里云 text-embedding-v4）
+    # 上传（阿里云 text-embedding-v4）
     # ================================================================
 
     def ingest_v2(self, file_path: str, user_id: str = "default", doc_id: str | None = None) -> dict:
-        """v2 上传：阿里云 embedding（8192 token，完整 500 字 chunk）。"""
+        """上传：阿里云 embedding（8192 token，完整 500 字 chunk）。"""
         path = Path(file_path)
         if not path.exists():
             return {"status": "error", "message": f"文件不存在: {file_path}"}
@@ -385,7 +307,7 @@ class KnowledgeBase:
         return self._fmt(result, "（混合检索）")
 
     def _search_rerank(self, query, user_id, doc_ids, n_results):
-        """精排：混合粗召回 → CrossEncoder Top 5。"""
+        """精排：向量粗召回 → 阿里云精排 Top N。"""
         from .retrievers.reranker import build_reranker
 
         try:
@@ -452,7 +374,7 @@ class KnowledgeBase:
             return "知识库中未找到相关信息。"
 
         # 3. 精排
-        print(f"  [full] ③ Cross-Encoder 精排 (从 {len(all_docs)} 条 → Top {n_results})...")
+        print(f"  [full] ③ 阿里云精排 (从 {len(all_docs)} 条 → Top {n_results})...")
         try:
             t0 = __import__('time').time()
             reranker = build_reranker()
@@ -474,81 +396,58 @@ class KnowledgeBase:
         self, query: str, user_id: str = "default",
         doc_ids: list[str] | None = None, n_results: int = 5, mode: str = "default",
     ) -> str:
-        """mode: default / v2 / hybrid / rerank / full"""
+        """mode: default / v2 / hybrid / rerank / full
+
+        `default` 与 `v2` 现在等价（都是阿里云纯向量检索）。原先 default 走本地
+        MiniLM，那条管线已随本地模型一并移除；保留 default 这个入参名是为了不
+        破坏外部调用方，而不是因为还存在第二种行为。
+        """
         if mode == "full":
             return self._search_full(query, user_id, doc_ids, n_results)
         if mode == "rerank":
             return self._search_rerank(query, user_id, doc_ids, n_results)
         if mode == "hybrid":
             return self._search_hybrid(query, user_id, doc_ids, n_results)
-        if mode == "v2":
-            return self._search_v2(query, user_id, doc_ids, n_results)
-
-        # ---- 旧版检索（MiniLM）----
-        try:
-            collection = self._get_collection(user_id)
-            where = None
-            if doc_ids:
-                where = {"user_id": user_id, "doc_id": {"$in": doc_ids}}
-            query_emb = self._embedder([query])
-            results = collection.query(query_embeddings=query_emb, n_results=n_results, where=where)
-
-            if not results.get("documents") or not results["documents"][0]:
-                return "知识库中未找到相关信息。"
-
-            lines = ["# 知识库检索结果\n"]
-            for i, (doc, meta, dist) in enumerate(zip(
-                results["documents"][0], results["metadatas"][0], results["distances"][0],
-            )):
-                similarity = max(0, 1 - dist) if dist else 1.0
-                source = meta.get("doc_id", "未知")
-                lines.append(f"\n--- 来源 {i+1}: {source}（相关度 {similarity:.0%}）---")
-                lines.append(doc)
-                lines.append("")
-            return "\n".join(lines)
-        except Exception as e:
-            return f"知识库检索失败: {e}"
+        return self._search_v2(query, user_id, doc_ids, n_results)
 
     # ================================================================
     # 通用
     # ================================================================
 
-    def health_check(self) -> dict:
-        try:
-            self._get_collection("default").count()
-            return {"status": "ok"}
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
-
     def list_docs(self, user_id: str = "default") -> list[dict]:
-        """列出用户已上传的文档（合并旧版 + v2 collection）。"""
-        seen, docs = set(), []
-        for coll_name in [self._collection_name(user_id), self._v2_collection_name(user_id)]:
-            try:
-                client = self._client
-                results = client.get_or_create_collection(coll_name).get(where={"user_id": user_id})
-                for m in results.get("metadatas", []):
-                    did = m.get("doc_id", "")
-                    if did and did not in seen:
-                        seen.add(did)
-                        docs.append({"doc_id": did})
-            except Exception:
-                pass
+        """列出用户已上传的文档。
+
+        只查 v2 collection。v1（本地 MiniLM）的 `kb_{user}` 已随本地模型移除 ——
+        若其中还留有旧数据，这些文档不会再出现在列表里；本地开发时直接删掉
+        chroma_data 目录重新上传即可。
+        """
+        docs, seen = [], set()
+        try:
+            results = self._client.get_or_create_collection(
+                self._v2_collection_name(user_id)
+            ).get(where={"user_id": user_id})
+            for m in results.get("metadatas", []):
+                did = m.get("doc_id", "")
+                if did and did not in seen:
+                    seen.add(did)
+                    docs.append({"doc_id": did})
+        except Exception:
+            pass  # collection 尚未创建 → 视为空库
         return docs
 
     def delete_doc(self, doc_id: str, user_id: str = "default") -> dict:
-        """删除文档（旧版 + v2 collection 都删）。"""
+        """删除 v2 collection 中的指定文档。"""
         total = 0
-        client = self._client
-        for coll_name in [self._collection_name(user_id), self._v2_collection_name(user_id)]:
-            try:
-                coll = client.get_or_create_collection(coll_name)
-                ids = coll.get(where={"doc_id": doc_id}).get("ids", [])
-                if ids:
-                    coll.delete(ids=ids)
-                    total += len(ids)
-            except Exception:
-                pass
+        try:
+            coll = self._client.get_or_create_collection(
+                self._v2_collection_name(user_id)
+            )
+            ids = coll.get(where={"doc_id": doc_id}).get("ids", [])
+            if ids:
+                coll.delete(ids=ids)
+                total = len(ids)
+        except Exception:
+            pass
         return {"status": "ok", "deleted_chunks": total}
 
 
