@@ -88,7 +88,9 @@ services:
       # 生产必须设置：留空时网关会随机生成密钥，重启后所有登录立即失效
       - JWT_SECRET=${JWT_SECRET:-}
       # ---- 注册与访问控制 ----
-      # 留空 = 关闭注册。公网可自由注册 = 把付费 API 额度开放给全世界
+      # 注册三态：REGISTER_OPEN=true 为完全开放；否则看 REGISTER_INVITE_CODE
+      # （设了 = 需邀请码，留空 = 关闭注册）
+      - REGISTER_OPEN=${REGISTER_OPEN:-false}
       - REGISTER_INVITE_CODE=${REGISTER_INVITE_CODE:-}
       - AUTH_RATE_LIMIT_PER_MINUTE=${AUTH_RATE_LIMIT_PER_MINUTE:-20}
       # L4 单次实测 232 万 prompt token，非管理员默认禁用

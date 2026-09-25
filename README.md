@@ -37,30 +37,42 @@ docker compose up -d --build
 
 ### 3. 建第一个账号（不读这步会卡在登录页）
 
-**注册默认是关闭的。** 打开 http://localhost:3000 只会看到登录页，没有账号可以注册 ——
-这是刻意的默认姿态：公网可自由注册 = 把你的付费 API 额度开放给全世界（单次 L4 研究实测
-消耗 232 万 prompt token）。
+**注册默认是关闭的（代码默认 `closed`）。** 打开 http://localhost:3000 只会看到登录页，
+按钮显示「注册已关闭」——登录页会如实反映服务端状态。
 
-**邀请码就是「注册许可」**：只有当它被设置、且注册者填对了这个串，注册接口才会放行。
-没设置时注册接口直接返回 403「本站已关闭注册」。
+注册共**三态**，用两个变量组合：
 
-需要账号时，临时把它打开：
+| 配置 | 模式 | 效果 |
+|---|---|---|
+| `REGISTER_OPEN=true` | **open** | 任何人都能注册，不需要邀请码 |
+| `REGISTER_OPEN=false` + `REGISTER_INVITE_CODE=xxx` | **invite** | 必须填对邀请码 |
+| `REGISTER_OPEN=false` + 邀请码留空 | **closed** | 注册接口整体关闭（代码默认） |
+
+想让访客自己注册（演示站推荐）：
 
 ```bash
-# 1) 写进根目录 .env（不入库），然后重启网关
-echo "REGISTER_INVITE_CODE=临时邀请码" >> .env
-docker compose up -d gateway
-
-# 2) 浏览器打开 http://localhost:3000，填「用户名 + 密码(≥8位) + 上面这个邀请码」完成注册
-
-# 3) 要管理员权限就把角色改掉
-docker compose exec postgres psql -U postgres -d deepresearch \
-  -c "UPDATE users SET role='admin' WHERE username='你的用户名';"
-
-# 4) 用完关掉注册：把 .env 里这一行改成空值（不要删行，见 USAGE.md），再重启
-#    改完内容应为：  REGISTER_INVITE_CODE=
+echo "REGISTER_OPEN=true" >> .env        # 根目录 .env，不入库
 docker compose up -d gateway
 ```
+
+或走邀请码模式：
+
+```bash
+echo "REGISTER_INVITE_CODE=临时邀请码" >> .env
+docker compose up -d gateway
+```
+
+**邀请码**就是「注册许可」——只有填对这个串才放行。它不是用户分组、不是权限等级。
+
+改角色给管理员权限（**改完必须重新登录**，角色写在 JWT 里）：
+
+```bash
+docker compose exec postgres psql -U postgres -d deepresearch \
+  -c "UPDATE users SET role='admin' WHERE username='你的用户名';"
+```
+
+> ⚠️ 开放注册前请确认成本闸门已收紧（`USER_DAILY_RESEARCH_LIMIT`、`ALLOW_LEVEL4_NON_ADMIN=false`）。
+> 详见 [USAGE.md](USAGE.md) §7。
 
 完整操作手册见 **[USAGE.md](USAGE.md)**。
 

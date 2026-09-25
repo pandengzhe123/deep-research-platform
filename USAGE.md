@@ -10,7 +10,7 @@
 1. [项目是什么](#1-项目是什么)
 2. [前置条件](#2-前置条件)
 3. [首次启动](#3-首次启动)
-4. [建第一个账号 —— 邀请码是干什么的](#4-建第一个账号--邀请码是干什么的)
+4. [建第一个账号 —— 注册三态与邀请码](#4-建第一个账号--注册三态与邀请码)
 5. [环境变量完整清单](#5-环境变量完整清单)
 6. [功能怎么用](#6-功能怎么用)
 7. [成本控制](#7-成本控制)
@@ -101,55 +101,81 @@ curl -s http://localhost:3000/api/health             # {"status":"ok",...}
 
 ---
 
-## 4. 建第一个账号 —— 邀请码是干什么的
+## 4. 建第一个账号 —— 注册三态与邀请码
+
+### 注册有三种状态
+
+用两个变量组合，每种状态各表达一件事：
+
+| 配置 | 模式 | 效果 |
+|---|---|---|
+| `REGISTER_OPEN=true` | **open** | 任何人都能注册，不需要邀请码 |
+| `REGISTER_OPEN=false` + `REGISTER_INVITE_CODE=xxx` | **invite** | 必须填对邀请码 |
+| `REGISTER_OPEN=false` + 邀请码留空 | **closed** | 注册接口整体关闭（**代码默认**） |
+
+登录页会调 `GET /api/auth/register-open` 拿到 `{"open":…,"mode":…,"inviteRequired":…}`，
+据此如实渲染（关闭时按钮置灰并说明原因、open 模式不显示邀请码框）。
+
+```bash
+# 看当前是什么模式
+curl -s http://localhost:3000/api/auth/register-open
+# 启动日志里也会打印：  注册模式: open / invite / closed
+docker compose logs gateway | grep 注册模式
+```
 
 ### 邀请码是什么
 
-**邀请码是「注册许可」。** 注册接口默认是**关闭**的，只有当邀请码被设置、且注册者填对了这个串，注册才会放行。没设置时注册接口直接返回：
+**邀请码是 invite 模式下的「注册许可」** —— 只有填对这个串才放行。它**不是**用户分组、
+不是权限等级、不是发给用户的福利码。
 
-```
-403 {"message":"本站已关闭注册"}
-```
+用**常量时间比较**，不会因为响应耗时差异被逐字符猜出来。填错或没填都返回同一句话
+「邀请码不正确」，不区分两者。
 
-它**不是**用户分组、不是权限等级、不是给用户发的福利码 —— 它的唯一作用是**决定"允许不允许注册"**。
+### 该选哪一态
 
-### 为什么默认关闭
+| 你的场景 | 建议 |
+|---|---|
+| 只是自己/面试官用，账号可控 | `closed` + 手动建号（见下），或 `invite` |
+| 想让访客自助注册（**公开演示站**） | `open` —— 但**先把成本闸门收紧**（见下） |
 
-公网可自由注册 = 把你的付费 API 额度开放给全世界。注册完就能跑研究，而：
+**开放注册等于把付费额度对外开放**，量级参考：
 
-- 单次 **L4** 研究实测消耗 **232 万 prompt token**
-- 单次 L2 约 2.3 万 token、L3 约 3 万 token
+- 单次 **L4** 研究实测 **232 万 prompt token**
+- 单次 L2 约 2.3 万、L3 约 3 万 token
 
-一个循环脚本几小时就能烧掉整月额度。所以「默认关闭、需要时显式打开」才是正确的默认姿态 ——
-尤其你要把它作为演示站公开时。
-
-### 怎么临时打开注册
+所以 `open` 之前请确认这三项：
 
 ```bash
-# 1) 把邀请码写进根目录 .env（该文件已在 .gitignore 中，不会入库）
-echo "REGISTER_INVITE_CODE=my-temp-code" >> .env
+USER_DAILY_RESEARCH_LIMIT=5      # 默认 20，公开站建议收紧
+GLOBAL_DAILY_RESEARCH_LIMIT=50   # 默认 100
+ALLOW_LEVEL4_NON_ADMIN=false     # 保持 false：L4 只给管理员
+```
 
-# 2) 重启网关让配置生效
+> ⚠️ **知识库目前只有「单文件 20MB」限制，没有单用户容量/数量上限。** 开放注册后，
+> 任何人都能反复上传把磁盘占满（且每次上传都会调阿里云 embedding 产生费用）。
+> 如果长期开放，建议再加一层单用户配额。
+
+### 怎么切换模式
+
+```bash
+# 例：改成完全开放
+echo "REGISTER_OPEN=true" >> .env        # 根目录 .env，不入库
 docker compose up -d gateway
 
-# 3) 打开 http://localhost:3000，填「用户名 + 密码(≥8位) + my-temp-code」完成注册
+# 例：改成需要邀请码
+#   把 .env 写成：  REGISTER_INVITE_CODE=你的邀请码
+#                   REGISTER_OPEN=false
+docker compose up -d gateway
 
-# 4) 用完关掉注册：把 .env 里这一行改成空值，再重启
-#    改完 .env 的内容应该是：  REGISTER_INVITE_CODE=
+# 例：关掉注册
+#   把 .env 写成：  REGISTER_OPEN=false
+#                   REGISTER_INVITE_CODE=
 docker compose up -d gateway
 ```
 
-> **第 4 步请「把值改成空」而不是「删掉整行」。** 两种都能达到关闭注册的效果，但删行在
-> 不同 shell 下容易出错 —— 例如 PowerShell 里 `Set-Content` 收到空管道输入时**是空操作**，
-> 文件根本不会被改写，你会以为关了其实没关。改成空值没有这个问题，且一眼能看出当前状态。
->
-> 重启后可用日志确认：
-> ```bash
-> docker compose logs gateway | grep 注册
-> # 期望看到：未配置 REGISTER_INVITE_CODE，注册接口已关闭（本站为演示站时这是预期行为）
-> ```
-
-邀请码用**常量时间比较**，不会因为响应耗时差异被逐字符猜出来。
+> **改值时请「把值改成空」而不是「删掉整行」。** 两种都能达到效果，但删行在不同 shell 下
+> 容易出错 —— 例如 PowerShell 里 `Set-Content` 收到空管道输入时**是空操作**，文件根本不会
+> 被改写，你会以为改了其实没改。改成空值没有这个问题，且一眼能看出当前状态。
 
 ### 怎么建管理员
 
@@ -217,7 +243,8 @@ docker compose exec postgres psql -U postgres -d deepresearch -c \
 | `JWT_SECRET` | 空 | JWT 签发密钥，**至少 32 字节** | **必填** |
 | `POSTGRES_PASSWORD` | `deepresearch` | 数据库密码 | **必填** |
 | `REDIS_PASSWORD` | `deepresearch-dev-redis` | Redis 密码 | **必填** |
-| `REGISTER_INVITE_CODE` | 空 | 注册许可，**空 = 关闭注册** | 按需 |
+| `REGISTER_OPEN` | `false` | `true` = 任何人可注册（**open**） | 公开演示站按需 |
+| `REGISTER_INVITE_CODE` | 空 | 邀请码；`REGISTER_OPEN=false` 时：设了=**invite**，留空=**closed** | 按需 |
 | `FRONTEND_PORT` | `3000` | 前端对外端口 | 改成 `80` |
 | `PG_PORT` / `REDIS_PORT` | `5432` / `6379` | 回环绑定端口 | 一般不动 |
 | `LOG_LEVEL` | `INFO` | 网关日志级别 | 保持 `INFO` |
@@ -463,6 +490,8 @@ docker compose logs gateway | tail   # 无 ERROR
 ### 已知边界
 
 - **HTTPS 未配** —— 目前 token 明文过网。这是唯一未闭环的项
+- **知识库没有单用户容量上限** —— 只有单文件 20MB 限制。开放注册（`REGISTER_OPEN=true`）后，
+  任何人可反复上传占满磁盘，且每次上传都会调阿里云 embedding 产生费用。长期开放建议补一层配额
 - **agent 的 `user_id` 参数不二次校验** —— 靠"不发布端口"这一层保证；若将来暴露 agent，必须补
 - **限流是单实例内存态**（`AuthRateLimiter`）—— 多实例部署时每个实例各算各的，阈值会被放大 N 倍，届时需换成 Redis 计数
 - **`/api/research/{taskId}` 取消端点前端未接线** —— 端点在且归属校验已做，但界面上没有取消按钮
@@ -471,9 +500,26 @@ docker compose logs gateway | tail   # 无 ERROR
 
 ## 10. 排查常见问题
 
-### 打开页面卡在登录页，没有注册入口
+### 打开页面卡在登录页，注册按钮是灰的
 
-**这是预期行为。** 注册默认关闭。见 §4。
+说明当前是 `closed` 模式。看你想要哪种：
+
+```bash
+# 想让访客自助注册
+echo "REGISTER_OPEN=true" >> .env && docker compose up -d gateway
+
+# 或走邀请码
+#   .env 写：  REGISTER_INVITE_CODE=你的邀请码
+#             REGISTER_OPEN=false
+#   docker compose up -d gateway
+```
+
+改完**刷新浏览器**（前端会重新查一次注册状态）。详见 §4。
+
+### 点了「注册」没反应
+
+已修复：早前版本在用户名/密码为空时**静默返回，不给任何提示**。现在会明确提示
+「请先填写用户名和密码」。若仍无反应，按 `Ctrl+F5` 强制刷新，确认加载的是新前端产物。
 
 ### 改了 `.env` 但没生效
 
@@ -563,3 +609,6 @@ docker compose up -d --build
 | `2b837e0` | 移除本地 embedding / 精排模型，改走阿里云 API。**镜像 9.08GB → 1.04GB**，构建不再依赖 HuggingFace |
 | `e81bba7` | 修复 `/kb/` 越权与 `/api/sessions/{id}` 越权、封注册、加成本熔断与安全响应头、补齐上传限制与错误信息收敛 |
 | `5b650d3` | 同步研究路径补记 token 用量（此前控制台 Token 统计只算 SSE 那一半） |
+| `6a69999` | 新增本操作手册；修正 README 中被上述改动变成错误的内容 |
+| `cc5d057` | 登录页如实反映注册状态；字段为空时给出提示（此前点了没反应） |
+| 本次 | 注册改为**三态**（open / invite / closed）—— 原先只有两态，表达不了"完全开放" |

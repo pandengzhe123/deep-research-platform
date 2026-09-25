@@ -44,35 +44,65 @@ public class AuthController {
      */
     private final String inviteCode;
 
+    /**
+     * 是否允许任何人直接注册（无需邀请码）。
+     *
+     * <p>注册共三态，由两个变量组合决定：
+     * <ul>
+     *   <li>{@code register-open=true} → <b>open</b>：任何人都能注册，邀请码不参与</li>
+     *   <li>{@code register-open=false} + 配了 {@code REGISTER_INVITE_CODE} → <b>invite</b>：要填对邀请码</li>
+     *   <li>{@code register-open=false} + 没配邀请码 → <b>closed</b>：注册接口整体关闭</li>
+     * </ul>
+     *
+     * <p>为什么要有 open 这一态：早期只有「关闭 / 要邀请码」两态，而"完全开放"在
+     * 语义上不是这两者中的任何一个 —— 用邀请码硬凑会变成「把邀请码公开写在页面上」的
+     * 怪状态。三态各自表达一件事，读配置时不用猜。
+     */
+    private final boolean registerOpen;
+
     public AuthController(UserRepository userRepo,
                           JwtTokenProvider jwt,
                           AuthRateLimiter rateLimiter,
-                          @Value("${app.register-invite-code:}") String inviteCode) {
+                          @Value("${app.register-invite-code:}") String inviteCode,
+                          @Value("${app.register-open:false}") boolean registerOpen) {
         this.userRepo = userRepo;
         this.jwt = jwt;
         this.rateLimiter = rateLimiter;
         this.inviteCode = inviteCode == null ? "" : inviteCode.trim();
-        if (this.inviteCode.isBlank()) {
-            log.info("未配置 REGISTER_INVITE_CODE，注册接口已关闭（本站为演示站时这是预期行为）");
+        this.registerOpen = registerOpen;
+        log.info("注册模式: {}", mode());
+        if ("closed".equals(mode())) {
+            log.info("如需放开注册：设 REGISTER_OPEN=true（任何人可注册），"
+                    + "或设 REGISTER_INVITE_CODE=<邀请码>（需邀请码）");
         }
     }
 
+    /** open / invite / closed */
+    private String mode() {
+        if (registerOpen) return "open";
+        return inviteCode.isBlank() ? "closed" : "invite";
+    }
+
     /**
-     * 公开告知「注册是否开放」。
+     * 公开告知注册状态，让前端如实渲染。
      *
-     * <p>加这个端点的原因：注册默认关闭，而登录页上仍摆着一个可以点的「注册新账号」按钮 ——
+     * <p>加这个端点的原因：注册关闭时登录页仍摆着一个可以点的「注册新账号」按钮 ——
      * 用户只能靠点下去、拿到 403 才知道关着，体验上就是「点了没反应 / 莫名其妙失败」。
-     * 让前端如实反映服务端状态，是这类困惑最省事的解法。
      *
      * <p>返回这个信息不构成信息泄露：任何人直接调一次注册接口就能得到同样的结论。
      * permitAll 已覆盖 /api/auth/**，无需额外配置。
      */
     @GetMapping("/register-open")
     public ResponseEntity<Map<String, Object>> registerOpen() {
-        return ResponseEntity.ok(Map.of("open", !inviteCode.isBlank()));
+        String m = mode();
+        return ResponseEntity.ok(Map.of(
+                "open", !"closed".equals(m),
+                "mode", m,
+                // 前端据此决定要不要显示邀请码输入框
+                "inviteRequired", "invite".equals(m)));
     }
 
-    /** 注册。需要邀请码；未配置邀请码时接口整体关闭。 */
+    /** 注册。按当前模式决定是否需要邀请码。 */
     @PostMapping("/register")
     public ResponseEntity<Map<String, Object>> register(@RequestBody Map<String, String> body,
                                                         ServerHttpRequest request) {
@@ -80,11 +110,11 @@ public class AuthController {
             return tooMany();
         }
 
-        if (inviteCode.isBlank()) {
+        if ("closed".equals(mode())) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN)
                     .body(Map.of("status", "error", "message", "本站已关闭注册"));
         }
-        if (!constantTimeEquals(body.get("inviteCode"), inviteCode)) {
+        if ("invite".equals(mode()) && !constantTimeEquals(body.get("inviteCode"), inviteCode)) {
             // 不区分「没填」和「填错」，也绝不在日志里记录提交的邀请码
             return ResponseEntity.status(HttpStatus.FORBIDDEN)
                     .body(Map.of("status", "error", "message", "邀请码不正确"));

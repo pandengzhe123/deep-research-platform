@@ -12,8 +12,8 @@
         <div class="input-group">
           <input v-model="password" type="password" placeholder="密码" @keyup.enter="doLogin" />
         </div>
-        <!-- 邀请码只在注册开放时才出现：关闭时摆一个填不了的框只会让人困惑 -->
-        <div class="input-group" v-if="registerOpen === true">
+        <!-- 邀请码只在「需要邀请码」的模式下出现：完全开放时不需要，关闭时填不了 -->
+        <div class="input-group" v-if="inviteRequired">
           <input v-model="inviteCode" placeholder="邀请码（仅注册需要）" @keyup.enter="doRegister" />
         </div>
 
@@ -53,6 +53,8 @@ const loading = ref(false)
 
 // null = 还在查询服务端；true/false = 服务端返回的真实状态
 const registerOpen = ref(null)
+// 是否需要邀请码（仅 invite 模式为 true）
+const inviteRequired = ref(false)
 
 const registerBtnText = computed(() => {
   if (registerOpen.value === null) return '检查中…'
@@ -70,6 +72,7 @@ onMounted(async () => {
   try {
     const { data } = await api.get('/auth/register-open')
     registerOpen.value = !!data.open
+    inviteRequired.value = !!data.inviteRequired
   } catch {
     // 查不到就按「关闭」处理：宁可提示需联系管理员，也不给一个点了必然失败的按钮
     registerOpen.value = false
@@ -91,7 +94,8 @@ async function doRegister() {
   if (!username.value || !password.value) { fail('请先填写用户名和密码'); return }
   // 与服务端 AuthController.MIN_PASSWORD_LENGTH 保持一致
   if (password.value.length < 8) { fail('密码至少 8 位'); return }
-  if (!inviteCode.value) { fail('请填写邀请码'); return }
+  // 只有 invite 模式才要邀请码；open 模式直接注册
+  if (inviteRequired.value && !inviteCode.value) { fail('请填写邀请码'); return }
   loading.value = true; msg.value = ''
   try {
     const { data } = await api.post('/auth/register', {

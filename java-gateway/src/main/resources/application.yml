@@ -14,8 +14,15 @@ jwt:
 
 # 应用级安全/成本开关
 app:
-  # 注册邀请码。留空 = 关闭注册（演示站的正确默认值）。
-  # 公网可自由注册 = 把付费 API 额度开放给全世界，必须显式开启。
+  # ---- 注册三态（由这两个变量组合决定）----
+  #   REGISTER_OPEN=true                              → open   任何人可注册
+  #   REGISTER_OPEN=false + REGISTER_INVITE_CODE=xxx  → invite 需要填对邀请码
+  #   REGISTER_OPEN=false + 邀请码留空                 → closed 注册接口整体关闭
+  #
+  # 安全提示：开放注册 = 任何人注册后都能消耗你的付费 API 额度，而单次 L4 实测
+  # 232 万 prompt token。开之前请确认已设置好每日配额、每分钟限流，且 L4 不对
+  # 非管理员开放（见本文件下方与 agent 侧的 GLOBAL/USER_DAILY_RESEARCH_LIMIT）。
+  register-open: ${REGISTER_OPEN:false}
   register-invite-code: ${REGISTER_INVITE_CODE:}
   # 认证端点每 IP 每分钟尝试上限（挡字典撞库与批量注册）。多实例部署时应换 Redis 计数。
   auth-rate-limit-per-minute: ${AUTH_RATE_LIMIT_PER_MINUTE:20}
