@@ -37,4 +37,9 @@ ALTER TABLE sessions ALTER COLUMN token_usage TYPE JSONB USING
 
 -- 2026-06-26: report 列已从 TEXT 迁移为 JSONB（已完成，无需重复执行）
 
+-- 会话 ID 由 8 位（32 bit）放宽到 32 位（128 bit）。
+-- 8 位的搜索空间在 /api/sessions/{id} 缺少归属校验时足以被爆破枚举；该端点已补上
+-- 鉴权，这里再加宽 ID 作为纵深防御。加宽 VARCHAR 不会丢数据，已有 8 位 ID 仍可用。
+ALTER TABLE sessions ALTER COLUMN id TYPE VARCHAR(32);
+
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id, created_at DESC);

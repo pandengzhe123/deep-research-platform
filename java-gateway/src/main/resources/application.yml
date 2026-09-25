@@ -12,6 +12,18 @@ jwt:
   secret: ${JWT_SECRET:}
   expiration-ms: ${JWT_EXPIRATION_MS:86400000}
 
+# 应用级安全/成本开关
+app:
+  # 注册邀请码。留空 = 关闭注册（演示站的正确默认值）。
+  # 公网可自由注册 = 把付费 API 额度开放给全世界，必须显式开启。
+  register-invite-code: ${REGISTER_INVITE_CODE:}
+  # 认证端点每 IP 每分钟尝试上限（挡字典撞库与批量注册）。多实例部署时应换 Redis 计数。
+  auth-rate-limit-per-minute: ${AUTH_RATE_LIMIT_PER_MINUTE:20}
+  # 单文件上传上限，与 nginx client_max_body_size 保持一致
+  max-upload-bytes: ${MAX_UPLOAD_BYTES:20971520}
+  # 是否允许非管理员使用 Level 4。L4 单次实测 232 万 prompt token，默认关闭。
+  allow-level4-for-non-admin: ${ALLOW_LEVEL4_NON_ADMIN:false}
+
 logging:
   level:
     # 生产用 INFO；DEBUG 会在公网服务日志里留下大量内部细节
@@ -21,6 +33,9 @@ spring:
   threads:
     virtual:
       enabled: true   # Java 21 虚拟线程
+  codec:
+    # 上传是「整体读进内存再转发」，必须设上限，否则大文件直接把堆打满
+    max-in-memory-size: ${MAX_IN_MEMORY_BYTES:20971520}
   data:
     redis:
       # 会话上下文热层（history 消息列表）；生产替换为托管 Redis 地址

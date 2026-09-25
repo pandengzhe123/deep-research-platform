@@ -53,6 +53,15 @@ services:
     environment:
       # 容器内不能用 localhost 连 Redis（那是容器自己）
       - REDIS_URL=redis://:${REDIS_PASSWORD:-deepresearch-dev-redis}@redis:6379/0
+      # ---- 成本熔断（见 server.py）----
+      # 单次 L4 实测消耗 232 万 prompt token，没有每日硬上限时一个脚本就能刷爆额度
+      - GLOBAL_DAILY_RESEARCH_LIMIT=${GLOBAL_DAILY_RESEARCH_LIMIT:-100}
+      - USER_DAILY_RESEARCH_LIMIT=${USER_DAILY_RESEARCH_LIMIT:-20}
+      # Redis 不可用时拒绝研究（fail-closed）。可用性让位于成本可控，是刻意的取舍
+      - QUOTA_FAIL_CLOSED=${QUOTA_FAIL_CLOSED:-true}
+      - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-10}
+      - MAX_UPLOAD_BYTES=${MAX_UPLOAD_BYTES:-20971520}
+      - MAX_COMPRESS_CHARS=${MAX_COMPRESS_CHARS:-400000}
     # 真实 API Key 从 agent/.env 注入；文件不存在也能起（required: false），
     # 这样「clone 后直接 docker compose up」不再需要先手动 cp .env.example
     env_file:
@@ -78,6 +87,14 @@ services:
       - REDIS_PASSWORD=${REDIS_PASSWORD:-deepresearch-dev-redis}
       # 生产必须设置：留空时网关会随机生成密钥，重启后所有登录立即失效
       - JWT_SECRET=${JWT_SECRET:-}
+      # ---- 注册与访问控制 ----
+      # 留空 = 关闭注册。公网可自由注册 = 把付费 API 额度开放给全世界
+      - REGISTER_INVITE_CODE=${REGISTER_INVITE_CODE:-}
+      - AUTH_RATE_LIMIT_PER_MINUTE=${AUTH_RATE_LIMIT_PER_MINUTE:-20}
+      # L4 单次实测 232 万 prompt token，非管理员默认禁用
+      - ALLOW_LEVEL4_NON_ADMIN=${ALLOW_LEVEL4_NON_ADMIN:-false}
+      - MAX_UPLOAD_BYTES=${MAX_UPLOAD_BYTES:-20971520}
+      - MAX_IN_MEMORY_BYTES=${MAX_IN_MEMORY_BYTES:-20971520}
       # 生产用 INFO：DEBUG 会打印大量内部细节
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     depends_on:

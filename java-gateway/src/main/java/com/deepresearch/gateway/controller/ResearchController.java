@@ -4,7 +4,7 @@ import com.deepresearch.gateway.model.ResearchModels.ResearchRequest;
 import com.deepresearch.gateway.model.ResearchModels.ResearchResponse;
 import com.deepresearch.gateway.model.ResearchModels.ResearchSession;
 import com.deepresearch.gateway.model.SessionEntity;
-import com.deepresearch.gateway.security.JwtTokenProvider;
+import com.deepresearch.gateway.security.RequestUserResolver;
 import com.deepresearch.gateway.service.AgentClient;
 import com.deepresearch.gateway.service.ResearchScheduler;
 import com.deepresearch.gateway.service.SessionService;
@@ -12,6 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -38,29 +39,36 @@ public class ResearchController {
     private final AgentClient agentClient;
     private final SessionService sessionService;
     private final ResearchScheduler scheduler;
-    private final JwtTokenProvider jwt;
+    private final RequestUserResolver users;
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    /**
+     * 是否允许非管理员使用 Level 4。
+     *
+     * <p>L4（Supervisor 双层）单次实测消耗 232 万 prompt token，是 L1 的几十倍。
+     * 演示站默认关闭，否则一个脚本就能把额度刷光。
+     */
+    private final boolean allowLevel4ForNonAdmin;
 
     public ResearchController(
             AgentClient agentClient,
             SessionService sessionService,
             ResearchScheduler scheduler,
-            JwtTokenProvider jwt
+            RequestUserResolver users,
+            @Value("${app.allow-level4-for-non-admin:false}") boolean allowLevel4ForNonAdmin
     ) {
         this.agentClient = agentClient;
         this.sessionService = sessionService;
         this.scheduler = scheduler;
-        this.jwt = jwt;
+        this.users = users;
+        this.allowLevel4ForNonAdmin = allowLevel4ForNonAdmin;
     }
 
-    /** 从请求头提取 userId，@AuthenticationPrincipal 在 WebFlux 中不可靠 */
-    private String extractUserId(org.springframework.http.server.reactive.ServerHttpRequest request) {
-        String auth = request.getHeaders().getFirst("Authorization");
-        if (auth != null && auth.startsWith("Bearer ")) {
-            String token = auth.substring(7);
-            if (jwt.validateToken(token)) return jwt.getUserId(token);
+    /** Level 4 闸门：非管理员默认拒绝。 */
+    private void assertLevelAllowed(int level, String role) {
+        if (level >= 4 && !allowLevel4ForNonAdmin && !"admin".equalsIgnoreCase(String.valueOf(role))) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Level 4 深度研究仅限管理员使用");
         }
-        return "anonymous";
     }
 
     // ================================================================
@@ -73,7 +81,8 @@ public class ResearchController {
     @PostMapping("/research")
     public Mono<ResearchResponse> research(@RequestBody ResearchRequest req,
             org.springframework.http.server.reactive.ServerHttpRequest request) {
-        final String uid = extractUserId(request);
+        final String uid = users.resolve(request);
+        assertLevelAllowed(req.level(), users.role(request));
         return Mono.fromCallable(() -> {
             // 1. 创建或继续已有会话
             ResearchSession session;
@@ -229,7 +238,8 @@ public class ResearchController {
     @PostMapping(value = "/research/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<ServerSentEvent<String>> researchStream(@RequestBody ResearchRequest req,
             org.springframework.http.server.reactive.ServerHttpRequest request) {
-        final String uid = extractUserId(request);
+        final String uid = users.resolve(request);
+        assertLevelAllowed(req.level(), users.role(request));
 
         // 准备阶段的 JDBC + Redis 调用都是阻塞的，绝不能跑在 Netty 事件循环上
         // （会连带阻塞该 event loop 上的所有连接），统一切到虚拟线程调度器
@@ -262,8 +272,11 @@ public class ResearchController {
      * 取消正在运行的研究任务。
      */
     @DeleteMapping("/research/{taskId}")
-    public ResponseEntity<Map<String, Object>> cancel(@PathVariable String taskId) {
-        boolean ok = agentClient.cancel(taskId);
+    public ResponseEntity<Map<String, Object>> cancel(@PathVariable String taskId,
+            org.springframework.http.server.reactive.ServerHttpRequest request) {
+        // 归属校验放在 Agent 侧完成（只有它持有 taskId → user 的映射）；这里负责把
+        // 认证后的 uid 传下去 —— 客户端无法伪造这个值。
+        boolean ok = agentClient.cancel(taskId, users.resolve(request));
         return ok
                 ? ResponseEntity.ok(Map.of("status", "cancelled", "taskId", taskId))
                 : ResponseEntity.ok(Map.of("status", "not_found", "taskId", taskId));
@@ -277,9 +290,22 @@ public class ResearchController {
      * 获取某个会话的完整信息（含报告）。
      */
     @GetMapping("/sessions/{id}")
-    public ResponseEntity<Map<String, Object>> getSession(@PathVariable String id) {
+    public ResponseEntity<Map<String, Object>> getSession(@PathVariable String id,
+            org.springframework.http.server.reactive.ServerHttpRequest request) {
         ResearchSession session = sessionService.getSession(id);
         if (session == null) return ResponseEntity.notFound().build();
+
+        // 越权防护：此前这里没有任何归属校验，任何登录用户按 ID 就能读到别人的完整
+        // 会话（问题 + 报告 + 完整历史）。配合当时只有 8 位（32 bit）的会话 ID，
+        // 枚举成本极低 —— 属于可实际利用的越权。
+        // 返回 404 而非 403：403 等于确认「该 ID 存在」，仍会泄露信息。
+        String uid = users.resolve(request);
+        if (!uid.equals(session.getUserId())) {
+            log.warn("拒绝越权读取会话: requester={}, owner={}, session={}",
+                    uid, session.getUserId(), id);
+            return ResponseEntity.notFound().build();
+        }
+
         SessionEntity entity = sessionService.getEntity(id);
         return ResponseEntity.ok(Map.of(
                 "session", session,

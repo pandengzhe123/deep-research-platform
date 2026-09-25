@@ -145,7 +145,10 @@ public class SessionService {
      * 创建新会话，写入数据库。
      */
     public ResearchSession createSession(String userId, String question) {
-        String id = UUID.randomUUID().toString().substring(0, 8);
+        // 32 位十六进制（128 bit）。原先取 UUID 前 8 位只有 32 bit —— 在
+        // /api/sessions/{id} 缺少归属校验时，这个搜索空间足以被爆破枚举。
+        // 该端点已补上鉴权，这里再加宽 ID 作为纵深防御；已有的 8 位 ID 仍然可用。
+        String id = UUID.randomUUID().toString().replace("-", "");
         SessionEntity entity = new SessionEntity(id, userId, question);
         entity.setHistory(toJson(List.of(msgObj("user", question))));
         repo.save(entity);

@@ -28,15 +28,9 @@ export const useAuthStore = defineStore('auth', () => {
     clearSessionCache()
   }
 
-  function kbUserId() {
-    // 从 JWT payload 解析 subject（数字 ID），和 Java extractUserId 保持一致
-    try {
-      const payload = JSON.parse(atob(token.value.split('.')[1]))
-      return payload.sub || username.value || 'default'
-    } catch {
-      return username.value || 'default'
-    }
-  }
+  // 这里原有 kbUserId()：把 JWT payload 里的 sub 解出来，再由前端当 user_id 传给 /kb/*。
+  // 已删除 —— 那正是知识库越权的根源（user_id 由客户端提供，服务端无从验证）。
+  // 现在 user_id 统一由网关从 JWT 解析，见 KbController / RequestUserResolver。
 
-  return { token, username, role, isLoggedIn, isAdmin, login, logout, kbUserId }
+  return { token, username, role, isLoggedIn, isAdmin, login, logout }
 })

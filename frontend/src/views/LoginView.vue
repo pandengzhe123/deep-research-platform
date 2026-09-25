@@ -12,6 +12,9 @@
         <div class="input-group">
           <input v-model="password" type="password" placeholder="密码" @keyup.enter="doLogin" />
         </div>
+        <div class="input-group">
+          <input v-model="inviteCode" placeholder="邀请码（仅注册需要）" @keyup.enter="doRegister" />
+        </div>
 
         <button class="btn-login" @click="doLogin" :disabled="loading">
           {{ loading ? '...' : '登 录' }}
@@ -39,6 +42,7 @@ const router = useRouter()
 const auth = useAuthStore()
 const username = ref('')
 const password = ref('')
+const inviteCode = ref('')
 const msg = ref('')
 const msgType = ref('')
 const loading = ref(false)
@@ -56,10 +60,16 @@ async function doLogin() {
 
 async function doRegister() {
   if (!username.value || !password.value) return
-  if (password.value.length < 4) { msg.value = '密码至少 4 位'; msgType.value = 'error'; return }
+  // 与服务端 AuthController.MIN_PASSWORD_LENGTH 保持一致（原来两边都是 4 位）
+  if (password.value.length < 8) { msg.value = '密码至少 8 位'; msgType.value = 'error'; return }
+  if (!inviteCode.value) { msg.value = '请填写邀请码'; msgType.value = 'error'; return }
   loading.value = true; msg.value = ''
   try {
-    const { data } = await api.post('/auth/register', { username: username.value, password: password.value })
+    // 服务端默认关闭注册（未配置 REGISTER_INVITE_CODE 时），错误信息会经
+    // ResponseStatusAdvice 回传，这里直接展示即可。
+    const { data } = await api.post('/auth/register', {
+      username: username.value, password: password.value, inviteCode: inviteCode.value,
+    })
     if (data.token) { auth.login(data.token, data.username, data.role); router.push('/') }
     else { msg.value = data.message || '注册失败'; msgType.value = 'error' }
   } catch (e) { msg.value = e.response?.data?.message || '网络错误'; msgType.value = 'error' }

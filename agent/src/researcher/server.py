@@ -13,7 +13,7 @@ import os
 import time
 import traceback
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncGenerator
 
@@ -179,6 +179,10 @@ async def renew_research_lock_loop(session_id: str, token: str, ttl: int = 3600,
 
 RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "10"))  # 每用户每分钟研究次数上限
 
+# 输入体积上限（纵深防御：网关与 nginx 也各有各自的限制）
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(20 * 1024 * 1024)))
+MAX_COMPRESS_CHARS = int(os.getenv("MAX_COMPRESS_CHARS", "400000"))
+
 
 async def check_rate_limit(user_id: str) -> tuple[bool, int]:
     """固定窗口限流（INCR + EXPIRE）。
@@ -224,11 +228,94 @@ async def record_usage(user_id: str, question: str = "") -> None:
     except Exception as e:
         log.warning(f"用量统计失败（不影响主流程）: {e}")
 
+
+# ============================================================
+# 每日配额 —— 成本熔断
+# ============================================================
+# 与「每分钟限流」的分工：每分钟限流管的是「别刷屏」，每日配额管的是「别破产」。
+# 单次 L4 研究实测消耗 232 万 prompt token，是 L1 的几十倍 —— 没有每日硬上限的话，
+# 一个循环脚本就能在几小时内烧掉整月额度。
+
+GLOBAL_DAILY_LIMIT = int(os.getenv("GLOBAL_DAILY_RESEARCH_LIMIT", "100"))   # 全站每日研究次数
+USER_DAILY_LIMIT = int(os.getenv("USER_DAILY_RESEARCH_LIMIT", "20"))        # 单用户每日研究次数
+
+# Redis 不可用时是否拒绝研究。默认 true（fail-closed）。
+# 这是刻意的取舍：每分钟限流降级只是「这一分钟没人管」，每日配额降级却是
+# 「成本完全无上限」——两者的失败代价差了几个量级，所以不共用失败姿态。
+# 可用 QUOTA_FAIL_CLOSED=false 改回可用性优先。
+QUOTA_FAIL_CLOSED = os.getenv("QUOTA_FAIL_CLOSED", "true").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _today() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%d")
+
+
+async def check_daily_quota(user_id: str) -> tuple[bool, str]:
+    """检查全局 + 单用户每日配额。返回 (allowed, 拒绝原因)。"""
+    from .search import _get_redis
+
+    r = _get_redis()
+    if r is None:
+        if QUOTA_FAIL_CLOSED:
+            log.warning("Redis 不可用且 QUOTA_FAIL_CLOSED=true，按拒绝处理")
+            return False, "配额服务暂时不可用，请稍后再试"
+        log.warning("Redis 不可用，每日配额检查已跳过（QUOTA_FAIL_CLOSED=false）")
+        return True, ""
+
+    day = _today()
+    try:
+        global_used = int(await r.get(f"quota:global:{day}") or 0)
+        user_used = int(await r.get(f"quota:user:{user_id}:{day}") or 0)
+    except Exception as e:
+        log.warning(f"读取每日配额失败: {e}")
+        if QUOTA_FAIL_CLOSED:
+            return False, "配额服务暂时不可用，请稍后再试"
+        return True, ""
+
+    if global_used >= GLOBAL_DAILY_LIMIT:
+        log.warning(f"全局每日配额已用尽: {global_used}/{GLOBAL_DAILY_LIMIT}")
+        return False, "本站今日研究额度已用完，请明天再来"
+    if user_used >= USER_DAILY_LIMIT:
+        return False, f"你今日的研究次数已达上限（{USER_DAILY_LIMIT} 次），请明天再来"
+    return True, ""
+
+
+async def consume_daily_quota(user_id: str) -> None:
+    """扣减配额。只在真正开始研究时调用（被锁/被限流拒绝的请求不扣）。"""
+    from .search import _get_redis
+
+    r = _get_redis()
+    if r is None:
+        return
+    day = _today()
+    try:
+        pipe = r.pipeline()
+        pipe.incr(f"quota:global:{day}")
+        pipe.expire(f"quota:global:{day}", 2 * 24 * 3600)   # 跨天自动清零
+        pipe.incr(f"quota:user:{user_id}:{day}")
+        pipe.expire(f"quota:user:{user_id}:{day}", 2 * 24 * 3600)
+        await pipe.execute()
+    except Exception as e:
+        log.warning(f"扣减每日配额失败（不影响主流程）: {e}")
+
+
 # ============================================================
 # 核心 —— 用 asyncio.Queue 把 Agent 的进度事件转成 SSE 流
 # ============================================================
 
-_active_tasks: dict[str, aio.Event] = {}
+# task_id -> {"cancel": Event, "user_id": str}
+# 带 user_id 是为了让取消端点能做归属校验。此前这个字典只有定义和读取、
+# 从来没有人写入，于是 `DELETE /research/{task_id}` 永远返回 404 —— 取消功能
+# 实际是死的，也谈不上越权（没有任务可取消）。
+_active_tasks: dict[str, dict] = {}
+
+
+def _register_task(task_id: str, user_id: str, cancel: aio.Event) -> None:
+    _active_tasks[task_id] = {"cancel": cancel, "user_id": user_id}
+
+
+def _unregister_task(task_id: str) -> None:
+    _active_tasks.pop(task_id, None)
 
 
 async def run_agent_with_sse(
@@ -402,17 +489,21 @@ async def run_agent_with_sse(
 ERROR_HTTP_STATUS = {
     "session_locked": 409,      # 冲突：同会话已有研究在跑
     "rate_limited": 429,        # 限流：语义明确，前端可据此退避重试
+    "daily_limited": 429,       # 每日配额用尽：同样是 429，但重试要等到明天
 }
 
 
-async def _run_with_lock(req: "ResearchRequest", cancel: aio.Event) -> AsyncGenerator[dict, None]:
+async def _run_with_lock(req: "ResearchRequest", cancel: aio.Event,
+                         task_id: str = "") -> AsyncGenerator[dict, None]:
     """在会话研究锁保护下执行研究。
 
     同一会话并发研究 → 报告错乱 + 双倍 token，故第二个请求直接拒绝；
     不同会话/不同用户互不影响（锁粒度为 session_id）。
 
-    执行顺序：① 会话锁 → ② 限流 → ③ 用量统计 → ④ 执行。
-    限流放在锁之后：被锁拒绝的请求不应消耗配额（否则同会话重复点击会刷爆限额）。
+    执行顺序：① 会话锁 → ② 每分钟限流 → ③ 每日配额 → ④ 用量统计 → ⑤ 执行。
+    限流/配额都放在锁之后：被锁拒绝的请求不应消耗配额（否则同会话重复点击会刷爆限额）。
+
+    task_id 由调用方生成并注册，本函数只负责在自己结束时注销它。
     """
     # ① 会话研究锁（拿不到直接拒绝，不计配额）
     session_id = (req.session_id or "").strip()
@@ -448,8 +539,21 @@ async def _run_with_lock(req: "ResearchRequest", cancel: aio.Event) -> AsyncGene
                 "remaining": remaining,
             }, ensure_ascii=False)}
 
-        # ③ 用量统计：真正开始研究才计数（含热门主题榜）
+        # ②.5 每日配额（成本熔断）：全站 + 单用户。放在「锁」之后、「计数」之前 ——
+        # 被锁或超频拒绝的请求不该消耗当日额度。
+        quota_ok, quota_reason = await check_daily_quota(req.user_id)
+        if not quota_ok:
+            yield {"event": "error", "data": json.dumps({
+                "message": quota_reason,
+                "code": "daily_limited",
+                "remaining": 0,
+                "retry_after": 3600,
+            }, ensure_ascii=False)}
+            return
+
+        # ③ 用量统计：真正开始研究才计数（含热门主题榜 + 每日配额扣减）
         await record_usage(req.user_id, req.question)
+        await consume_daily_quota(req.user_id)
 
         async for event in run_agent_with_sse(
             question=req.question, level=req.level,
@@ -467,21 +571,12 @@ async def _run_with_lock(req: "ResearchRequest", cancel: aio.Event) -> AsyncGene
                 pass
         if lock_token:
             await release_research_lock(session_id, lock_token)
+        _unregister_task(task_id)
 
 
 # ============================================================
 # API 端点
 # ============================================================
-
-@app.get("/test-sse")
-async def test_sse():
-    """测试 SSE 是否实时推送 —— 每秒一条，共 10 条。"""
-    async def generate():
-        for i in range(10):
-            yield {"event": "status", "data": json.dumps({"step": "test", "i": i})}
-            await aio.sleep(1)
-    return EventSourceResponse(generate())
-
 
 @app.get("/health")
 async def health():
@@ -492,8 +587,10 @@ async def health():
 async def research_sync(req: ResearchRequest):
     """同步接口 —— 收集 SSE 事件，等 done 后返回 JSON。"""
     cancel = aio.Event()
+    task_id = uuid.uuid4().hex
+    _register_task(task_id, req.user_id, cancel)
     result = []
-    async for event in _run_with_lock(req, cancel):
+    async for event in _run_with_lock(req, cancel, task_id):
         if event["event"] == "done":
             result.append(json.loads(event["data"]))
         elif event["event"] == "error":
@@ -513,21 +610,29 @@ async def research_sync(req: ResearchRequest):
 async def research_stream(req: ResearchRequest):
     """SSE 流式接口。"""
     cancel = aio.Event()
-    return EventSourceResponse(_run_with_lock(req, cancel))
+    task_id = uuid.uuid4().hex
+    _register_task(task_id, req.user_id, cancel)
+    return EventSourceResponse(_run_with_lock(req, cancel, task_id))
 
 
 @app.delete("/research/{task_id}")
-async def cancel_research(task_id: str):
-    cancel = _active_tasks.get(task_id)
-    if cancel is None:
+async def cancel_research(task_id: str, user_id: str = ""):
+    """取消研究任务。
+
+    归属校验：只能取消自己的任务。网关传入的 user_id 取自 JWT，客户端伪造不了。
+    「不是你的」与「不存在」返回同一个 404 —— 区分开等于告诉对方「这个 task_id 真实存在」。
+    """
+    task = _active_tasks.get(task_id)
+    if task is None or task.get("user_id") != user_id:
         raise HTTPException(status_code=404, detail="任务不存在或已完成")
-    cancel.set()
+    task["cancel"].set()
     return {"status": "cancelled", "task_id": task_id}
 
 
 @app.get("/research/active")
-async def list_active_tasks():
-    return {"active_tasks": list(_active_tasks.keys())}
+async def list_active_tasks(user_id: str = ""):
+    """只返回调用方自己的活跃任务。列出全部等于把别人的 task_id 交出去。"""
+    return {"active_tasks": [tid for tid, t in _active_tasks.items() if t.get("user_id") == user_id]}
 
 
 # ============================================================
@@ -552,9 +657,15 @@ async def compress_history(req: dict):
     if not messages or len(messages) < 5:
         return {"summary": ""}
 
+    raw = "\n".join(str(m) for m in messages)
+    # 上限：这个端点会拿输入去调 LLM，不设上限等于开放一个「任意长度 prompt 的免费代理」。
+    # 超出时截断而非报错 —— 压缩的目标本就是丢弃细节，截尾比整个失败更合理。
+    if len(raw) > MAX_COMPRESS_CHARS:
+        log.warning("compress 输入过长，已截断: %d -> %d", len(raw), MAX_COMPRESS_CHARS)
+        raw = raw[-MAX_COMPRESS_CHARS:]
+
     try:
         llm = LLMClient()
-        raw = "\n".join(str(m) for m in messages)
         summary = await llm.chat(
             system_prompt=COMPRESS_HISTORY_PROMPT,
             user_message=f"请压缩以下对话历史（保留关键信息，丢弃搜索细节和冗长报告）：\n\n{raw}",
@@ -573,23 +684,35 @@ import os
 import tempfile
 from pathlib import Path
 
+
 @app.post("/kb/upload")
 async def kb_upload(file: UploadFile, user_id: str = "default"):
-    """上传文档到用户的知识库。支持 PDF/TXT/MD。"""
+    """上传文档到用户的知识库。支持 PDF/TXT/MD/DOCX。
+
+    注意：user_id 由调用方（网关）传入且本服务不校验 —— 所以 agent 绝不能发布到
+    公网端口（docker-compose 里只 expose、不 ports），鉴权统一由网关负责。
+    """
     suffix = Path(file.filename or "unknown").suffix.lower()
     if suffix not in (".pdf", ".txt", ".md", ".docx"):
         raise HTTPException(status_code=400, detail=f"不支持的文件类型: {suffix}")
 
+    tmp_path = None
     try:
-        # 存临时文件
+        content = await file.read()
+        # 整个文件会读进内存再送去 embedding，必须限大小。
+        # 网关、nginx 各有各自的限制 —— 纵深防御，任一层单独失效都不至于被打穿。
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"文件超过 {MAX_UPLOAD_BYTES // 1024 // 1024}MB 上限",
+            )
+
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            content = await file.read()
             tmp.write(content)
             tmp_path = tmp.name
 
         # 入库（用原始文件名）— ingest 含 embedding 推理，扔进线程池避免阻塞
         result = await aio.to_thread(kb.ingest_v2, tmp_path, user_id=user_id, doc_id=file.filename)
-        os.unlink(tmp_path)
 
         if result.get("status") == "error":
             raise HTTPException(status_code=500, detail=result.get("message", "未知错误"))
@@ -597,9 +720,17 @@ async def kb_upload(file: UploadFile, user_id: str = "default"):
         return result
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         log.exception("kb_upload 失败")
-        raise HTTPException(status_code=500, detail=str(e))
+        # 不回传异常原文：里面常含容器内路径与底层库细节，属于内部信息
+        raise HTTPException(status_code=500, detail="文档处理失败，请稍后重试")
+    finally:
+        # 放 finally：原来出错时会漏下临时文件，长期运行会把磁盘塞满
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
 
 @app.get("/kb/files")
