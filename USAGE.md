@@ -257,6 +257,18 @@ docker compose exec postgres psql -U postgres -d deepresearch -c \
 | `MAX_UPLOAD_BYTES` | `20971520` | 单文件上传上限（20MB） | 按需 |
 | `MAX_IN_MEMORY_BYTES` | `20971520` | 网关请求体内存上限 | 与上行一致 |
 | `MAX_COMPRESS_CHARS` | `400000` | 上下文压缩输入上限 | 一般不动 |
+| `REPORT_MAX_TOKENS` | `384000` | 报告生成的输出上限 | 见下方说明 |
+
+> **关于 `REPORT_MAX_TOKENS`**：显式设置它是为了不依赖服务端默认值 —— 实测默认值
+> 并不稳定（同一个 prompt 有时自然结束在 9.7K tokens，有时 8192 就被硬切，报告断在
+> 半句而无人察觉）。
+>
+> **上限 ≠ 目标**：模型写完即停（`finish_reason=stop`），本项目报告的自然长度约
+> 9.7K tokens / 23K 字符，384000 只是 40 倍余量。
+>
+> 被截断时系统会**显式告知**：报告末尾追加 Markdown 提示块（前端可见），
+> trace 的 `llm_call` 记录 `finish_reason`，`run_end.summary.truncated_calls` 计数。
+> 调大上限后要留意：报告会进入对话历史，单份超大报告会触发上下文压缩。
 
 **`JWT_SECRET` 生成方式：**
 

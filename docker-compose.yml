@@ -62,6 +62,9 @@ services:
       - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-10}
       - MAX_UPLOAD_BYTES=${MAX_UPLOAD_BYTES:-20971520}
       - MAX_COMPRESS_CHARS=${MAX_COMPRESS_CHARS:-400000}
+      # 报告生成输出上限。显式设置以免依赖不稳定的服务端默认值
+      # （实测同一 prompt 有时 8192 就被硬切）。上限 ≠ 目标：模型写完即停。
+      - REPORT_MAX_TOKENS=${REPORT_MAX_TOKENS:-384000}
     # 真实 API Key 从 agent/.env 注入；文件不存在也能起（required: false），
     # 这样「clone 后直接 docker compose up」不再需要先手动 cp .env.example
     env_file:

@@ -2,12 +2,49 @@
 
 import asyncio
 import json
+import logging
 import time
 from typing import Any
 
 from openai import AsyncOpenAI, APIError, APIConnectionError, APITimeoutError, RateLimitError
 
 from .config import config
+
+log = logging.getLogger(__name__)
+
+# finish_reason 取值：
+#   "stop"          正常收尾
+#   "length"        被 max_tokens 截断 —— 内容不完整，必须显式处理
+#   "tool_calls"    模型请求调用工具
+#   "content_filter" 被内容策略截断
+FINISH_LENGTH = "length"
+
+
+def finish_reason_of(resp) -> str:
+    """安全取 finish_reason（不同后端或异常响应下可能缺失）。"""
+    try:
+        return resp.choices[0].finish_reason or ""
+    except Exception:
+        return ""
+
+
+def is_truncated(finish_reason: str) -> bool:
+    """输出是否被长度上限截断。
+
+    这个判断此前全项目没有任何地方做 —— 于是「报告写到一半被硬切」在 trace 里和
+    「正常写完」长得完全一样（success=true、error 为空、token 数看着也正常），
+    一直到用户自己发现文章断在半句为止。信号一直都在，只是没人接。
+    """
+    return finish_reason == FINISH_LENGTH
+
+
+def _warn_if_truncated(finish_reason: str, method: str, purpose: str) -> None:
+    if is_truncated(finish_reason):
+        log.warning(
+            "LLM 输出被截断（finish_reason=length）：method=%s purpose=%s —— "
+            "本次返回内容不完整，调用方需显式处理",
+            method, (purpose or "")[:60],
+        )
 
 
 class LLMClient:
@@ -80,8 +117,13 @@ class LLMClient:
         user_message: str,
         temperature: float = 0.1,
         max_tokens: int | None = None,
-    ) -> str:
-        """发送一条 system + user 消息，返回文本回复。"""
+        return_finish_reason: bool = False,
+    ):
+        """发送一条 system + user 消息，返回文本回复。
+
+        return_finish_reason=True 时返回 (文本, finish_reason)，让调用方（报告生成）
+        能判断本次输出是否被截断；默认仍返回纯文本，既有调用方不受影响。
+        """
         t0 = time.time()
         async def _call():
             kwargs: dict = dict(
@@ -99,6 +141,8 @@ class LLMClient:
             return resp, resp.choices[0].message.content or ""
 
         (resp, result), retries = await self._call_with_retry(_call)
+        finish = finish_reason_of(resp)
+        _warn_if_truncated(finish, "chat", system_prompt)
         if self.trace:
             await self.trace.record_llm(
                 method="chat",
@@ -109,7 +153,10 @@ class LLMClient:
                 success=True,
                 purpose=system_prompt[:120],
                 retries=retries,
+                finish_reason=finish,
             )
+        if return_finish_reason:
+            return result, finish
         return result
 
     async def chat_with_tools(
@@ -130,6 +177,10 @@ class LLMClient:
             return resp, resp.choices[0].message
 
         (resp, msg), retries = await self._call_with_retry(_call)
+        finish = finish_reason_of(resp)
+        # 工具循环里被截断同样致命：模型话说一半被切，tool_calls 可能只声明了一部分，
+        # 「tool_call ↔ tool 1:1 配对」这个不变量当场被破坏。
+        _warn_if_truncated(finish, "chat_with_tools", system_prompt)
         if self.trace:
             await self.trace.record_llm(
                 method="chat_with_tools",
@@ -140,6 +191,7 @@ class LLMClient:
                 success=True,
                 purpose=system_prompt[:120],
                 retries=retries,
+                finish_reason=finish,
             )
         return msg
 
@@ -167,6 +219,8 @@ class LLMClient:
             return resp, json.loads(resp.choices[0].message.content or "{}")
 
         (resp, result), retries = await self._call_with_retry(_call)
+        finish = finish_reason_of(resp)
+        _warn_if_truncated(finish, "structured_output", system_prompt)
         if self.trace:
             await self.trace.record_llm(
                 method="structured_output",
@@ -177,5 +231,6 @@ class LLMClient:
                 success=True,
                 purpose=system_prompt[:120],
                 retries=retries,
+                finish_reason=finish,
             )
         return result

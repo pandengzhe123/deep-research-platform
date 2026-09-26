@@ -47,6 +47,20 @@ class Config:
     # 生产：换成托管 Redis 地址（redis://:password@host:6379/0），代码零改动
     redis_url: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
+    # ---- 报告生成 ----
+    # 报告类调用的输出上限。显式设置的理由：不传 max_tokens 时用的是服务端默认值，
+    # 而这个默认值实测并不稳定（同一个 prompt 有时自然结束在 9.7K tokens，有时 8192
+    # 就被切）—— 依赖一个自己预测不了的默认值，等于把「报告会不会被截断」交给运气。
+    # 显式设一个足够大的上限，把这份不确定性去掉。
+    #
+    # 384000 = DeepSeek 官方目前提供的输出上限（实测 API 接受；代码里旧的
+    # "65537 会 400" 注释已过时）。
+    # ⚠️ 这是「上限」不是「目标」：模型写完就停（finish_reason=stop）。实测本项目
+    #    报告的自然长度约 9.7K tokens / 23K 字符，384K 只是 40 倍余量。
+    #    上限越大越要留意：报告会追加进对话历史，而 max_history_chars 默认
+    #    1,000,000 —— 单份超大报告会把后续追问直接顶进上下文压缩流程。
+    report_max_tokens: int = int(os.getenv("REPORT_MAX_TOKENS", "384000"))
+
 
 # 全局单例
 config = Config()

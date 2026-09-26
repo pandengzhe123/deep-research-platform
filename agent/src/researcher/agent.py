@@ -13,12 +13,36 @@ import uuid
 from datetime import datetime
 
 from .config import config
-from .llm import LLMClient
+from .llm import LLMClient, is_truncated
 from .search import SearchTool, normalize_queries
 
 
 def _today_str() -> str:
     return datetime.now().strftime("%Y年%m月%d日")
+
+
+# 报告被长度上限截断时追加到正文末尾的显式提示。
+# 写成 Markdown 引用块：前端把报告当 Markdown 渲染，所以它会以醒目样式出现在
+# 用户眼前；只记日志的话，用户仍然会看到一篇断在半句的报告而毫不知情。
+TRUNCATION_NOTICE = (
+    "\n\n---\n\n"
+    "> ⚠️ **本报告因达到输出长度上限而被截断，以上内容并不完整。**\n"
+    "> 建议重试一次，或在提问时缩小范围（例如拆成更具体的子问题）。\n"
+)
+
+
+def finalize_report(report: str, finish_reason: str, level: int) -> str:
+    """报告收尾：一旦被截断，必须让「不完整」这件事显式可见。
+
+    此前全项目没有任何地方检查 finish_reason，于是被切掉一半的报告和完整报告
+    在系统里长得完全一样（success=true、error 为空、token 数也正常），只有用户
+    自己能发现「文章断在半句」。这里把静默失败变成显式失败。
+    """
+    if is_truncated(finish_reason):
+        print(f"  [WARN] Level {level} 报告被输出上限截断（finish_reason=length），"
+              f"已在报告末尾追加显式提示")
+        return report + TRUNCATION_NOTICE
+    return report
 
 # ============================================================
 # Prompt 模板
@@ -261,14 +285,16 @@ class FastLevel1Agent:
 
         self.emit({"step": "reporting", "message": "正在撰写报告（唯一一次 LLM 调用）..."})
 
-        report = await self.llm.chat(
+        report, finish = await self.llm.chat(
             system_prompt="你是专业的深度研究报告撰写助手。简洁、准确、有引用。",
             user_message=FAST_REPORT_PROMPT.format(
                 question=question,
                 search_results=search_results,
             ),
+            max_tokens=config.report_max_tokens,
+            return_finish_reason=True,
         )
-        return report
+        return finalize_report(report, finish, 1)
 
     async def _kb_search(self, query: str) -> str:
         """异步知识库检索，在线程池中执行避免阻塞事件循环。"""
@@ -846,13 +872,16 @@ class Level2Agent:
         # 生成最终报告
         print(f"\n[最终] 生成报告...")
         self.emit({"step": "reporting", "message": "正在撰写最终报告..."})
-        report = await self.llm.chat(
+        report, finish = await self.llm.chat(
             system_prompt="你是专业的深度研究报告撰写助手。",
             user_message=REPORT_PROMPT.format(
                 question=question,
                 search_results=compressed,
             ),
+            max_tokens=config.report_max_tokens,
+            return_finish_reason=True,
         )
+        report = finalize_report(report, finish, 2)
         if self._compressed_summaries:
             prefix = "<!-- 上下文压缩记录 -->\n" + "\n".join(self._compressed_summaries)
             report = prefix + "\n\n" + report
@@ -1474,9 +1503,12 @@ class Level4Agent:
         findings_text = "\n\n---\n\n".join(trimmed_findings)
 
         try:
-            final = await self.llm.chat(
+            final, finish = await self.llm.chat(
                 system_prompt="你是专业的深度研究报告总编。",
-                max_tokens=65536,  # L4 长报告用 64K（DeepSeek V4 Flash 输出上限 65536，实测 65537 会 400）
+                # 与 L1/L2/L3 共用同一个可配置上限。原先这里硬编码 65536，注释还写着
+                # "实测 65537 会 400" —— 该说法已过时（实测 API 现在接受 384000）。
+                max_tokens=config.report_max_tokens,
+                return_finish_reason=True,
                 user_message=FINAL_REPORT_PROMPT.format(
                     question=question,
                     research_brief=research_brief,
@@ -1486,6 +1518,7 @@ class Level4Agent:
                     date=_today_str(),
                 ),
             )
+            final = finalize_report(final, finish, 4)
             if self._compressed_summaries:
                 prefix = "<!-- 上下文压缩记录 -->\n" + "\n".join(self._compressed_summaries)
                 final = prefix + "\n\n" + final

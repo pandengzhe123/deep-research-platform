@@ -38,6 +38,10 @@ class TraceRun:
 
         self._llm_calls = 0
         self._llm_errors = 0
+        # 被 max_tokens 截断的调用数（finish_reason="length"）。
+        # 单独计数，这样 run_end 汇总里一眼能看出「这次报告是不是被切了」——
+        # 只看 llm_errors 是看不出来的：截断的调用 success 依然是 true。
+        self._truncated_calls = 0
         self._search_calls = 0
         self._search_errors = 0
         self._total_prompt_tokens = 0
@@ -85,6 +89,7 @@ class TraceRun:
             "summary": {
                 "llm_calls": self._llm_calls,
                 "llm_errors": self._llm_errors,
+                "truncated_calls": self._truncated_calls,
                 "search_calls": self._search_calls,
                 "search_errors": self._search_errors,
                 "total_prompt_tokens": self._total_prompt_tokens,
@@ -122,8 +127,15 @@ class TraceRun:
     async def record_llm(self, method: str, model: str, usage: dict | None,
                          duration_ms: int, request_id: str = "",
                          success: bool = True, purpose: str = "",
-                         retries: int = 0, error: str = ""):
-        """记录一次 LLM 调用。"""
+                         retries: int = 0, error: str = "",
+                         finish_reason: str = ""):
+        """记录一次 LLM 调用。
+
+        finish_reason 单独落盘：值为 "length" 时表示这次输出被 max_tokens 硬截断，
+        而不是模型自然收尾。以前这个字段根本没被记录，于是「报告写到一半被切掉」
+        在 trace 里和「正常写完」完全无法区分 —— success=true、error 为空、
+        completion_tokens 看着也正常。
+        """
         if usage:
             self._total_prompt_tokens += usage.get("prompt_tokens", 0)
             self._total_completion_tokens += usage.get("completion_tokens", 0)
@@ -132,6 +144,8 @@ class TraceRun:
         self._llm_calls += 1
         if not success:
             self._llm_errors += 1
+        if finish_reason == "length":
+            self._truncated_calls += 1
 
         self._append({
             "type": "llm_call",
@@ -145,6 +159,7 @@ class TraceRun:
             "purpose": purpose[:120] if purpose else "",
             "retries": retries,
             "error": error,
+            "finish_reason": finish_reason,
         })
 
     async def record_search(self, queries: list[str], result_count: int,
