@@ -1176,6 +1176,40 @@ def test_bm25_only_returns_positive_score_docs():
 
 
 # ============================================================
+# retrievers —— 查询改写的容错解析
+# ============================================================
+# 这个环节曾因为「只认裸数组」而**静默失效 73%**（详见 query_rewriter 的 docstring）。
+# 解析是纯函数，用离线用例把实测观测到的各种形态钉住 ——
+# 其中「模型把 response_format 原样回显成 content」是最反直觉的一种。
+
+
+def test_query_rewriter_parse_shapes():
+    from researcher.retrievers.query_rewriter import QueryRewriter
+
+    cases = [
+        ('["a","b","c"]', ["a", "b", "c"]),                          # 裸数组（不传 response_format 时的正常形态）
+        ('{"queries": ["a","b","c"]}', ["a", "b", "c"]),             # json_object 包装
+        ('{"type": "json_object", "content": ["a","b"]}', ["a", "b"]),  # response_format 被原样回显
+        ('{"data": {"queries": ["a"]}}', ["a"]),                     # 嵌套两层
+        ('好的，结果如下：\n["a","b"]\n希望有帮助', ["a", "b"]),          # 前后有散文
+        ('{"foo": ["a","b"]}', ["a", "b"]),                          # 键名未知 → 兜底遍历
+        ('["  a  ", "", "b"]', ["a", "b"]),                          # strip + 去空
+    ]
+    for raw, want in cases:
+        got = QueryRewriter._parse(raw)
+        assert got == want, f"{raw!r} → {got!r}，期望 {want!r}"
+
+
+def test_query_rewriter_parse_gives_up_cleanly():
+    """挖不到时返回 None（调用方据此回退原问题），不抛异常、不返回垃圾。"""
+    from researcher.retrievers.query_rewriter import QueryRewriter
+
+    for raw in ('{"type": "json_object"}', "我无法完成这个任务", "",
+                None, "[]", '{"queries": []}', '{"queries": [1, 2]}'):
+        assert QueryRewriter._parse(raw) is None, f"{raw!r} 应为 None"
+
+
+# ============================================================
 # 运行
 # ============================================================
 
@@ -1249,6 +1283,9 @@ if __name__ == "__main__":
         test_bm25_cache_bounded_across_users,
         # retrievers —— BM25 词法相关性闸
         test_bm25_only_returns_positive_score_docs,
+        # retrievers —— 查询改写的容错解析
+        test_query_rewriter_parse_shapes,
+        test_query_rewriter_parse_gives_up_cleanly,
     ]
 
     passed = 0
