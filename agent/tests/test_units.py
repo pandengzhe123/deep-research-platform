@@ -1116,14 +1116,61 @@ def test_classify_retrieval_four_kinds():
 
 
 def _fresh_kb():
+    """建一个走到真实 __init__ 的 KnowledgeBase，但把 Chroma 客户端换成 None。
+
+    刻意**不**用 `__new__` + 手工列字段：那样每加一个缓存字段就要记得同步改这个
+    辅助函数，忘了就会让测试在别处炸（或更糟：静默通过）。这里只替换
+    `chromadb.PersistentClient`，`__init__` 里新增的字段自动就有了。
+    """
+    import chromadb
     from researcher.kb import KnowledgeBase
 
-    kbx = KnowledgeBase.__new__(KnowledgeBase)
-    kbx._bm25_cache = {}
-    kbx._kb_generation = {}
-    kbx._bm25_hits = 0
-    kbx._bm25_misses = 0
-    return kbx
+    orig = chromadb.PersistentClient
+    chromadb.PersistentClient = lambda path: None
+    try:
+        return KnowledgeBase(persist_dir=":unused:")
+    finally:
+        chromadb.PersistentClient = orig
+
+
+class _FakeChromaCollection:
+    """最小可用的 collection 替身：记录被怎么创建的、返回固定内容。"""
+
+    def __init__(self, docs=None, metas=None, exists=True):
+        self.docs = docs if docs is not None else ["文本内容"]
+        self.metas = metas if metas is not None else [{"doc_id": "a"}]
+        self._exists = exists
+
+    def get(self, where=None):
+        return {"documents": list(self.docs), "metadatas": list(self.metas)}
+
+    def query(self, **kw):
+        return {"documents": [[]], "metadatas": [[]], "distances": [[]]}
+
+    def delete(self, ids=None):
+        pass
+
+
+class _FakeChromaClient:
+    """记录 get_collection / get_or_create_collection 的调用（区分读路径有无写副作用）。"""
+
+    def __init__(self, coll=None, exists=True):
+        self.calls = []
+        self._coll = coll if coll is not None else _FakeChromaCollection()
+        self._exists = exists
+
+    def get_collection(self, name):
+        self.calls.append("get:" + name)
+        if not self._exists:
+            raise ValueError(f"Collection {name} does not exist")
+        return self._coll
+
+    def get_or_create_collection(self, name):
+        self.calls.append("get_or_create:" + name)
+        return self._coll
+
+    def created_any(self) -> bool:
+        return any(c.startswith("get_or_create:") for c in self.calls)
 
 
 def test_bm25_cache_hit_returns_same_index():
@@ -1175,6 +1222,181 @@ def test_bm25_cache_bounded_across_users():
     assert len(kbx._bm25_cache) == kbx._BM25_CACHE_MAX
     assert "u0" not in kbx._bm25_cache, "最早的条目应被淘汰"
     assert f"u{kbx._BM25_CACHE_MAX + 1}" in kbx._bm25_cache, "最新的条目应保留"
+
+
+# ============================================================
+# kb —— 增量分词（扩容的关键优化）
+# ============================================================
+# 实测：BM25 重建耗时里 jieba 分词占 94~97%（29,852 chunks: 22.33s 分词 / 0.72s
+# BM25Okapi）。上传新文档会让整个索引失效，若每次重建都全量重新分词，
+# 扩容后每次上传的第一次检索都要等几十秒。
+
+
+def test_incremental_tokenize_reuses_unchanged_chunks():
+    """上传新文档后重建：只有新增的 chunk 需要分词，其余复用。"""
+    kbx = _fresh_kb()
+    docs = [{"content": f"第 {i} 篇文档的内容", "meta": {"doc_id": "a"}} for i in range(10)]
+    kbx._get_v2_docs = lambda uid: list(docs)
+
+    kbx._get_bm25("u1")
+    assert kbx._tok_new == 10 and kbx._tok_reused == 0
+
+    docs.append({"content": "新上传的文档内容", "meta": {"doc_id": "b"}})
+    kbx._invalidate_bm25("u1")
+    kbx._get_bm25("u1")
+
+    # 新增 1 块，复用 10 块 —— 而不是重新分词 11 块
+    assert (kbx._tok_new, kbx._tok_reused) == (11, 10), (kbx._tok_new, kbx._tok_reused)
+    assert kbx.bm25_cache_stats()["token_reuse_rate"] == "47.6%"
+
+
+def test_incremental_rebuild_gives_identical_scores():
+    """正确性护栏：增量重建的打分必须和「全量重新分词」一模一样。
+
+    这条是这次优化唯一的真风险 —— 复用错了分词（比如 key 撞了、内容变了但
+    命中了旧分词）不会报错，只会让检索结果悄悄变差。
+    """
+    from researcher.retrievers.bm25_retriever import BM25Retriever, _tokenize
+
+    docs = [
+        {"content": "分布式共识算法 Raft 与 Paxos 的区别", "meta": {}},
+        {"content": "数据库索引 B+ 树 与 LSM 树", "meta": {}},
+        {"content": "微服务之间如何互相发现", "meta": {}},
+    ]
+    kbx = _fresh_kb()
+    kbx._get_v2_docs = lambda uid: list(docs)
+    kbx._get_bm25("u1")
+
+    docs.append({"content": "Raft 选举超时与日志复制", "meta": {}})
+    kbx._invalidate_bm25("u1")
+    incremental = kbx._get_bm25("u1")
+    # 全量分词的新对象（注意 BM25Retriever 吃的是 page_content 形状）
+    full = BM25Retriever([{"page_content": d["content"]} for d in docs], k=20)
+
+    for q in ["Raft 选举", "索引结构", "微服务发现", "完全不相关的查询词"]:
+        si = [float(x) for x in incremental._bm25.get_scores(_tokenize(q))]
+        sf = [float(x) for x in full._bm25.get_scores(_tokenize(q))]
+        assert si == sf, f"查询 {q!r} 的打分与全量重建不一致"
+
+
+def test_token_cache_keyed_by_content_not_id():
+    """同一个 chunk 内容变了但 id 没变时，必须重新分词。
+
+    当前 ingest_v2 用 uuid 生成 chunk_id（撞不上），所以这条是**防御性**的：
+    分词缓存的 key 是 hash(内容) 而不是 chunk_id，即使将来源改用固定 id，
+    也不会读到旧分词。
+    """
+    kbx = _fresh_kb()
+    cur = [{"content": "原始内容", "meta": {"doc_id": "a"}}]
+    kbx._get_v2_docs = lambda uid: list(cur)
+    kbx._get_bm25("u1")
+    assert kbx._tok_new == 1
+
+    cur[0] = {"content": "内容被改写了", "meta": {"doc_id": "a"}}  # 同一个 doc_id
+    kbx._invalidate_bm25("u1")
+    kbx._get_bm25("u1")
+
+    assert kbx._tok_new == 2, "内容变了必须重新分词，不能命中旧分词"
+    assert kbx._tok_reused == 0
+
+
+def test_token_cache_prunes_deleted_chunks():
+    """删文档后，被删 chunk 的分词结果要从缓存里清掉，否则缓存只增不减。"""
+    kbx = _fresh_kb()
+    docs = [{"content": "保留的内容", "meta": {"doc_id": "a"}},
+            {"content": "将被删除的内容", "meta": {"doc_id": "b"}}]
+    kbx._get_v2_docs = lambda uid: list(docs)
+    kbx._get_bm25("u1")
+    assert len(kbx._token_cache["u1"]) == 2
+
+    docs.pop()
+    kbx._invalidate_bm25("u1")
+    kbx._get_bm25("u1")
+    assert len(kbx._token_cache["u1"]) == 1, "被删 chunk 的分词结果应被清掉"
+    assert hash("保留的内容") in kbx._token_cache["u1"]
+
+
+def test_token_cache_bounded_with_index():
+    """分词缓存必须和索引缓存同步淘汰 —— 否则它的内存占用不再受 _BM25_CACHE_MAX 约束。
+
+    索引本身只被淘汰的 retriever 持有，会随 GC 释放；而分词缓存的 key→list
+    映射若常驻，就会随「历史上传过的用户数」无限增长。
+    """
+    kbx = _fresh_kb()
+    kbx._get_v2_docs = lambda uid: [{"content": f"内容 {uid}", "meta": {"doc_id": uid}}]
+
+    for i in range(kbx._BM25_CACHE_MAX + 2):
+        kbx._get_bm25(f"u{i}")
+
+    assert len(kbx._token_cache) == kbx._BM25_CACHE_MAX
+    assert "u0" not in kbx._token_cache, "被淘汰用户的分词缓存也要删掉"
+    assert set(kbx._token_cache) == set(kbx._bm25_cache), "两份缓存的 key 必须一致"
+
+
+def test_token_cache_shared_memory_with_index():
+    """分词 list 在 token 缓存和 retriever._corpus 里必须是**同一批对象**。
+
+    否则这次优化会翻倍内存 —— 索引里存一份分词、缓存里再存一份。
+    """
+    kbx = _fresh_kb()
+    kbx._get_v2_docs = lambda uid: [{"content": "内存共享验证", "meta": {"doc_id": "a"}}]
+    bm = kbx._get_bm25("u1")
+
+    cached = kbx._token_cache["u1"][hash("内存共享验证")]
+    assert bm._corpus[0] is cached, "应共享同一个 list 对象，而不是复制"
+
+
+def test_bm25_cache_max_is_configurable():
+    """缓存上限必须是配置项 —— 它是多租户扩容的真正瓶颈。
+
+    上限 4 意味着活跃 user_id > 4 就互相淘汰，每个用户每次检索都要付一次
+    完整重建（1000 万字 ≈ 25s）。所以这个值必须能按内存预算调。
+    """
+    import os
+    from researcher.kb import KnowledgeBase
+
+    orig = os.environ.get("KB_BM25_CACHE_MAX")
+    try:
+        os.environ["KB_BM25_CACHE_MAX"] = "12"
+        kbx = _fresh_kb()
+        assert kbx._BM25_CACHE_MAX == 12
+        kbx._get_v2_docs = lambda uid: [{"content": f"内容 {uid}", "meta": {}}]
+        for i in range(13):
+            kbx._get_bm25(f"u{i}")
+        assert len(kbx._bm25_cache) == 12
+        assert kbx._evictions == 1, "淘汰次数必须被计数，否则缓存抖动不可观测"
+
+        # 非法值（0 / 负数）不能让缓存在「永不命中」和「无上限」之间静默漂移
+        for bad in ("0", "-3"):
+            os.environ["KB_BM25_CACHE_MAX"] = bad
+            k = _fresh_kb()
+            assert k._BM25_CACHE_MAX == 1, f"{bad} 应回退到 1，实际 {k._BM25_CACHE_MAX}"
+    finally:
+        if orig is None:
+            os.environ.pop("KB_BM25_CACHE_MAX", None)
+        else:
+            os.environ["KB_BM25_CACHE_MAX"] = orig
+
+
+def test_search_path_does_not_create_collection():
+    """读路径不能有写副作用。
+
+    历史问题：`kb.search` / `list_docs` / `delete_doc` 都用 get_or_create_collection，
+    于是一次检索就会建出一个空集合 —— chroma 目录里因此留下了 20 个空集合
+    （网关把 JWT 数字 uid 当 user_id 传进来，每个新 uid 一被检索就建一个）。
+    """
+    kbx = _fresh_kb()
+    kbx._client = _FakeChromaClient()
+    kbx._get_v2_docs("u1")
+    kbx.list_docs("u1")
+    kbx.delete_doc("doc_a", "u1")
+    assert not kbx._client.created_any(), f"读路径创建了集合: {kbx._client.calls}"
+
+    # 库不存在时应静默返回空，而不是抛异常
+    kbx._client = _FakeChromaClient(exists=False)
+    assert kbx._get_v2_docs("nobody") == []
+    assert kbx.list_docs("nobody") == []
+    assert kbx.delete_doc("doc_a", "nobody") == {"status": "ok", "deleted_chunks": 0}
 
 
 # ============================================================
@@ -1400,6 +1622,15 @@ if __name__ == "__main__":
         test_bm25_cache_invalidated_on_write,
         test_bm25_cache_empty_kb_returns_none,
         test_bm25_cache_bounded_across_users,
+        # kb —— 增量分词（重建时只对新增 chunk 分词）
+        test_incremental_tokenize_reuses_unchanged_chunks,
+        test_incremental_rebuild_gives_identical_scores,
+        test_token_cache_keyed_by_content_not_id,
+        test_token_cache_prunes_deleted_chunks,
+        test_token_cache_bounded_with_index,
+        test_token_cache_shared_memory_with_index,
+        test_bm25_cache_max_is_configurable,
+        test_search_path_does_not_create_collection,
         # retrievers —— BM25 词法相关性闸
         test_bm25_only_returns_positive_score_docs,
         # retrievers —— 查询改写的容错解析

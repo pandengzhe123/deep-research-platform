@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import uuid
 from pathlib import Path
 
 import chromadb
+
+log = logging.getLogger(__name__)
 
 # ============================================================
 # 切块策略
@@ -200,19 +203,43 @@ class KnowledgeBase:
 
     # BM25 索引缓存上限（按 user_id 计）。索引常驻内存，条目数必须封顶 ——
     # 多用户场景下无界缓存会随上传用户数线性吃内存。
-    _BM25_CACHE_MAX = 4
+    #
+    # 内存代价（实测 ~6.6KB/chunk，含分词结果；增量分词缓存与之共享同一批 list，
+    # 不额外翻倍）：
+    #     100 万字 ≈ 3,100 chunks ≈ 21MB
+    #     300 万字 ≈ 9,300 chunks ≈ 61MB
+    #   1,000 万字 ≈ 31,000 chunks ≈ 205MB
+    # 所以上限 N 的稳态内存 ≈ N × 单个用户的库大小。默认 4 是在「几百 MB」量级
+    # 内的保守值；用 `KB_BM25_CACHE_MAX` 覆盖（见 __init__）。
+    _BM25_CACHE_MAX_DEFAULT = 4
 
     def __init__(self, persist_dir: str = "./chroma_data"):
         self._persist_dir = persist_dir
         self._client = chromadb.PersistentClient(path=persist_dir)
         self._v2_embedder = None
         self._trace = None  # TraceRun 实例，由 Agent 在调用前设置
+        # 可配置的缓存上限。活跃 user_id 超过这个数就会互相淘汰 —— 每个被淘汰的
+        # 用户下次检索要付一次完整重建。多租户部署前必须按内存预算调这个值。
+        self._BM25_CACHE_MAX = int(os.getenv(
+            "KB_BM25_CACHE_MAX", str(self._BM25_CACHE_MAX_DEFAULT)
+        ))
+        if self._BM25_CACHE_MAX < 1:
+            log.warning("KB_BM25_CACHE_MAX=%s 非法，回退到 1（0/负数会让缓存永不生效，"
+                        "每次检索都重建索引）", self._BM25_CACHE_MAX)
+            self._BM25_CACHE_MAX = 1
         # BM25 索引缓存：user_id -> (generation, retriever)。见 _get_bm25()。
         self._bm25_cache: dict[str, tuple[int, object]] = {}
+        # 分词缓存：user_id -> {hash(chunk 内容): [token]}。见 _get_bm25()。
+        # 里面的 list 与 retriever._corpus 里的**是同一批对象**（共享内存，
+        # 不是副本）；淘汰时与 _bm25_cache 同步，保证内存仍受 _BM25_CACHE_MAX 约束。
+        self._token_cache: dict[str, dict[int, list[str]]] = {}
         # 文档代际：ingest / delete 时 +1，使该用户的缓存条目失效。
         self._kb_generation: dict[str, int] = {}
         self._bm25_hits = 0
         self._bm25_misses = 0
+        self._tok_new = 0
+        self._tok_reused = 0
+        self._evictions = 0
 
     # ================================================================
     # 基础方法
@@ -227,18 +254,26 @@ class KnowledgeBase:
         return self._v2_embedder
 
     def _get_v2_docs(self, user_id: str) -> list[dict]:
-        """从 v2 collection 获取所有文档。"""
+        """从 v2 collection 获取所有文档。
+
+        用 `get_collection`（不存在则抛异常 → 返回 []）而不是 `get_or_create_collection`：
+        后者会让**一次检索**顺手创建一个空集合。历史上这个副作用在 chroma 目录里
+        留下了 20 个空集合（网关把 JWT 的数字 uid 当 user_id 传进来，每个新 uid
+        第一次被检索就会建一个空库）。读路径不该有写副作用。
+        """
         try:
-            coll = self._client.get_or_create_collection(
+            coll = self._client.get_collection(
                 self._v2_collection_name(user_id)
             )
             raw = coll.get()
-            return [
-                {"content": c, "meta": m or {}}
-                for c, m in zip(raw.get("documents", []), raw.get("metadatas", []))
-            ]
         except Exception:
             return []
+        docs = raw.get("documents") or []
+        metas = raw.get("metadatas") or []
+        return [
+            {"content": c, "meta": (metas[i] if i < len(metas) else None) or {}}
+            for i, c in enumerate(docs)
+        ]
 
     def _get_bm25(self, user_id: str):
         """取该用户的 BM25 索引（带缓存）；空库返回 None。
@@ -255,13 +290,51 @@ class KnowledgeBase:
         而 `mode='full'`（生产默认）**每次 kb.search 都重建一次**，一次 L4 研究
         会做 10+ 次 KB 检索 —— 缓存省掉的是一次全量分词，不是一次小计算。
 
+        **增量分词（2026-09-28 追加）** —— 上表的成本几乎全在 jieba 上：
+
+            规模          jieba 分词      BM25Okapi    分词占比
+            439 chunks       0.19s          0.01s        94%
+          9,658 chunks       6.72s          0.25s        96%
+         29,852 chunks      22.33s          0.72s        97%
+
+        而 `ingest_v2` 每写一次就 `_invalidate_bm25`，下次检索要**重建整个索引**。
+        若每次都把全量语料重新分词一遍，扩容后「上传一个 5 千字文档 → 下一次检索
+        等 25 秒」。所以这里按 `hash(chunk 内容)` 缓存分词结果：重建时只对**新增**
+        chunk 分词，其余直接复用 list 引用，再把引用拼成新的 `corpus` 交给
+        `BM25Retriever`。
+
+        实测（真实 eval 语料平铺成合成库，上传 100 个新 chunk 后重建）：
+
+            规模        全量重建     增量重建     加速     增量侧 µs/chunk
+            1,756       0.80s       0.08s      9.7x         46
+            9,658       7.43s       0.34s     21.6x         35
+           29,852      23.28s       1.02s     22.8x         34
+
+        ⚠️ 这是**常数因子**改善（约 20 倍），不是复杂度改善 —— 增量重建仍然随规模
+        线性增长。原因：省掉的只是「未变 chunk 的分词」，而 `BM25Okapi` 本身
+        每次都要对**全量**语料重算 idf（`_initialize` + `_calc_idf` 都遍历全部
+        token），这个线性项还在。实测增量侧约 34µs/chunk，外推：
+        1,000 万字 ≈ 1.1s，1 亿字 ≈ 10.6s。
+        要做到真正的增量，得自己维护 df 计数、不用 `rank_bm25` —— 那是另一个量级
+        的改动，暂时不做（10s / 1 亿字 在可接受范围内）。
+
+        用内容哈希而不是 Chroma 的 chunk_id 作 key：id 复用/改写策略以后会变，
+        而内容哈希自带校验（id 不变但内容变了也不会读到旧分词），并且同库内
+        重复内容只留一份分词。
+
+        额外内存开销：分词缓存字典本身 ≈ 78 B/chunk（实测），占分词语料内存的
+        1.2% —— token list 与 `retriever._corpus` 共享对象，不翻倍。
+
         返回的索引以 k=20 构建，调用方按需切片。
 
-        已知限制：缓存是**进程内**的。当前 agent 以单进程 uvicorn 运行
-        （Dockerfile 的 CMD 无 --workers），且 ingest/delete 都发生在同一进程内，
-        所以代际失效是完整的。将来若改多 worker 部署，别的进程上传的文档
-        不会让本进程缓存失效 —— 那时需要把代际计数器挪到 Redis（或直接上 Redis
-        做索引共享）。
+        已知限制（两条，都还没修）：
+        1. 缓存是**进程内**的。当前 agent 以单进程 uvicorn 运行（Dockerfile 的 CMD
+           无 --workers），且 ingest/delete 都发生在同一进程内，所以代际失效是完整的。
+           将来若改多 worker 部署，别的进程上传的文档不会让本进程缓存失效 ——
+           那时需要把代际计数器挪到 Redis（或直接上 Redis 做索引共享）。
+        2. `_BM25_CACHE_MAX = 4` 是硬编码的。活跃 user_id 超过 4 个时互相淘汰，
+           每个用户每次检索都要付一次重建（含全量分词）。多租户部署前必须先把
+           这个上限做成配置项，或者把索引挪出进程。
         """
         gen = self._kb_generation.get(user_id, 0)
         entry = self._bm25_cache.get(user_id)
@@ -273,17 +346,51 @@ class KnowledgeBase:
         if not all_docs:
             return None
 
-        from .retrievers.bm25_retriever import build_bm25_retriever
+        from .retrievers.bm25_retriever import build_bm25_retriever, _tokenize
 
-        bm = build_bm25_retriever(
-            [{"page_content": d["content"], "metadata": d["meta"]} for d in all_docs],
-            k=20,
-        )
+        tok_cache = self._token_cache.setdefault(user_id, {})
+        docs: list[dict] = []
+        corpus: list[list[str]] = []
+        live: set[int] = set()
+        for d in all_docs:
+            content = d["content"]
+            h = hash(content)
+            live.add(h)
+            toks = tok_cache.get(h)
+            if toks is None:
+                toks = _tokenize(content)
+                tok_cache[h] = toks
+                self._tok_new += 1
+            else:
+                self._tok_reused += 1
+            docs.append({"page_content": content, "metadata": d["meta"]})
+            corpus.append(toks)
+
+        # 淘汰已从库里删掉的 chunk 的分词结果，否则缓存只增不减。
+        if len(tok_cache) > len(live):
+            for dead in [k for k in tok_cache if k not in live]:
+                del tok_cache[dead]
+
+        bm = build_bm25_retriever(docs, k=20, corpus=corpus)
         self._bm25_misses += 1
 
-        # 超上限时淘汰最早插入的一条（dict 保序）
+        # 超上限时淘汰最早插入的一条（dict 保序）。分词缓存必须跟着一起淘汰，
+        # 否则它的内存占用就不再受 _BM25_CACHE_MAX 约束（索引本身只被淘汰的
+        # retriever 持有，分词缓存的 key→list 映射却会常驻）。
         if user_id not in self._bm25_cache and len(self._bm25_cache) >= self._BM25_CACHE_MAX:
-            self._bm25_cache.pop(next(iter(self._bm25_cache)))
+            oldest = next(iter(self._bm25_cache))
+            self._bm25_cache.pop(oldest)
+            self._token_cache.pop(oldest, None)
+            self._evictions += 1
+            # 淘汰意味着这个用户下次检索要付一次完整重建。偶发是正常的；
+            # 每次请求都淘汰说明 KB_BM25_CACHE_MAX 小于实际活跃用户数，
+            # 缓存已经失效（退化成「每次检索都重建」），此时必须调大或换共享存储。
+            log.warning(
+                "BM25 缓存已满(%d)，淘汰用户 %s（累计淘汰 %d 次）。"
+                "若频繁出现，说明活跃用户数超过 KB_BM25_CACHE_MAX=%d，"
+                "缓存正在抖动 —— 每次检索都要重建索引。",
+                self._BM25_CACHE_MAX, oldest, self._evictions, self._BM25_CACHE_MAX,
+            )
         self._bm25_cache[user_id] = (gen, bm)
         return bm
 
@@ -299,11 +406,21 @@ class KnowledgeBase:
     def bm25_cache_stats(self) -> dict:
         """BM25 缓存统计（排查 / 评测用）。"""
         total = self._bm25_hits + self._bm25_misses
+        tok_total = self._tok_new + self._tok_reused
         return {
             "hits": self._bm25_hits,
             "misses": self._bm25_misses,
             "cached_users": len(self._bm25_cache),
             "hit_rate": f"{self._bm25_hits / total:.1%}" if total else "N/A",
+            # 增量分词：miss 时全量语料里有多少块需要重新分词。
+            # 稳态（只新增少量文档）应接近 0%，全量重建才会接近 100%。
+            "tokens_new": self._tok_new,
+            "tokens_reused": self._tok_reused,
+            "token_reuse_rate": f"{self._tok_reused / tok_total:.1%}" if tok_total else "N/A",
+            "cached_token_users": len(self._token_cache),
+            # >0 说明有用户被挤出缓存，它下次检索要付一次完整重建。
+            # 持续增长 = 缓存抖动，KB_BM25_CACHE_MAX 该调大。
+            "evictions": self._evictions,
         }
 
     def _v2_vector_search(self, query: str, user_id: str, doc_ids: list[str] | None, k: int) -> list[dict]:
@@ -317,7 +434,9 @@ class KnowledgeBase:
             where = {"user_id": user_id}
 
         try:
-            coll = self._client.get_or_create_collection(
+            # get_collection（而非 get_or_create）：检索不该顺手建空集合，
+            # 见 _get_v2_docs 的说明。
+            coll = self._client.get_collection(
                 self._v2_collection_name(user_id)
             )
             result = coll.query(query_embeddings=[query_emb], n_results=k, where=where)
@@ -643,7 +762,9 @@ class KnowledgeBase:
         """
         docs, seen = [], set()
         try:
-            results = self._client.get_or_create_collection(
+            # get_collection（而非 get_or_create）：列个文档列表不该建空库。
+            # 这是历史上那 20 个空集合的主要来源之一 —— 前端每次进页面都调它。
+            results = self._client.get_collection(
                 self._v2_collection_name(user_id)
             ).get(where={"user_id": user_id})
             for m in results.get("metadatas", []):
@@ -659,7 +780,8 @@ class KnowledgeBase:
         """删除 v2 collection 中的指定文档。"""
         total = 0
         try:
-            coll = self._client.get_or_create_collection(
+            # get_collection：库不存在时没什么可删，不必先建一个空库。
+            coll = self._client.get_collection(
                 self._v2_collection_name(user_id)
             )
             ids = coll.get(where={"doc_id": doc_id}).get("ids", [])

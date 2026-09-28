@@ -34,11 +34,42 @@ class BM25Retriever:
     且部分文档确实零词项重叠时才生效。
     """
 
-    def __init__(self, documents: list[dict], k: int = 20):
+    def __init__(self, documents: list[dict], k: int = 20,
+                 corpus: list[list[str]] | None = None):
+        """corpus：可传入**已分好词**的语料（与 documents 一一对应、同序）。
+
+        为什么要这个入参（实测依据，2026-09-28）：
+        `BM25Retriever.__init__` 的成本几乎全在 jieba 分词上，不在 BM25Okapi：
+
+            规模          jieba 分词          BM25Okapi      分词占比
+            439 chunks       0.19s              0.01s          94%
+          9,658 chunks       6.72s              0.25s          96%
+         29,852 chunks      22.33s              0.72s          97%
+
+        上传一个新文档会让整个索引失效。若每次重建都对**全部**语料重新分词，
+        扩容后代价是线性的（1000 万字 ≈ 25s，每次上传后第一次检索都要等）。
+        允许调用方传入已有分词结果后，重建只需对**新增**的那几块分词，
+        然后把 list 引用拼起来 —— 实测（上传 100 个新 chunk 后重建）：
+
+            规模        全量重建     增量重建     加速
+            1,756       0.80s       0.08s      9.7x
+            9,658       7.43s       0.34s     21.6x
+           29,852      23.28s       1.02s     22.8x
+
+        ⚠️ 注意传入 corpus 只是省掉「未变 chunk 的分词」这一项（占全量重建的
+        94~97%），`BM25Okapi(self._corpus)` 这一行仍然对全量语料重算 idf，
+        是 O(全部 token) 的。所以这是约 20 倍的**常数因子**改善，
+        不是复杂度改善 —— 增量重建依然随规模线性增长（约 34µs/chunk）。
+
+        调用方见 `KnowledgeBase._get_bm25()`（按 hash(内容) 缓存分词结果）。
+
+        另外注意：传入的 list 会被**直接持有**（不复制），调用方若同时缓存
+        这些 list，两者共享同一份内存，不会翻倍。
+        """
         self._docs = documents
         self._k = k
         texts = [d["page_content"] for d in documents]
-        self._corpus = [_tokenize(t) for t in texts]
+        self._corpus = corpus if corpus is not None else [_tokenize(t) for t in texts]
         self._bm25 = BM25Okapi(self._corpus) if self._corpus else None
 
     def invoke(self, query: str) -> list[dict]:
@@ -52,5 +83,5 @@ class BM25Retriever:
         return [self._docs[i] for i, _ in ranked[:self._k]]
 
 
-def build_bm25_retriever(documents, k=20):
-    return BM25Retriever(documents, k=k)
+def build_bm25_retriever(documents, k=20, corpus=None):
+    return BM25Retriever(documents, k=k, corpus=corpus)
