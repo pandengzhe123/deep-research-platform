@@ -1250,6 +1250,43 @@ def test_answer_check_failure_posture():
 
 
 # ============================================================
+# kb —— 拒答闸的窗口裁剪
+# ============================================================
+
+
+def test_trim_sources_keeps_header_and_first_n():
+    """拒答判定用宽窗口，但返回给调用方的仍应只有 n 条。
+
+    否则等于悄悄把 n_results 改大了 —— Agent 看到的内容量和 token 成本都会变。
+    """
+    from researcher.kb import KnowledgeBase, _trim_sources
+
+    docs = [{"content": f"正文{i}", "meta": {"doc_id": f"d{i}.txt"}}
+            for i in range(1, 6)]
+    full = KnowledgeBase._fmt(docs)
+    assert full.count("--- 来源") == 5
+
+    for n in (1, 3, 5):
+        t = _trim_sources(full, n)
+        assert t.count("--- 来源") == n, f"n={n} 裁出 {t.count('--- 来源')} 块"
+        assert t.startswith("# 知识库检索结果"), "头部应保留"
+        # 裁剪后必须仍是合法的来源格式（供 parse_source_docs 解析）
+        from researcher.kb import parse_source_docs
+        assert len(parse_source_docs(t)) == n
+
+    # n 大于实际块数 → 原样返回；n<=0 → 不裁剪（避免误裁成空）
+    assert _trim_sources(full, 99).count("--- 来源") == 5
+    assert _trim_sources(full, 0).count("--- 来源") == 5
+
+
+def test_trim_sources_on_not_found_message():
+    """「未找到」这类没有来源块的文本不该被裁坏。"""
+    from researcher.kb import NOT_FOUND_MSG, _trim_sources
+
+    assert _trim_sources(NOT_FOUND_MSG, 3) == NOT_FOUND_MSG
+
+
+# ============================================================
 # 运行
 # ============================================================
 
@@ -1329,6 +1366,9 @@ if __name__ == "__main__":
         # answer_check —— 拒答闸
         test_answer_check_empty_context_is_no_answer,
         test_answer_check_failure_posture,
+        # kb —— 拒答闸的窗口裁剪
+        test_trim_sources_keeps_header_and_first_n,
+        test_trim_sources_on_not_found_message,
     ]
 
     passed = 0

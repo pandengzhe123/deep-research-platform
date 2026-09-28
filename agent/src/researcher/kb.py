@@ -160,6 +160,15 @@ NOT_FOUND_MSG = "知识库中未找到相关信息。"
 ANSWER_CHECK_ENABLED = os.getenv("KB_ANSWER_CHECK", "false").strip().lower() in (
     "1", "true", "yes", "on")
 
+# 拒答判定看的召回窗口大小（开启 KB_ANSWER_CHECK 时生效）。
+#
+# 不能只看最终返回的 top-5 —— 实测只看 top-5 时误拒率 10.4%，且集中在
+# precision(7/38) 与 multi_doc(4/16)，而 simple 是 0/48。机制是：
+# 这两类题的答案常常**在候选池里但没排进前 5**，用 top-5 判定等于把
+# 「没排进前 5」误读成「知识库里没有」。候选池中位 23 条，所以放到 20
+# 几乎不增加成本（那些文本本来就已召回）。
+ANSWER_CHECK_WINDOW = int(os.getenv("KB_ANSWER_CHECK_WINDOW", "20"))
+
 
 class KnowledgeBase:
     """Chroma 向量库封装（阿里云 embedding 单管线）。"""
@@ -556,47 +565,44 @@ class KnowledgeBase:
         MiniLM，那条管线已随本地模型一并移除；保留 default 这个入参名是为了不
         破坏外部调用方，而不是因为还存在第二种行为。
         """
-        if mode == "full":
-            return self._maybe_apply_answer_check(
-                query, self._search_full(query, user_id, doc_ids, n_results))
-        if mode == "rerank":
-            return self._maybe_apply_answer_check(
-                query, self._search_rerank(query, user_id, doc_ids, n_results))
-        if mode == "hybrid":
-            return self._maybe_apply_answer_check(
-                query, self._search_hybrid(query, user_id, doc_ids, n_results))
-        return self._maybe_apply_answer_check(
-            query, self._search_v2(query, user_id, doc_ids, n_results))
-
-    # ================================================================
-    # 拒答闸（默认关闭）
-    # ================================================================
-
-    @staticmethod
-    def _maybe_apply_answer_check(query: str, text: str) -> str:
-        """开启 KB_ANSWER_CHECK 时：判定检索结果里是否真含答案，不含则返回「未找到」。
-
-        为什么不能用阈值代替（实测，见 answer_check 模块 docstring）：
-        精排分阈值要把 9/9 的 no_answer 全拒掉，代价是误拒 38/119 的可答题
-        （净收益 −29）；向量距离更差，可答题有 60% 落在 no_answer 的区间里。
-        「相关」与「可答」是两件事，所以只能做分类判定。
-
-        失败姿态是 **fail-open**：判定服务不可用时保持原行为（把检索结果照常返回）。
-        与每日配额的 fail-closed 相反 —— 那里失败的代价是成本失控（不可接受），
-        这里失败的代价只是少一次拒答（可接受），让整个知识库罢工则不可接受。
-        """
         if not ANSWER_CHECK_ENABLED:
-            return text
-        if NOT_FOUND_MSG in text or "未找到" in text:
-            return text                      # 已经是空结果，没什么可判的
+            return self._dispatch(query, user_id, doc_ids, n_results, mode)
+
+        # 拒答闸开启：**先用更宽的窗口做判定，再裁回 n_results**。
+        #
+        # 为什么要宽窗口（实测依据）：只看 top-5 判定时误拒率 10.4%（14/134），
+        # 且集中在 precision(7/38) 与 multi_doc(4/16)，而 simple 是 0/48。
+        # 机制是判定问的是「召回的这 k 条里有没有答案」，而这两类题的答案常常
+        # **在候选池里但没排进前 5**（实测候选池中位 23 条）——
+        # 用 top-5 判定等于把「没排进前 5」误读成「知识库里没有」，是过度断言。
+        #
+        # 放宽容量的代价接近零：候选池本来就已经召回（中位 23 条），
+        # 加宽只是让判定多看几条已召回的文本，不额外发起检索。
+        wide = max(n_results, ANSWER_CHECK_WINDOW)
+        text = self._dispatch(query, user_id, doc_ids, wide, mode)
+
+        if "未找到" in text:
+            return text                     # 检索本身就是空的，没什么可判
+
         try:
             from .answer_check import doc_has_answer
             if doc_has_answer(query, [text], default_on_error=True):
-                return text
-            print(f"  [kb] 拒答闸：检索结果不含答案，按「未找到」返回")
-            return NOT_FOUND_MSG
+                return _trim_sources(text, n_results)
         except Exception:
-            return text                      # 判定不可用 → 保持原行为
+            pass                            # 判定不可用 → 保持原行为（fail-open）
+
+        print(f"  [kb] 拒答闸：召回窗口（{wide} 条）内不含答案，按「未找到」返回")
+        return NOT_FOUND_MSG
+
+    def _dispatch(self, query, user_id, doc_ids, n_results, mode) -> str:
+        """按 mode 分发到具体检索实现（不含拒答闸）。"""
+        if mode == "full":
+            return self._search_full(query, user_id, doc_ids, n_results)
+        if mode == "rerank":
+            return self._search_rerank(query, user_id, doc_ids, n_results)
+        if mode == "hybrid":
+            return self._search_hybrid(query, user_id, doc_ids, n_results)
+        return self._search_v2(query, user_id, doc_ids, n_results)
 
     # ================================================================
     # 通用
@@ -687,6 +693,26 @@ def parse_source_docs(result_text: str) -> list[str]:
         if rest:
             out.append(rest)
     return out
+
+
+def _trim_sources(text: str, n: int) -> str:
+    """把 `_fmt()` 的输出裁到前 n 个来源块（保留头部）。
+
+    用于拒答闸：判定要用更宽的窗口，但返回给调用方的仍应只有 n 条 ——
+    否则等于悄悄把 n_results 改大了，会改变 Agent 看到的内容量与 token 成本。
+    """
+    if n <= 0:
+        return text
+    lines = text.split("\n")
+    out: list[str] = []
+    kept = 0
+    for line in lines:
+        if _SOURCE_LINE_RE.search(line):
+            kept += 1
+            if kept > n:
+                break
+        out.append(line)
+    return "\n".join(out)
 
 
 # 全局单例
