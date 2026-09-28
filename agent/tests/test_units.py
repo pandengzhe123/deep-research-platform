@@ -1072,6 +1072,99 @@ def test_calc_mrr_is_keyword_in_block():
     assert _calc_mrr("", ["Guido"]) == 0.0
 
 
+def test_permutation_paired_by_default_and_differs_from_unpaired():
+    """置换检验必须默认**配对** —— 而且配对与非配对会给出相反结论。
+
+    本项目用法是「同一批题分别跑两个模式」，scores_a[i] 与 scores_b[i] 是**同一道题**
+    的两次得分，是标准配对设计。原来的实现是非配对的（把两组倒在一起重新分随机两组），
+    丢掉了配对信息、系统性假阴性。
+
+    这里构造一个**只有配对检验能看见**的差异：
+    一批题有难易之分（base 的方差很大），而 A 在每一题上都稳定高 0.1。
+    配对检验把题目难度差掉，只看那个稳定的 +0.1；
+    非配对检验看到的全是「题目难度」这个大方差，测不出来。
+    """
+    from researcher.evaluation.permutation import permutation_test
+
+    base = [1.0] * 10 + [0.5] * 10 + [0.3] * 10 + [0.0] * 10
+    a = [x + 0.1 for x in base]
+    b = list(base)
+
+    rp = permutation_test(a, b, n_perm=5000, paired=True)
+    ru = permutation_test(a, b, n_perm=5000, paired=False)
+
+    # 配对能看见：每题都好 0.1
+    assert rp["paired"] is True
+    assert rp["significant"] is True, f"配对应显著，实际 p={rp['p_value']}"
+    assert rp["better"] == 40 and rp["worse"] == 0, "每道题都应更好"
+    # 非配对看不见同一个差异
+    assert ru["paired"] is False
+    assert ru["significant"] is False, f"非配对在此数据上应不显著，实际 p={ru['p_value']}"
+
+    # 默认必须是配对 —— 这是纠正历史错误的关键
+    r_default = permutation_test(a, b, n_perm=5000)
+    assert r_default["paired"] is True, "默认必须是配对检验"
+    assert r_default["p_value"] == rp["p_value"], "默认行为应与显式 paired=True 一致"
+
+
+def test_permutation_is_reproducible_and_never_reports_exact_zero():
+    """固定种子 → 同数据两次 p 完全相同；且 p 不出现不可能的精确 0。
+
+    · 不固定种子时同一份数据跑两次 p 会微抖（实测能差到 0.002 量级），
+      而基准对比/复现/写进报告的数字都要求可复现。
+    · `count/n_perm` 在极端差异下会报出精确 0 —— 只有无穷次置换才能断言 p=0。
+      用 (count+1)/(n_perm+1) 修正（Phipson & Smyth 2010）。
+    """
+    from researcher.evaluation.permutation import permutation_test
+
+    a = [1.0] * 100
+    b = [0.0] * 100
+    r1 = permutation_test(a, b, n_perm=1000)
+    r2 = permutation_test(a, b, n_perm=1000)
+    assert r1["p_value"] == r2["p_value"], "固定种子应完全可复现"
+
+    assert r1["p_value"] > 0, f"不能报精确 0，实际 {r1['p_value']}"
+    assert abs(r1["p_value"] - 1 / 1001) < 1e-9, "极端差异应等于 +1 修正的下界"
+
+    # 传 seed=None 时不应崩（允许不可复现）
+    r_none = permutation_test(a, b, n_perm=200, seed=None)
+    assert 0 < r_none["p_value"] <= 1
+
+    # 完全相同的两组 → p 必须为 1.0（不能因为 observed==0 就报 0）
+    rz = permutation_test([0.5] * 30, [0.5] * 30, n_perm=500)
+    assert rz["p_value"] == 1.0, f"全同数据应 p=1.0，实际 {rz['p_value']}"
+    assert rz["significant"] is False
+
+
+def test_compare_all_modes_passes_paired_through():
+    """`compare_all_modes` 必须把 paired 传下去，且结果按 p 升序。
+
+    ⚠️ 构造要注意：如果每对都是「**全部题同向差异**」，符号翻转检验会给出**相同的
+    p 值**（因为观测到的 |Σd| 已是最大值，任何翻转都超不过它），三对并列，
+    排序就变成任意的 —— 第一版测试就是这么写错的。所以这里让差异的**题数**不同：
+       bad  vs good：10/10 题都不同 → 最显著
+       bad  vs mid ： 5/10 题不同
+       mid  vs good： 5/10 题不同
+    """
+    from researcher.evaluation.permutation import compare_all_modes
+
+    bad = [0.0] * 10
+    mid = [1.0] * 5 + [0.0] * 5     # 只有 5 题与 bad 不同
+    good = [1.0] * 10               # 10 题全不同
+
+    modes = {"bad": bad, "mid": mid, "good": good}
+    for paired in (True, False):
+        res = compare_all_modes(modes, n_perm=2000, paired=paired)
+        assert len(res) == 3, f"3 个模式应有 3 个配对，实际 {len(res)}"
+        assert all(r["paired"] is paired for r in res), "paired 必须透传"
+        ps = [r["p_value"] for r in res]
+        assert ps == sorted(ps), f"结果应按 p_value 升序，实际 {ps}"
+        first = {res[0]["mode_a"], res[0]["mode_b"]}
+        assert first == {"bad", "good"}, (
+            f"差异最大（10/10 题）的一对应排最前，实际是 {first}，各对 p={ps}"
+        )
+
+
 def test_classify_retrieval_four_kinds():
     """classify_retrieval 的四类判定；no_answer 题不参与 MRR。"""
     from researcher.evaluation.run_regression import classify_retrieval
@@ -1803,6 +1896,10 @@ if __name__ == "__main__":
         test_ir_metrics_precision_recall_mrr,
         test_calc_mrr_is_keyword_in_block,
         test_classify_retrieval_four_kinds,
+        # evaluation/ —— 置换检验（配对 vs 非配对）
+        test_permutation_paired_by_default_and_differs_from_unpaired,
+        test_permutation_is_reproducible_and_never_reports_exact_zero,
+        test_compare_all_modes_passes_paired_through,
         # kb —— BM25 索引缓存
         test_bm25_cache_hit_returns_same_index,
         test_bm25_cache_invalidated_on_write,
