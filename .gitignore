@@ -30,6 +30,9 @@ dist/
 # Chroma
 agent/chroma_data/
 agent/chroma_test/
+# 清理知识库前的自动备份（26MB 级，绝不入库）
+agent/chroma_data.bak_*/
+chroma_data.bak_*/
 
 # Test files
 test_rag.txt
