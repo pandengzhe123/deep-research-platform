@@ -11,7 +11,16 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".env"))
 
 
 def summarize_retriever(testset: list[dict], search_fn, user_id="eval") -> dict:
-    """按题型统计 Retriever 命中率。"""
+    """按题型统计 Retriever 命中率。
+
+    文档名解析统一走 `kb.parse_source_docs()`（与 `_fmt()` 同源）。
+    此前这里是手写的 `after.split("(")[0]` —— 只 strip 半角括号，而 `_fmt()`
+    输出的是**全角**「（相关度 78%）」，于是 v2/rerank/full 模式下解析出的"文档名"
+    是 "doc1.txt （相关度 78%）"，与 expected_docs 永不相等 → 命中率假性归零。
+    只有 hybrid 模式（doc 不带 distance/rerank_score → 无标注）侥幸正确。
+    """
+    from researcher.kb import parse_source_docs   # 懒加载：kb 导入会实例化 Chroma 客户端
+
     by_type = {}
     for item in testset:
         t = item["type"]
@@ -23,12 +32,7 @@ def summarize_retriever(testset: list[dict], search_fn, user_id="eval") -> dict:
             continue
 
         result = search_fn(item["question"], user_id=user_id)
-        retrieved = []
-        for line in result.split("\n"):
-            if "来源" in line and ": " in line:
-                after = line.split(": ", 1)[1]
-                doc = after.split("(")[0].split("---")[0].strip()
-                retrieved.append(doc)
+        retrieved = parse_source_docs(result)
 
         hit = bool(set(retrieved) & expected)
 

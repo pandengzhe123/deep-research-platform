@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import uuid
 from pathlib import Path
 
@@ -203,15 +204,26 @@ class KnowledgeBase:
             docs.append({"content": doc, "meta": meta or {}, "distance": dist})
         return docs
 
-    def _fmt(self, docs: list[dict], label: str = "") -> str:
-        """格式化检索结果。"""
+    @staticmethod
+    def _fmt(docs: list[dict], label: str = "") -> str:
+        """格式化检索结果。
+
+        纯函数（不依赖 self）→ 静态方法，好处是单测能直接钉住输出格式：
+        这个格式是**对外契约** —— 所有检索指标（`retriever_test` / `e2e_diagnostic` /
+        `run_regression`）都靠解析「--- 来源 N: <doc> <相似度标注>---」拿到文档名，
+        格式一变，指标会静默失真而不是报错。解析侧见 `parse_source_docs()`。
+        """
         if not docs:
             return "知识库中未找到相关信息。"
         lines = [f"# 知识库检索结果{label}\n"]
         for i, d in enumerate(docs):
             src = d["meta"].get("doc_id", "未知")
             r = d.get("rerank_score")
-            if r:
+            # 必须写 `is not None` 而不是 `if r:`：rerank_score 的合法取值包含 0.0
+            # （精排判定为最不相关），而 0.0 是 falsy —— 用真值判断会让「精排 0 分」
+            # 落到下面的 distance 分支，把「精排判为不相关」显示成另一个分数
+            # （实测：rerank_score=0.0 + distance=0.9 会显示「相关度 10%」）。
+            if r is not None:
                 sim = f"（精排 {r:.1%}）"
             elif d.get("distance") is not None:
                 sim = f"（相关度 {max(0, 1 - d['distance']):.0%}）"
@@ -449,6 +461,53 @@ class KnowledgeBase:
         except Exception:
             pass
         return {"status": "ok", "deleted_chunks": total}
+
+
+# ============================================================
+# 检索结果 → 来源文档名（_fmt 的逆运算）
+# ============================================================
+# 为什么放在这里而不是评测目录：解析的对象就是上面 `_fmt()` 的输出，两者是
+# 同一份契约的两侧。它们曾经分居两处并各自实现 —— 结果 `e2e_diagnostic.py`
+# 只 strip 半角括号，而 `_fmt` 输出的是**全角**「（相关度 78%）」，
+# 于是解析出的"文档名"变成 "doc1.txt （相关度 78%）"，与 expected_docs 永不相等
+# → 命中率假性归零（hybrid 模式因为不带相似度标注而侥幸正确，掩盖了这个 bug）。
+# 放在一起，改格式的人一眼能看到解析方。
+
+# 来源行：--- 来源 N: <文档名> <可选相似度标注>---
+_SOURCE_LINE_RE = re.compile(r"来源\s*(\d+)\s*[:：]\s*(.*?)\s*-{2,}\s*$")
+
+# 尾部的相似度标注。用前瞻要求括注内含 "%" 或已知关键词，避免误伤
+# 文件名本身就以括号结尾的情况（例如「报告(最终版)」不该被剥成「报告」）。
+_ANNOT_RE = re.compile(
+    r"\s*[（(](?=[^（()）]*(?:%|相关度|精排|相似度|score|relevance))[^（()）]*[)）]\s*$",
+    re.IGNORECASE,
+)
+
+
+def parse_source_docs(result_text: str) -> list[str]:
+    """从 `_fmt()` 产出的检索结果里按顺序取出来源文档名（已剥离相似度标注）。
+
+    >>> parse_source_docs("--- 来源 1: doc1.txt （相关度 78%）---")
+    ['doc1.txt']
+    >>> parse_source_docs("--- 来源 1: doc1.txt ---")
+    ['doc1.txt']
+    """
+    out: list[str] = []
+    for line in (result_text or "").split("\n"):
+        if "来源" not in line:
+            continue
+        m = _SOURCE_LINE_RE.search(line)
+        if not m:
+            continue
+        rest = m.group(2).strip()
+        # 可能叠加多层标注（例如「（精排 85%）」外再包一层），循环剥净
+        prev = None
+        while rest and prev != rest:
+            prev = rest
+            rest = _ANNOT_RE.sub("", rest).strip()
+        if rest:
+            out.append(rest)
+    return out
 
 
 # 全局单例

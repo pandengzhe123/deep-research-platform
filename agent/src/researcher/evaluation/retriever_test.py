@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".env"))
-from researcher.kb import kb
+from researcher.kb import kb, parse_source_docs
 
 
 def precision_at_k(relevant: set, retrieved: list, k: int) -> float:
@@ -51,16 +51,10 @@ def run_retriever_test(testset: list[dict], user_id: str, modes: list[str] = Non
 
             result = kb.search(q, user_id=user_id, mode=mode)
 
-            # 从结果中提取文档名作为 retrieved 列表
-            # 格式："--- 来源 1: doc1.txt（相关度 N/A）---"
-            retrieved = []
-            for line in result.split("\n"):
-                if "来源" in line and ": " in line:
-                    # 取冒号后面、括号前面的部分
-                    after_colon = line.split(": ", 1)[1] if ": " in line else ""
-                    doc_name = after_colon.split("（")[0].split("(")[0].split("---")[0].strip()
-                    if doc_name:
-                        retrieved.append(doc_name)
+            # 从结果中提取文档名作为 retrieved 列表。
+            # 解析统一走 kb.parse_source_docs()（与 _fmt() 同源），不再各自手写 ——
+            # 手写版本曾因只 strip 半角括号而在带相似度标注的模式下解析失败。
+            retrieved = parse_source_docs(result)
 
             p5 += precision_at_k(expected, retrieved, 5)
             r5 += recall_at_k(expected, retrieved, 5)

@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 # kb.py
 # ============================================================
 
-from researcher.kb import chunk_text, read_file
+from researcher.kb import chunk_text, read_file, parse_source_docs, KnowledgeBase
 
 
 def test_chunk_short_paragraph():
@@ -781,6 +781,118 @@ def test_normalize_queries_types_and_edges():
 
 
 # ============================================================
+# kb._fmt / parse_source_docs —— 检索结果的格式契约
+# ============================================================
+# 这两个函数是一对逆运算，而且是**所有检索指标的入口**：
+# retriever_test / e2e_diagnostic / run_regression 都靠解析 _fmt 的输出来判定命中。
+#
+# 它们曾经分居两个文件、各自手写解析，于是漂移了：
+#   _fmt 输出的是**全角**「（相关度 78%）」，
+#   e2e_diagnostic 却只 strip 半角 "(" → 解析出的"文档名"变成
+#   "doc1.txt （相关度 78%）"，与 expected_docs 永不相等 → 命中率假性归零。
+#   只有 hybrid 模式（doc 不带 distance/rerank_score → 无标注）侥幸正确，
+#   所以这个 bug 被"hybrid 下 73% 看着合理"掩盖了很久。
+# 现在格式与解析同处 kb.py，并有下面的单测钉住，避免再次漂移。
+
+
+def _rdoc(content="正文", doc_id="doc1.txt", distance=None, rerank_score=None):
+    d = {"content": content, "meta": {"doc_id": doc_id}}
+    if distance is not None:
+        d["distance"] = distance
+    if rerank_score is not None:
+        d["rerank_score"] = rerank_score
+    return d
+
+
+def test_fmt_empty_returns_not_found():
+    assert KnowledgeBase._fmt([]) == "知识库中未找到相关信息。"
+
+
+def test_fmt_distance_shows_relevance():
+    out = KnowledgeBase._fmt([_rdoc(distance=0.9)])
+    assert "来源 1: doc1.txt （相关度 10%）---" in out, out
+
+
+def test_fmt_rerank_zero_is_not_falsy():
+    """rerank_score=0.0 是合法分数，不能被真值判断吞掉。
+
+    实测过的 bug：`if r:` 让 0.0 落到 distance 分支，于是「精排判为最不相关」
+    被显示成「相关度 10%」—— 那是**另一个文档的向量距离**换算来的分数。
+    """
+    out = KnowledgeBase._fmt([_rdoc(rerank_score=0.0, distance=0.9)])
+    assert "（精排 0.0%）" in out, out
+    assert "相关度" not in out, out
+
+
+def test_fmt_rerank_takes_priority_over_distance():
+    out = KnowledgeBase._fmt([_rdoc(rerank_score=0.85, distance=0.9)])
+    assert "（精排 85.0%）" in out, out
+    assert "相关度" not in out, out
+
+
+def test_fmt_hybrid_has_no_annotation():
+    """hybrid 的 doc 既无 distance 也无 rerank_score → 不应出现相似度标注。"""
+    out = KnowledgeBase._fmt([_rdoc()])
+    assert "来源 1: doc1.txt ---" in out, out
+
+
+def test_fmt_label_goes_into_header():
+    out = KnowledgeBase._fmt([_rdoc()], "（混合检索）")
+    assert out.startswith("# 知识库检索结果（混合检索）"), out
+
+
+def test_parse_source_docs_strips_fullwidth_annotation():
+    """全角括号标注必须能被剥离 —— e2e_diagnostic 假性归零的根因。"""
+    text = "--- 来源 1: doc1.txt （相关度 78%）---"
+    assert parse_source_docs(text) == ["doc1.txt"], parse_source_docs(text)
+
+
+def test_parse_source_docs_strips_rerank_annotation():
+    text = "--- 来源 1: doc1.txt （精排 85.0%）---"
+    assert parse_source_docs(text) == ["doc1.txt"], parse_source_docs(text)
+
+
+def test_parse_source_docs_strips_halfwidth_annotation():
+    text = "--- 来源 1: doc1.txt (相关度 78%)---"
+    assert parse_source_docs(text) == ["doc1.txt"], parse_source_docs(text)
+
+
+def test_parse_source_docs_without_annotation():
+    text = "--- 来源 1: doc1.txt ---"
+    assert parse_source_docs(text) == ["doc1.txt"], parse_source_docs(text)
+
+
+def test_parse_source_docs_multiple_and_order():
+    text = (
+        "# 知识库检索结果（全链路）\n"
+        "\n--- 来源 1: a.txt （精排 91.0%）---\n正文A\n"
+        "\n--- 来源 2: b.txt （精排 80.0%）---\n正文B\n"
+    )
+    assert parse_source_docs(text) == ["a.txt", "b.txt"], parse_source_docs(text)
+
+
+def test_parse_source_docs_keeps_filename_with_parens():
+    """文件名自身以括号结尾时不能被误剥（只剥含 % 或已知关键词的标注）。"""
+    text = "--- 来源 1: 报告(最终版) ---"
+    assert parse_source_docs(text) == ["报告(最终版)"], parse_source_docs(text)
+
+
+def test_parse_source_docs_ignores_header_and_not_found():
+    assert parse_source_docs("知识库中未找到相关信息。") == []
+    assert parse_source_docs("# 知识库检索结果（混合检索）\n\n正文") == []
+
+
+def test_fmt_parse_roundtrip():
+    """_fmt → parse_source_docs 往返无损：格式契约的核心不变量。"""
+    docs = [
+        _rdoc(doc_id="a.txt", distance=0.8),
+        _rdoc(doc_id="b.txt", rerank_score=0.0),
+        _rdoc(doc_id="c.txt"),
+    ]
+    assert parse_source_docs(KnowledgeBase._fmt(docs)) == ["a.txt", "b.txt", "c.txt"]
+
+
+# ============================================================
 # 运行
 # ============================================================
 
@@ -825,6 +937,21 @@ if __name__ == "__main__":
         test_kb_presearch_keeps_task_anchor_at_index_zero,
         test_normalize_queries_string_not_split,
         test_normalize_queries_types_and_edges,
+        # kb._fmt / parse_source_docs —— 检索结果格式契约
+        test_fmt_empty_returns_not_found,
+        test_fmt_distance_shows_relevance,
+        test_fmt_rerank_zero_is_not_falsy,
+        test_fmt_rerank_takes_priority_over_distance,
+        test_fmt_hybrid_has_no_annotation,
+        test_fmt_label_goes_into_header,
+        test_parse_source_docs_strips_fullwidth_annotation,
+        test_parse_source_docs_strips_rerank_annotation,
+        test_parse_source_docs_strips_halfwidth_annotation,
+        test_parse_source_docs_without_annotation,
+        test_parse_source_docs_multiple_and_order,
+        test_parse_source_docs_keeps_filename_with_parens,
+        test_parse_source_docs_ignores_header_and_not_found,
+        test_fmt_parse_roundtrip,
     ]
 
     passed = 0
