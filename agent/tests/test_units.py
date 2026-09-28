@@ -1460,6 +1460,104 @@ def test_search_default_n_results_is_10():
     )
 
 
+def test_rerank_limits_are_measured_correctly():
+    """精排的条数上限：**实测是 500 条，与文本长度无关**。
+
+    这里钉住两件事，因为它们的错误值会直接压低召回：
+
+      1. `reranker._MAX_DOCS` 默认必须是 450 —— 原值 100 来自一个**错误的注释**
+         （「输入总量 30,000 token，30,000/300≈100 条」）。实测用真实 API 二分：
+             长文档 849 字/条 → 上限 500 条（424,587 字）
+             短文档  50 字/条 → 上限 500 条（ 25,000 字）
+         每条长度差 17 倍而上限相同 ⇒ 约束是「条数」，不是 token 总量。
+      2. `kb.RERANK_CANDIDATES` 默认必须是 50 —— 实测扫描选定的最优点：
+             k=20 → 50：证据召回@10 58.2% → 63.9%，Hits@10 0.8769 → 0.9192（p<0.0001）
+             k=50 → 90 → 150：只再涨 0.9 / 0.3 个点，成本却翻倍再翻倍
+    """
+    from researcher.kb import RERANK_CANDIDATES
+    from researcher.retrievers import reranker as rr
+
+    assert RERANK_CANDIDATES == 50, (
+        f"RERANK_CANDIDATES={RERANK_CANDIDATES}；实测最优点是 50"
+    )
+    assert rr._MAX_DOCS == 450, (
+        f"_MAX_DOCS={rr._MAX_DOCS}；实测上限 500 条，取 450 留 10% 余量"
+    )
+    # 不能比实测上限还大 —— 超限会被 API 拒绝（400 InvalidParameter），
+    # 整个精排失败而不是降级
+    assert rr._MAX_DOCS <= 500
+    # 安全阀必须高于上游召回深度，否则会静默截断（踩过一次：k=150 会被截成 100）
+    assert rr._MAX_DOCS > RERANK_CANDIDATES, (
+        f"_MAX_DOCS({rr._MAX_DOCS}) 必须大于 RERANK_CANDIDATES({RERANK_CANDIDATES})，"
+        "否则精排会静默截断上游召回"
+    )
+
+
+def test_rerank_truncation_is_not_silent():
+    """精排候选超过 _MAX_DOCS 时必须截断**并打 warning**。
+
+    原来是彻底静默的 `candidates = docs[:_MAX_DOCS]`，很危险：
+    上游以为候选池是 150 条，实际只排了 100 条，指标莫名变差且查不出原因。
+    （做候选池扫描时差点踩到 —— k=150 那一档必须先把这个上限提上来，否则测的是 100。）
+
+    这里用假的 httpx.post，不产生真实 API 调用。
+    """
+    import io
+    import logging
+    import os as _os
+    from researcher.retrievers import reranker as rr
+
+    seen = {}
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"output": {"results": [{"index": 0, "relevance_score": 0.9}]}}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        seen["n_docs"] = len(json["input"]["documents"])
+        seen["top_n"] = json["parameters"]["top_n"]
+        return _Resp()
+
+    orig_post = rr.httpx.post
+    orig_key = _os.environ.get("DASHSCOPE_API_KEY")
+    rr.httpx.post = fake_post
+    _os.environ["DASHSCOPE_API_KEY"] = "test-key-not-used"
+    buf = io.StringIO()
+    handler = logging.StreamHandler(buf)
+    rr.log.addHandler(handler)
+    rr.log.setLevel(logging.WARNING)
+    try:
+        r = rr.DashScopeReranker()
+        docs = [{"page_content": f"文档 {i}"} for i in range(rr._MAX_DOCS + 100)]
+        out = r.rerank("查询", docs, top_n=5)
+
+        assert seen["n_docs"] == rr._MAX_DOCS, (
+            f"应截断到 {rr._MAX_DOCS} 条，实际发了 {seen['n_docs']} 条"
+        )
+        assert len(out) == 1
+        assert "截断" in buf.getvalue(), (
+            "超上限截断必须打 warning —— 静默截断会让上游以为池子更大"
+        )
+
+        # 不超上限时**不应**打日志（否则正常路径被噪声污染）
+        buf.truncate(0); buf.seek(0)
+        r.rerank("查询", docs[:10], top_n=5)
+        assert seen["n_docs"] == 10
+        assert "截断" not in buf.getvalue()
+    finally:
+        rr.httpx.post = orig_post
+        rr.log.removeHandler(handler)
+        if orig_key is None:
+            _os.environ.pop("DASHSCOPE_API_KEY", None)
+        else:
+            _os.environ["DASHSCOPE_API_KEY"] = orig_key
+
+
 def test_hybrid_respects_n_results():
     """hybrid 必须尊重 n_results —— 修复前它永远最多返回 5 条。
 
@@ -1723,6 +1821,8 @@ if __name__ == "__main__":
         test_tokenize_does_not_lowercase,
         test_hybrid_respects_n_results,
         test_search_default_n_results_is_10,
+        test_rerank_limits_are_measured_correctly,
+        test_rerank_truncation_is_not_silent,
         test_bm25_only_returns_positive_score_docs,
         # retrievers —— 查询改写的容错解析
         test_query_rewriter_parse_shapes,

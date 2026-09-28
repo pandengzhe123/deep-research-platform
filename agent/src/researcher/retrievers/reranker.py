@@ -15,9 +15,12 @@
 
 from __future__ import annotations
 
+import logging
 import os
 
 import httpx
+
+log = logging.getLogger(__name__)
 
 # 阿里云百炼文本排序。注意 gte-rerank 系列（无 -v2）已于 2026-05-30 下线，
 # 不要退回 "gte-rerank"。qwen3-rerank 走的是另一个端点（compatible-api/v1/reranks）。
@@ -27,12 +30,26 @@ _RERANK_URL = os.getenv(
 )
 _RERANK_MODEL = os.getenv("RERANK_MODEL", "gte-rerank-v2")
 
-# 官方限制：gte-rerank-v2 单次请求输入总量 30,000 token、单条 4,000 token。
-# chunk_text 切出的块 <= 500 字（中文约 300 token），所以单条不会超；
-# 真正的风险是条数 —— 粗召回把多个查询变体的向量+BM25 结果去重后可能上百条，
-# 30,000 / 300 ≈ 100 条就是上限。超过时取前 _MAX_DOCS 条（粗排顺序），
-# 宁可少排几条也不要触发 400 让整个精排失败。
-_MAX_DOCS = 100
+# 单次请求的文档条数上限。
+#
+# ⚠️ 这里原来是 100，且注释写着「官方限制输入总量 30,000 token，30,000/300≈100 条就是上限」——
+# **那个说法是错的，已实测推翻**（2026-09-28，用真实 API 二分）：
+#
+#     语料                    每条字数   最大成功条数   总字数
+#     长文档（MultiHop-RAG）     849        500       424,587
+#     短文档（同语料截断）         50        500        25,000
+#     临界：501 条失败，500 条成功（长短文本都一样）
+#
+# 每条长度差 17 倍而上限完全相同 ⇒ **约束是「文档条数 ≤ 500」，与文本长度无关**。
+# 424,587 个英文字符（约 10 万 token）都能通过，所以「30,000 token 总量上限」不成立。
+#
+# 取 450 而不是 500：留 10% 余量。超限时阿里云返回 400
+# `InternalError.Algo.InvalidParameter`，整个精排会失败而非降级。
+#
+# 注意代价：精排按 token 计费，450 条 × 850 字 ≈ 9.5 万 token / 次调用。
+# 所以这个值只是「不要无辜截断」的安全上界，**真正决定召回的是上游召回多少条**
+# （见 KnowledgeBase._search_rerank 的 KB_RERANK_CANDIDATES）。
+_MAX_DOCS = int(os.getenv("RERANK_MAX_DOCS", "450"))
 
 
 class DashScopeReranker:
@@ -57,6 +74,16 @@ class DashScopeReranker:
         if not self._api_key:
             raise RuntimeError("缺少 DASHSCOPE_API_KEY，无法调用精排服务")
 
+        # 超上限时截断 —— 原来是**完全静默**的，这很危险：
+        # 上游以为候选池是 150 条，实际只排了 100 条，指标会莫名其妙地变差且查不出原因
+        # （本次做候选池扫描时差点踩到：k=150 那一档必须先把这个上限从 100 提上来，
+        #   否则测的其实是 100）。所以补一条 warning。
+        if len(docs) > _MAX_DOCS:
+            log.warning(
+                "精排候选 %d 条超过上限 %d，截断为前 %d 条（按粗排顺序）。"
+                "上游召回深度（kb.RERANK_CANDIDATES / _search_full 的变体数）不应超过该上限。",
+                len(docs), _MAX_DOCS, _MAX_DOCS,
+            )
         candidates = docs[:_MAX_DOCS]
         texts = [self._get_text(d) for d in candidates]
 
