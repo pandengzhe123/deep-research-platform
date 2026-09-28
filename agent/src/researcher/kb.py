@@ -719,6 +719,13 @@ class KnowledgeBase:
         seen = set()
         for v in variants:
             vec_hits = 0
+            # ⚠️ 这里的 k=20 是**每变体**的向量深度，不是池子大小；池子 = 3变体×(20+10)
+            # 去重后的结果。2026-09-28 实测（cs1024 库 / 60 题 / KB_MAX_DISTANCE=1.2）：
+            # 去重前 83.7 条 → 去重后 **38.8 条**（压掉 53.7%，变体间高度重叠）。
+            # 而 `rerank` 模式单查询取 RERANK_CANDIDATES=50，池子实测 42.1 条 ——
+            # **生产路径 full 的池子反而比 rerank 模式小**，这是个待修的不一致：
+            # 同一批数据上池子天花板随深度持续上涨（深20 86.3% → 深50 90.9% → 深100 95.4%，
+            # 前 120 题口径），所以把 20 提上去是当前最大的一根杠杆。
             for d in self._v2_vector_search(v, user_id, doc_ids, k=20):
                 key = d["content"][:200]
                 if key not in seen:
@@ -799,13 +806,27 @@ class KnowledgeBase:
         从 5 提到 10：**证据召回 +8.8 个点**（49.4% → 58.2%），上下文 4,214 → 8,213 字。
         再往上性价比崩掉（10→15 每千字只换 1.0%、15→20 只有 0.33%），所以停在 10。
 
-        为什么这是「零检索成本」的改动：块**本来就已经召回了**（候选池 k=20），
+        为什么这是「零检索成本」的改动：块**本来就已经召回了**（见下表池子大小），
         这里只是决定把几条返回给调用方 —— 不额外发起任何检索或 embedding 调用，
         代价只有 LLM 输入 token 变多。
 
-        ⚠️ 上游的候选池深度（`_search_rerank` 的 `k=20`、hybrid 的 20/20）**没有一起改**，
-        所以 `n_results > 20` 是拿不到的（rerank 实测请求 30 条只返回 20 条）。
-        要突破必须先提候选池，而那需要重新验证精排质量。
+        ⚠️ `n_results` 的上限是**上游候选池深度**，而**各模式的池子不一样大**，
+        并且**没有任何一个模式是 20 条**（2026-09-28 实测，cs1024 库 / 60 题 /
+        生产默认 KB_MAX_DISTANCE=1.2）：
+
+            模式                 那个数字叫什么                      实测池子(均值/中位)
+            v2 (default)        n_results=10                        9.8 / 10
+            hybrid              向量 20 + BM25 20 → RRF             38.8 / 40
+            rerank              RERANK_CANDIDATES=50                42.1 / 50
+            full（生产路径）      每变体向量 k=20（本文件写死）          38.8 / 39（去重前 83.7/90）
+
+        两个最容易搞混的点：
+          · `RERANK_CANDIDATES=50` **只管 `_search_rerank`**，与 full 无关。
+            full 里的 20 是**每个变体各自的**检索深度，不是池子大小。
+          · full 去重把 90 条压成 39 条（压掉 53.7%，变体之间高度重叠），
+            于是**生产路径 full 的池子反而比 rerank 模式还小**（38.8 < 42.1）。
+            所以对 full 而言 `n_results` 提到 39 以上基本无意义 ——
+            要突破得先提 `_search_full` 里写死的那个 k=20。
         """
         if not ANSWER_CHECK_ENABLED:
             return self._dispatch(query, user_id, doc_ids, n_results, mode)
