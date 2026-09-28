@@ -105,6 +105,45 @@ def test_chunk_overlap_only_applies_in_char_fallback():
     assert cs[0][-100:] == cs[1][:100], "字符级路径应产生 100 字重叠"
 
 
+def test_chunk_min_chunk_chars_drops_degenerate_tail():
+    """最小块长闸：丢掉合并后仍过短的残块。
+
+    触发条件：短块后面跟着一个接近 chunk_size 的块 → 合并会超出 chunk_size
+    而被拒绝 → 短块独立留下。实测 agent/eval 里每篇 prod_* 开头的
+    「分类: 数据库」就是这种（正文 > 491 字时无法合并）。
+    """
+    from researcher.kb import chunk_text
+
+    text = "正文内容。" * 100 + "\n\n尾。"      # 500 字正文 + 2 字尾巴
+    a = chunk_text(text)
+    assert min(len(x) for x in a) < 30, a
+
+    b = chunk_text(text, min_chunk_chars=30)
+    assert min(len(x) for x in b) >= 30, b
+    assert len(b) < len(a)
+
+
+def test_chunk_min_chunk_chars_keeps_original_when_all_dropped():
+    """全被丢掉时必须退回原样。
+
+    否则一个短文档会变成「零块」，上层会把它当成「文件内容为空」
+    直接拒绝入库 —— 用户会看到一张传上去却消失的文件。
+    """
+    from researcher.kb import chunk_text
+
+    short = "只有一句话。"
+    assert chunk_text(short, min_chunk_chars=30) == chunk_text(short) == [short]
+    assert chunk_text("", min_chunk_chars=30) == []
+
+
+def test_chunk_min_chunk_chars_zero_is_old_behavior():
+    """默认 0 = 不丢，保证既有调用方（含全部单测）行为不变。"""
+    from researcher.kb import chunk_text
+
+    text = "正文内容。" * 100 + "\n\n尾。"
+    assert chunk_text(text) == chunk_text(text, min_chunk_chars=0)
+
+
 def test_read_txt_file():
     d = tempfile.mkdtemp()
     try:
@@ -1300,6 +1339,9 @@ if __name__ == "__main__":
         test_chunk_overlap_not_less_than_chunk_size,
         test_chunk_min_size_larger_than_chunk_size,
         test_chunk_overlap_only_applies_in_char_fallback,
+        test_chunk_min_chunk_chars_drops_degenerate_tail,
+        test_chunk_min_chunk_chars_keeps_original_when_all_dropped,
+        test_chunk_min_chunk_chars_zero_is_old_behavior,
         test_read_txt_file,
         test_read_md_file,
         test_read_file_not_found,

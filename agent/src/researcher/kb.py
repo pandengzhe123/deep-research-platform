@@ -13,7 +13,8 @@ import chromadb
 # 切块策略
 # ============================================================
 
-def chunk_text(text: str, chunk_size: int = 500, overlap: int = 100, min_size: int = 300) -> list[str]:
+def chunk_text(text: str, chunk_size: int = 500, overlap: int = 100,
+               min_size: int = 300, min_chunk_chars: int = 0) -> list[str]:
     """段落优先 → 句子 → 字符，逐级降级切分。太短的 chunk 合并到前一个。
 
     ⚠️ `overlap` 只在**字符级**降级路径里生效，而那条路径要求「切完段落后，
@@ -72,7 +73,31 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 100, min_size: i
             merged[-1] = merged[-1] + "\n" + c
         else:
             merged.append(c)
+
+    # 丢弃合并后仍然过短的残块（min_chunk_chars=0 → 不丢，保持既有行为）
+    #
+    # 为什么需要：合并规则要求「合并后不超过 chunk_size」，所以当一个很短的块
+    # 后面跟着一个接近 chunk_size 的块时，两者**无法合并**，那个短块就独立留下。
+    # 实测（agent/eval，2026-09-28）：每篇 prod_* 文档开头都有一行「分类: 数据库」，
+    # 当正文 > 491 字时它与正文无法合并 → **7 个纯元数据块（占 1.6%）**留在索引里。
+    # 这些块能匹配到查询却给不出任何内容，白占检索名额。
+    #
+    # 为什么是「丢弃」而不是「强行合并」：强行合并会突破 chunk_size 这个契约
+    # （已有单测钉住），而这类残块的典型形态就是元数据标签，丢掉没有信息损失。
+    if min_chunk_chars > 0:
+        kept = [c for c in merged if len(c) >= min_chunk_chars]
+        # 全被丢掉时退回原样：否则一个短文档会变成"零块"，
+        # 上层会把它当成"文件内容为空"直接拒绝入库
+        return kept or merged
     return merged
+
+
+# 入库时的最小块长（字）。0 = 不丢。
+#
+# 默认 30：实测能清掉「分类: XX」这类纯元数据残块（最长 17 字），
+# 而正常的段落/句子块中位 321 字，远在阈值之上，不会被误伤。
+# 设为 0 可关闭（回到旧行为）。
+MIN_CHUNK_CHARS = int(os.getenv("KB_MIN_CHUNK_CHARS", "30"))
 
 
 # ============================================================
@@ -356,7 +381,8 @@ class KnowledgeBase:
             return {"status": "error", "message": f"文件不存在: {file_path}"}
 
         text = read_file(path)
-        chunks = chunk_text(text)
+        # min_chunk_chars：丢掉合并后仍过短的残块（如「分类: 数据库」这类元数据行）
+        chunks = chunk_text(text, min_chunk_chars=MIN_CHUNK_CHARS)
         if not chunks:
             return {"status": "error", "message": "文件内容为空"}
 
