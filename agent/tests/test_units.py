@@ -1113,6 +1113,43 @@ def test_bm25_cache_bounded_across_users():
 
 
 # ============================================================
+# retrievers —— BM25 的词法相关性闸
+# ============================================================
+
+
+def test_bm25_only_returns_positive_score_docs():
+    """BM25 只返回分数 > 0 的文档：零分 = 与查询没有任何词项重叠。
+
+    为什么触发得很少（值得记住的机制）：jieba 会把空格切成一个 token，
+    而空格几乎出现在每个文档里 → rank_bm25 的 epsilon 机制给这种
+    「语料中过半文档都有」的词项一个较小的**正** idf → 含空格的查询
+    会让所有文档都得分 > 0。所以这道闸只在**纯中文查询**（无空格 token）
+    且部分文档确实零重叠时才起作用 —— 实测 130 题里只有 2 条。
+    """
+    from researcher.retrievers.bm25_retriever import BM25Retriever, _tokenize
+
+    docs = [
+        {"page_content": "分布式系统共识算法"},
+        {"page_content": "数据库索引优化"},
+        {"page_content": "网络协议分层"},
+    ]
+    bm = BM25Retriever(docs, k=10)
+
+    q = "分布式系统共识算法"
+    scores = bm._bm25.get_scores(_tokenize(q))
+    positive = [i for i, s in enumerate(scores) if s > 0]
+    got = [d["page_content"] for d in bm.invoke(q)]
+
+    # 契约：返回的正好是「分数 > 0」的那些文档
+    assert got == [docs[i]["page_content"] for i in positive], (got, positive)
+    # 且确实剔除了零重叠的文档（否则这个测试等于没测）
+    assert len(got) < len(docs), f"应有文档被剔除，实际全返回: {got}"
+
+    # 空语料不应崩
+    assert BM25Retriever([], k=10).invoke("任意查询") == []
+
+
+# ============================================================
 # 运行
 # ============================================================
 
@@ -1183,6 +1220,8 @@ if __name__ == "__main__":
         test_bm25_cache_invalidated_on_write,
         test_bm25_cache_empty_kb_returns_none,
         test_bm25_cache_bounded_across_users,
+        # retrievers —— BM25 词法相关性闸
+        test_bm25_only_returns_positive_score_docs,
     ]
 
     passed = 0

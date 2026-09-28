@@ -10,7 +10,29 @@ def _tokenize(text: str) -> list[str]:
 
 
 class BM25Retriever:
-    """BM25 关键词检索器，支持中文分词。"""
+    """BM25 关键词检索器，支持中文分词。
+
+    只返回**分数严格大于 0** 的文档：0 分意味着该文档与查询没有任何词项重叠，
+    也就是没有任何词法相关性依据，不该占 top-k 名额。
+
+    实测（2026-09-28，130 题 / kb_eval_v2 439 chunks / k=20）：
+      · 触发频率：只有 2/130 条查询的 top-20 里混进零分文档（共 12 个），
+        例如「微服务怎么找到对方」有 5 个。分数分布上，第 20 名的中位是 8.68，
+        所以 k=20 的截断在绝大多数情况下已经挡住了它们。
+      · 聚合指标影响：0。把下限从「不过滤」扫到 3.0，
+        doc_hit@5 / chunk_recall@5 / chunk_mrr 三项一字未变。
+    也就是说**这道闸修的是机制，不是指标** —— 它防止「查询词在库里一个都没出现」
+    时 BM25 返回一批任意文档，经 RRF 按排名拿到权重后污染融合结果。
+    保留它是因为代价近乎为零且方向明确；不要指望它带来可测量的指标提升。
+
+    为什么触发得这么少（值得记住的机制，别指望靠调这个参数提升指标）：
+    jieba 会把**空格**切成一个独立 token，而空格几乎出现在每个文档里；
+    rank_bm25 的 BM25Okapi 对「语料中过半文档都有」的词项算出的 idf 为负，
+    随后用 `epsilon * average_idf` 替换 —— 而 average_idf 通常为正，
+    于是空格这个词项拿到了一个**正的** idf。结果：只要查询里含空格，
+    每个含空格的文档都会得正分。所以这道闸只在**纯中文查询**（没有空格 token）
+    且部分文档确实零词项重叠时才生效。
+    """
 
     def __init__(self, documents: list[dict], k: int = 20):
         self._docs = documents
@@ -23,7 +45,10 @@ class BM25Retriever:
         if not self._bm25:
             return []
         scores = self._bm25.get_scores(_tokenize(query))
-        ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
+        # 先过滤再排序。全部零分时返回空 —— 那表示查询词在库里一个都没出现，
+        # 此时混合检索应完全交给向量路，而不是塞一批"零分但排名靠前"的文档。
+        ranked = [(i, s) for i, s in enumerate(scores) if s > 0]
+        ranked.sort(key=lambda x: x[1], reverse=True)
         return [self._docs[i] for i, _ in ranked[:self._k]]
 
 

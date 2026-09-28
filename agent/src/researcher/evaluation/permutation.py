@@ -1,8 +1,8 @@
-"""置换检验（permutation test）—— 判断两个模式命中率差异是否显著。
+"""置换检验（permutation test）—— 判断两个模式得分差异是否显著。
 
 背景问题：
-  消融实验输出各模式命中率（如 v2=70%, full=82%），但 12 个点的差距可能是真提升，
-  也可能只是这 112 道题的一次抽样运气（换一批题差距可能消失甚至反转）。
+  消融实验输出各模式命中率（如 v2=97%, hybrid=98%），但 1 个点的差距可能是真提升，
+  也可能只是这 130 道题的一次抽样运气（换一批题差距可能消失甚至反转）。
   命中率本身无法回答"这个差距有多大可能是随机波动"。
 
 核心思想：
@@ -13,6 +13,10 @@
   p-value = 打平世界里"随机差距 >= 真实差距"的比例。
   p < 0.05 → 真实差距不像是抽样波动能解释的 → 差异显著。
 
+适用输入：不限于 0/1 —— 只要得分可加总即可。命中率（0/1）与 chunk_mrr
+（连续值）都能直接跑；后者分辨力更高（相对极差约 8.4% vs 1.7%），
+所以消融实验对两者各跑一次。
+
 零成本：纯内存算术，不调 LLM、不跑检索、不消耗 token。
 只对"有 expected_chunks 的题"做——no_answer 题型测的是拒绝能力，是另一个维度，
 混进来会稀释显著性。
@@ -21,20 +25,20 @@
 import random
 
 
-def permutation_test(scores_a: list[int], scores_b: list[int], n_perm: int = 10000) -> dict:
-    """比较两组 0/1 命中得分，判断差异是否显著。
+def permutation_test(scores_a: list[float], scores_b: list[float], n_perm: int = 10000) -> dict:
+    """比较两组得分，判断差异是否显著。得分可以是 0/1，也可以是连续值。
 
     参数：
-      scores_a: 模式 A 每题命中(1)/未命中(0) 的列表
-      scores_b: 模式 B 每题命中(1)/未命中(0) 的列表
+      scores_a: 模式 A 每题的得分（命中 1/0，或 chunk_mrr 这类连续值）
+      scores_b: 模式 B 每题的得分
       n_perm:   洗牌次数。默认 10000，纯本地计算约 1 秒，零 API 成本。
 
     返回：
       {
         "n":          参与比较的题数（两模式应一致）
-        "hits_a":     A 命中数
-        "hits_b":     B 命中数
-        "diff":       真实命中数差（绝对值）
+        "hits_a":     A 的得分总和（0/1 输入时即命中数）
+        "hits_b":     B 的得分总和
+        "diff":       真实得分差（绝对值）
         "p_value":    p 值
         "significant": bool，p < 0.05 为显著
       }
@@ -64,11 +68,12 @@ def permutation_test(scores_a: list[int], scores_b: list[int], n_perm: int = 100
     }
 
 
-def compare_all_modes(per_mode_hits: dict[str, list[int]], n_perm: int = 10000) -> list[dict]:
+def compare_all_modes(per_mode_hits: dict[str, list[float]], n_perm: int = 10000) -> list[dict]:
     """对多个模式两两做置换检验。
 
     参数：
-      per_mode_hits: {"mode": [0/1 列表], ...}，只传有答案的题。
+      per_mode_hits: {"mode": [每题得分], ...}，只传有答案的题。
+                     得分可以是 0/1，也可以是 chunk_mrr 这类连续值。
 
     返回：
       每对模式一个结果 dict，按 p_value 升序（差异越显著越靠前）。
