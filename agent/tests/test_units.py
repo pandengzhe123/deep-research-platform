@@ -1431,6 +1431,35 @@ def test_tokenize_does_not_lowercase():
         assert _tokenize(text) == list(jieba.cut(text)), text
 
 
+def test_search_default_n_results_is_10():
+    """`kb.search` 的 n_results 默认值是 **10**（2026-09-28 从 5 提到 10）。
+
+    依据（MultiHop-RAG 语料 / cs1024 库 7,711 块 / 260 题 / mode=rerank）：
+
+        K   证据召回  至少命中1条  消耗字符   边际召回/千字
+        5     49.4%      81.9%     4,214       3.9%
+       10     58.2%      87.7%     8,213       1.4%   ← 落在这里
+       15     61.9%      90.8%    11,887       1.0%
+       20     63.0%      91.5%    15,356       0.3%   ← 性价比崩
+
+    5 → 10 换来 **证据召回 +8.8 个点**，上下文翻倍。再往上每千字只换 1% 以下，不值。
+
+    这是**零检索成本**的改动：候选块本来就已经召回（候选池 k=20），
+    这里只决定返回几条 —— 不额外发起检索或 embedding 调用。
+
+    ⚠️ 这个默认值会直接影响 Agent 看到的内容量与 token 成本（agent.py 三处调用
+    都没传这个参数），所以用测试钉住，改它必须是有意识的决定。
+    """
+    import inspect
+    from researcher.kb import KnowledgeBase
+
+    sig = inspect.signature(KnowledgeBase.search)
+    assert sig.parameters["n_results"].default == 10, (
+        f"n_results 默认值被改成了 {sig.parameters['n_results'].default}；"
+        "改它前请先确认证据召回/上下文成本的新权衡"
+    )
+
+
 def test_hybrid_respects_n_results():
     """hybrid 必须尊重 n_results —— 修复前它永远最多返回 5 条。
 
@@ -1693,6 +1722,7 @@ if __name__ == "__main__":
         # retrievers —— BM25 词法相关性闸
         test_tokenize_does_not_lowercase,
         test_hybrid_respects_n_results,
+        test_search_default_n_results_is_10,
         test_bm25_only_returns_positive_score_docs,
         # retrievers —— 查询改写的容错解析
         test_query_rewriter_parse_shapes,

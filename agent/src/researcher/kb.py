@@ -706,13 +706,32 @@ class KnowledgeBase:
 
     def search(
         self, query: str, user_id: str = "default",
-        doc_ids: list[str] | None = None, n_results: int = 5, mode: str = "default",
+        doc_ids: list[str] | None = None, n_results: int = 10, mode: str = "default",
     ) -> str:
         """mode: default / v2 / hybrid / rerank / full
 
         `default` 与 `v2` 现在等价（都是阿里云纯向量检索）。原先 default 走本地
         MiniLM，那条管线已随本地模型一并移除；保留 default 这个入参名是为了不
         破坏外部调用方，而不是因为还存在第二种行为。
+
+        `n_results` 默认值 **5 → 10**（2026-09-28），依据实测（MultiHop-RAG 语料，
+        cs1024 库 7,711 块 / 均 824 字，260 题，mode=rerank）：
+
+            K   证据召回  至少命中1条  消耗字符   边际召回/K
+            5     49.4%      81.9%     4,214       3.2%
+           10     58.2%      87.7%     8,213       1.1%
+           20     63.0%      91.5%    15,356       0.2%
+
+        从 5 提到 10：**证据召回 +8.8 个点**（49.4% → 58.2%），上下文 4,214 → 8,213 字。
+        再往上性价比崩掉（10→15 每千字只换 1.0%、15→20 只有 0.33%），所以停在 10。
+
+        为什么这是「零检索成本」的改动：块**本来就已经召回了**（候选池 k=20），
+        这里只是决定把几条返回给调用方 —— 不额外发起任何检索或 embedding 调用，
+        代价只有 LLM 输入 token 变多。
+
+        ⚠️ 上游的候选池深度（`_search_rerank` 的 `k=20`、hybrid 的 20/20）**没有一起改**，
+        所以 `n_results > 20` 是拿不到的（rerank 实测请求 30 条只返回 20 条）。
+        要突破必须先提候选池，而那需要重新验证精排质量。
         """
         if not ANSWER_CHECK_ENABLED:
             return self._dispatch(query, user_id, doc_ids, n_results, mode)
