@@ -34,6 +34,12 @@ agent/chroma_test/
 agent/chroma_data.bak_*/
 chroma_data.bak_*/
 
+# 公开 benchmark 语料（MultiHop-RAG 等）—— 不入库，两条理由：
+#   1. 体积：MultiHop-RAG 一份就 133MB（609 篇文档 + 独立 Chroma 目录）
+#   2. 许可：ODC-BY 要求署名后再分发，直接塞进本仓库不合适
+# 重新获取：corpus.json / MultiHopRAG.json 取自 HF 数据集 yixuantt/MultiHopRAG
+agent/eval_corpora/
+
 # Test files
 test_rag.txt
 test2.txt

@@ -1404,6 +1404,65 @@ def test_search_path_does_not_create_collection():
 # ============================================================
 
 
+def test_tokenize_does_not_lowercase():
+    """**回归护栏**：分词不做大小写归一化 —— 试过，实测负收益，别再改回去。
+
+    直觉上 `.lower()` 能合并 `Redis`/`redis` 这类大小写变体，应该提升词法匹配。
+    但在 MultiHop-RAG 英文语料上实测是负收益（260 题，A/B 唯一差别就是 lower）：
+        hybrid Hits@4  0.6692 → 0.6346（−0.0346，配对符号翻转 p = 0.0360，显著更差）
+        Hits@10 / MRR@10 / MAP@10 方向也全为负
+    中文库上只有 1/134 题变化（p = 1.0000，中性无收益）。
+
+    机制：英文新闻专有名词密度高，大小写本身是判别信号；合并 `Apple`/`apple`
+    会抹掉这个信号并降低 idf 判别力。
+    """
+    from researcher.retrievers.bm25_retriever import _tokenize
+    import jieba
+
+    # 不做归一化：大小写保持原样
+    assert _tokenize("Redis") == ["Redis"]
+    assert _tokenize("Apple Vision Pro") == ["Apple", " ", "Vision", " ", "Pro"]
+    assert _tokenize("Redis 的内存数据结构") != _tokenize("redis 的内存数据结构")
+
+    # 与「只 cut」逐字一致（防止有人在别处偷偷加了归一化）
+    for text in ["数据库索引优化，包括 B+ 树与 LSM 树。",
+                 "Kubernetes 的 API Server 和 etcd 是控制平面组件。",
+                 "HTTP/2 与 gRPC 都基于 TCP。"]:
+        assert _tokenize(text) == list(jieba.cut(text)), text
+
+
+def test_hybrid_respects_n_results():
+    """hybrid 必须尊重 n_results —— 修复前它永远最多返回 5 条。
+
+    `HybridRetriever.invoke(query)` 的 top_n 默认是 5，`_search_hybrid` 漏传了
+    这个参数，于是 `[:n_results]` 切不出第 6 条。实测 n_results=10 时
+    v2/rerank 返回 10 条、hybrid 只有 5 条。
+    """
+    from researcher.retrievers.ensemble import HybridRetriever
+
+    class _VR:
+        def __init__(self, n):
+            self.n = n
+
+        def invoke(self, q):
+            return [{"page_content": f"向量文档 {i} 内容", "metadata": {}} for i in range(self.n)]
+
+    class _BM:
+        def __init__(self, n):
+            self.n = n
+
+        def invoke(self, q):
+            return [{"page_content": f"关键词文档 {i} 内容", "metadata": {}} for i in range(self.n)]
+
+    ens = HybridRetriever(_VR(30), _BM(30))
+    # 默认 5 —— 这正是 bug 的来源，把它固定成契约以免将来又被误用
+    assert len(ens.invoke("查询")) == 5
+    # 显式传 top_n 必须生效
+    for k in (1, 5, 10, 25, 40):
+        got = ens.invoke("查询", top_n=k)
+        assert len(got) == min(k, 60), f"top_n={k} 应返回 {min(k,60)} 条，实际 {len(got)}"
+
+
 def test_bm25_only_returns_positive_score_docs():
     """BM25 只返回分数 > 0 的文档：零分 = 与查询没有任何词项重叠。
 
@@ -1632,6 +1691,8 @@ if __name__ == "__main__":
         test_bm25_cache_max_is_configurable,
         test_search_path_does_not_create_collection,
         # retrievers —— BM25 词法相关性闸
+        test_tokenize_does_not_lowercase,
+        test_hybrid_respects_n_results,
         test_bm25_only_returns_positive_score_docs,
         # retrievers —— 查询改写的容错解析
         test_query_rewriter_parse_shapes,

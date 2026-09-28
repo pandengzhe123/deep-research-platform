@@ -564,7 +564,11 @@ class KnowledgeBase:
 
         vr = VRetriever(self, user_id, doc_ids, k=20)
         ens = build_hybrid_retriever(vr, bm)
-        docs = ens.invoke(query)[:n_results]
+        # 必须显式传 top_n：`HybridRetriever.invoke` 的默认是 top_n=5，
+        # 漏传会让本模式**永远最多返回 5 条**，`[:n_results]` 再切也切不出第 6 条。
+        # 实测（n_results=10，kb_eval_v2）：v2 返回 10 条、rerank 返回 10 条、
+        # 修复前的 hybrid 只返回 5 条 —— 调用方要 5 条以上时全是静默截断。
+        docs = ens.invoke(query, top_n=n_results)
 
         result = []
         for doc in docs:
