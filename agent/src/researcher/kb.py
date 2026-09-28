@@ -138,11 +138,21 @@ class _DashScopeEmbeddings:
 class KnowledgeBase:
     """Chroma 向量库封装（阿里云 embedding 单管线）。"""
 
+    # BM25 索引缓存上限（按 user_id 计）。索引常驻内存，条目数必须封顶 ——
+    # 多用户场景下无界缓存会随上传用户数线性吃内存。
+    _BM25_CACHE_MAX = 4
+
     def __init__(self, persist_dir: str = "./chroma_data"):
         self._persist_dir = persist_dir
         self._client = chromadb.PersistentClient(path=persist_dir)
         self._v2_embedder = None
         self._trace = None  # TraceRun 实例，由 Agent 在调用前设置
+        # BM25 索引缓存：user_id -> (generation, retriever)。见 _get_bm25()。
+        self._bm25_cache: dict[str, tuple[int, object]] = {}
+        # 文档代际：ingest / delete 时 +1，使该用户的缓存条目失效。
+        self._kb_generation: dict[str, int] = {}
+        self._bm25_hits = 0
+        self._bm25_misses = 0
 
     # ================================================================
     # 基础方法
@@ -169,6 +179,72 @@ class KnowledgeBase:
             ]
         except Exception:
             return []
+
+    def _get_bm25(self, user_id: str):
+        """取该用户的 BM25 索引（带缓存）；空库返回 None。
+
+        为什么要缓存（2026-09-28 实测，kb_eval_v2 / 439 chunks / 平均 322 字）：
+
+            mode='hybrid' 单次检索耗时拆解
+              拉全量文档          0.0146s    1.8%
+              建 BM25 索引        0.4030s   49.8%   ← 与 embedding 调用同量级
+              向量检索(含 embed)  0.3899s   48.2%
+              BM25 打分           0.0010s    0.1%
+
+        构建成本随规模近线性：1,756 chunks → 0.76s、9,658 → 7.94s、29,852 → 23.87s。
+        而 `mode='full'`（生产默认）**每次 kb.search 都重建一次**，一次 L4 研究
+        会做 10+ 次 KB 检索 —— 缓存省掉的是一次全量分词，不是一次小计算。
+
+        返回的索引以 k=20 构建，调用方按需切片。
+
+        已知限制：缓存是**进程内**的。当前 agent 以单进程 uvicorn 运行
+        （Dockerfile 的 CMD 无 --workers），且 ingest/delete 都发生在同一进程内，
+        所以代际失效是完整的。将来若改多 worker 部署，别的进程上传的文档
+        不会让本进程缓存失效 —— 那时需要把代际计数器挪到 Redis（或直接上 Redis
+        做索引共享）。
+        """
+        gen = self._kb_generation.get(user_id, 0)
+        entry = self._bm25_cache.get(user_id)
+        if entry is not None and entry[0] == gen:
+            self._bm25_hits += 1
+            return entry[1]
+
+        all_docs = self._get_v2_docs(user_id)
+        if not all_docs:
+            return None
+
+        from .retrievers.bm25_retriever import build_bm25_retriever
+
+        bm = build_bm25_retriever(
+            [{"page_content": d["content"], "metadata": d["meta"]} for d in all_docs],
+            k=20,
+        )
+        self._bm25_misses += 1
+
+        # 超上限时淘汰最早插入的一条（dict 保序）
+        if user_id not in self._bm25_cache and len(self._bm25_cache) >= self._BM25_CACHE_MAX:
+            self._bm25_cache.pop(next(iter(self._bm25_cache)))
+        self._bm25_cache[user_id] = (gen, bm)
+        return bm
+
+    def _invalidate_bm25(self, user_id: str) -> None:
+        """文档写入/删除后使该用户的 BM25 缓存失效。
+
+        用「代际计数器」而不是直接删缓存条目：并发场景下，若新查询在写操作
+        完成前就重建了索引，缓存里会存下旧内容；+1 代际则保证带旧代际的条目
+        再也不会被命中（它会在下次 _get_bm25 时被替换）。
+        """
+        self._kb_generation[user_id] = self._kb_generation.get(user_id, 0) + 1
+
+    def bm25_cache_stats(self) -> dict:
+        """BM25 缓存统计（排查 / 评测用）。"""
+        total = self._bm25_hits + self._bm25_misses
+        return {
+            "hits": self._bm25_hits,
+            "misses": self._bm25_misses,
+            "cached_users": len(self._bm25_cache),
+            "hit_rate": f"{self._bm25_hits / total:.1%}" if total else "N/A",
+        }
 
     def _v2_vector_search(self, query: str, user_id: str, doc_ids: list[str] | None, k: int) -> list[dict]:
         """纯向量检索。"""
@@ -273,6 +349,8 @@ class KnowledgeBase:
             metadatas=[{"user_id": user_id, "doc_id": doc_id} for _ in chunks],
             ids=chunk_ids,
         )
+        # 文档变了 → 该用户的 BM25 索引必须失效，否则新上传的文档搜不到
+        self._invalidate_bm25(user_id)
         return {
             "status": "ok", "doc_id": doc_id, "chunks": len(chunks),
             "characters": len(text), "embedding_model": os.getenv("EMBED_MODEL", "text-embedding-v4"),
@@ -289,11 +367,10 @@ class KnowledgeBase:
 
     def _search_hybrid(self, query, user_id, doc_ids, n_results):
         """混合检索：向量 + BM25 双路 RRF。"""
-        from .retrievers.bm25_retriever import build_bm25_retriever
         from .retrievers.ensemble import build_hybrid_retriever
 
-        all_docs = self._get_v2_docs(user_id)
-        if not all_docs:
+        bm = self._get_bm25(user_id)
+        if bm is None:
             return "知识库中未找到相关信息。"
 
         # 向量检索器
@@ -306,8 +383,6 @@ class KnowledgeBase:
                 return [{"page_content": d["content"], "metadata": d["meta"]} for d in docs]
 
         vr = VRetriever(self, user_id, doc_ids, k=20)
-        lang_docs = [{"page_content": d["content"], "metadata": d["meta"]} for d in all_docs]
-        bm = build_bm25_retriever(lang_docs, k=20)
         ens = build_hybrid_retriever(vr, bm)
         docs = ens.invoke(query)[:n_results]
 
@@ -353,12 +428,15 @@ class KnowledgeBase:
             variants = [query]
 
         # 2. 向量 + BM25 双路
-        from .retrievers.bm25_retriever import build_bm25_retriever
+        # BM25 走缓存：原先这里每次检索都全量 jieba 分词 + 重建 BM25Okapi，
+        # 实测占单次 hybrid 耗时的 49.8%（与 embedding 调用同量级）。
+        # 缓存索引以 k=20 构建（见 _get_bm25），此处只需前 10 条 → 调用后切片。
         t0 = __import__('time').time()
-        all_v2_docs = self._get_v2_docs(user_id)
-        bm_docs = [{"page_content": d["content"], "metadata": d["meta"]} for d in all_v2_docs]
-        bm25 = build_bm25_retriever(bm_docs, k=10)
-        print(f"  [full] ② BM25 索引就绪 ({len(bm_docs)} 篇文档, {__import__('time').time() - t0:.1f}s)")
+        bm25 = self._get_bm25(user_id)
+        if bm25 is None:
+            print(f"  [full] ② 知识库为空，跳过检索")
+            return "知识库中未找到相关信息。"
+        print(f"  [full] ② BM25 索引就绪 ({__import__('time').time() - t0:.2f}s)")
 
         t0 = __import__('time').time()
         all_docs = []
@@ -372,7 +450,7 @@ class KnowledgeBase:
                     all_docs.append(d)
                     vec_hits += 1
             bm_hits = 0
-            for d in bm25.invoke(v):
+            for d in bm25.invoke(v)[:10]:
                 c = d["page_content"]
                 key = c[:200]
                 if key not in seen:
@@ -460,6 +538,9 @@ class KnowledgeBase:
                 total = len(ids)
         except Exception:
             pass
+        # 真的删掉了才失效：没删任何东西时重建索引是纯浪费
+        if total:
+            self._invalidate_bm25(user_id)
         return {"status": "ok", "deleted_chunks": total}
 
 

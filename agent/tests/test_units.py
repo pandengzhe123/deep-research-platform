@@ -1044,6 +1044,75 @@ def test_classify_retrieval_four_kinds():
 
 
 # ============================================================
+# kb —— BM25 索引缓存
+# ============================================================
+# 缓存带来的唯一风险是「文档更新后仍检索旧内容」。这里用 __new__ 绕过 __init__
+# （避免建真实 Chroma 客户端），只验证缓存的状态机：命中 / 失效 / 上限。
+
+
+def _fresh_kb():
+    from researcher.kb import KnowledgeBase
+
+    kbx = KnowledgeBase.__new__(KnowledgeBase)
+    kbx._bm25_cache = {}
+    kbx._kb_generation = {}
+    kbx._bm25_hits = 0
+    kbx._bm25_misses = 0
+    return kbx
+
+
+def test_bm25_cache_hit_returns_same_index():
+    kbx = _fresh_kb()
+    kbx._get_v2_docs = lambda uid: [{"content": "Python 由 Guido 创建。", "meta": {"doc_id": "a"}}]
+
+    a = kbx._get_bm25("u1")
+    b = kbx._get_bm25("u1")
+    assert a is not None and a is b, "同一代际下应复用同一个索引对象"
+    assert (kbx._bm25_hits, kbx._bm25_misses) == (1, 1)
+    assert kbx.bm25_cache_stats()["hit_rate"] == "50.0%"
+
+
+def test_bm25_cache_invalidated_on_write():
+    """写操作后代际 +1 → 必须重建，不能复用旧索引（否则新文档搜不到）。"""
+    kbx = _fresh_kb()
+    kbx._get_v2_docs = lambda uid: [{"content": "旧内容", "meta": {"doc_id": "a"}}]
+
+    first = kbx._get_bm25("u1")
+    kbx._invalidate_bm25("u1")
+    second = kbx._get_bm25("u1")
+    assert second is not first, "失效后应重建"
+    assert kbx._kb_generation["u1"] == 1
+    assert kbx._bm25_misses == 2
+
+    # 连续两次失效也应各自生效（代际是累加的，不是布尔开关）
+    kbx._invalidate_bm25("u1")
+    assert kbx._kb_generation["u1"] == 2
+    third = kbx._get_bm25("u1")
+    assert third is not second
+
+
+def test_bm25_cache_empty_kb_returns_none():
+    kbx = _fresh_kb()
+    kbx._get_v2_docs = lambda uid: []
+    assert kbx._get_bm25("nobody") is None
+    # 空库不应被记成 miss（没有可缓存的东西），也不该写进缓存
+    assert kbx._bm25_cache == {}
+
+
+def test_bm25_cache_bounded_across_users():
+    """索引常驻内存，条目数必须封顶 —— 否则随上传用户数线性吃内存。"""
+    kbx = _fresh_kb()
+    kbx._get_v2_docs = lambda uid: [{"content": f"内容 {uid}", "meta": {"doc_id": uid}}]
+
+    for i in range(kbx._BM25_CACHE_MAX + 2):
+        kbx._get_bm25(f"u{i}")
+
+    assert len(kbx._bm25_cache) == kbx._BM25_CACHE_MAX
+    assert "u0" not in kbx._bm25_cache, "最早的条目应被淘汰"
+    assert f"u{kbx._BM25_CACHE_MAX + 1}" in kbx._bm25_cache, "最新的条目应保留"
+
+
+# ============================================================
 # 运行
 # ============================================================
 
@@ -1109,6 +1178,11 @@ if __name__ == "__main__":
         test_ir_metrics_precision_recall_mrr,
         test_calc_mrr_is_keyword_in_block,
         test_classify_retrieval_four_kinds,
+        # kb —— BM25 索引缓存
+        test_bm25_cache_hit_returns_same_index,
+        test_bm25_cache_invalidated_on_write,
+        test_bm25_cache_empty_kb_returns_none,
+        test_bm25_cache_bounded_across_users,
     ]
 
     passed = 0
