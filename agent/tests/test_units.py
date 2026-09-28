@@ -79,6 +79,32 @@ def test_chunk_min_size_larger_than_chunk_size():
         assert len(c) <= 250, f"chunk 超过 chunk_size: {len(c)}"
 
 
+def test_chunk_overlap_only_applies_in_char_fallback():
+    """overlap 只在字符级降级路径生效 —— 段落/句子级没有重叠。
+
+    实测（agent/eval 全部 82 个文档）没有任何 >500 字的句子，所以 overlap
+    对实际内容**从未生效**。这不是 bug（段落/句子本身就是语义完整单元），
+    但 `overlap=100` 这个参数名会让人误以为"相邻块有重叠"，据此推断检索行为
+    会得出错误结论 —— 本项目的早期分析就踩过。这个测试把真实契约钉住。
+    """
+    from researcher.kb import chunk_text
+
+    # 段落级：两块之间不应有重叠
+    # （段落长 360 字：超过 min_size=300 所以不会被合并，又 < chunk_size=500）
+    text = "\n\n".join(["第一段内容。" * 60, "第二段内容。" * 60])
+    chunks = chunk_text(text, chunk_size=500, overlap=100, min_size=300)
+    assert len(chunks) >= 2, f"应至少切出 2 块，实际 {len(chunks)}"
+    for a, b in zip(chunks, chunks[1:]):
+        assert not b.startswith(a[-50:]), "段落级不应产生重叠"
+
+    # 字符级：单个超长句（无句末标点，无法按句切）会走降级路径，那里才有重叠
+    long_sent = "啊" * 1200
+    cs = chunk_text(long_sent, chunk_size=500, overlap=100, min_size=300)
+    assert len(cs) >= 2, f"超长句应被切成多块，实际 {len(cs)}"
+    # step = 500 - 100 = 400 → 相邻块应共享 100 字
+    assert cs[0][-100:] == cs[1][:100], "字符级路径应产生 100 字重叠"
+
+
 def test_read_txt_file():
     d = tempfile.mkdtemp()
     try:
@@ -1162,6 +1188,7 @@ if __name__ == "__main__":
         test_chunk_size_never_exceeds_limit,
         test_chunk_overlap_not_less_than_chunk_size,
         test_chunk_min_size_larger_than_chunk_size,
+        test_chunk_overlap_only_applies_in_char_fallback,
         test_read_txt_file,
         test_read_md_file,
         test_read_file_not_found,
