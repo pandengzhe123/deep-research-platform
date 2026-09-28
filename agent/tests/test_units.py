@@ -781,6 +781,76 @@ def test_normalize_queries_types_and_edges():
 
 
 # ============================================================
+# agent.py —— Level 4 Supervisor 工具分发的配对不变量
+# ============================================================
+# Level 4 与 Level 2 是两套独立的工具分发代码。Level 2 一直为每种失败补一条
+# tool 响应，Level 4 曾在这三处都不补：
+#   ① arguments 不是合法 JSON          → 只 print + continue
+#   ② 工具名未识别                     → 两个 elif 都不命中，静默丢弃
+#   ③ ConductResearch 缺 research_topic → args["research_topic"] 直接 KeyError
+# 而带全部 tool_calls 的 assistant 消息此时已经入库，于是该 tool_call 永远悬空
+# → 下一轮 chat_with_tools 直接 400 invalid_request_error。
+#
+# 雪上加霜的是 Level 4 只在 total_chars 超限时才调 _truncate_context，
+# 而清理悬空尾部的 _drop_dangling_tail 挂在它末尾 → 未超限的轮次毫无兜底。
+#
+# 修法：无条件调用 _truncate_context + 三条失败路径都回填 tool 响应。
+# 这个测试用假 LLM 把三条路径一次性触发，断言交给下一轮的消息配对完整。
+
+
+class _Fn:
+    def __init__(self, name, arguments):
+        self.name = name
+        self.arguments = arguments
+
+
+class _TC:
+    def __init__(self, tid, name, arguments):
+        self.id = tid
+        self.function = _Fn(name, arguments)
+
+
+class _SupMsg:
+    def __init__(self, content="", tool_calls=None):
+        self.content = content
+        self.tool_calls = tool_calls
+
+
+def test_level4_supervisor_backfills_every_tool_response():
+    """Supervisor 必须为每个 tool_call 回填 tool 响应，否则下一轮 400。"""
+    from researcher.agent import Level4Agent
+
+    captured: list[list[dict]] = []
+
+    class FakeLLM:
+        trace = None
+
+        async def chat(self, system_prompt, user_message, **kw):
+            return "研究简报"          # 供 _generate_research_brief
+
+        async def chat_with_tools(self, system_prompt, messages, tools):
+            captured.append([dict(m) for m in messages])
+            if len(captured) == 1:
+                return _SupMsg("", [
+                    _TC("ok", "think_tool", '{"reflection": "先规划"}'),
+                    _TC("badjson", "think_tool", "{这不是合法 JSON"),
+                    _TC("unknown", "NoSuchTool", '{"x": 1}'),
+                    _TC("notopic", "ConductResearch", '{}'),
+                ])
+            return _SupMsg("信息足够", None)   # 无 tool_calls → 结束循环
+
+    # llm 可注入（与 Level2Agent 一致）→ 这个测试不需要凭据
+    agent = Level4Agent(llm=FakeLLM(), on_progress=lambda e: None, search_mode="web_only")
+    asyncio.run(agent.run("测试问题"))
+
+    assert len(captured) >= 2, f"至少两轮才能检验配对，实际 {len(captured)} 轮"
+    for msgs in captured:
+        _assert_pairing_complete(msgs)
+    answered = {m.get("tool_call_id") for m in captured[1] if m.get("role") == "tool"}
+    assert {"ok", "badjson", "unknown", "notopic"} <= answered, f"缺少 tool 响应: {answered}"
+
+
+# ============================================================
 # kb._fmt / parse_source_docs —— 检索结果的格式契约
 # ============================================================
 # 这两个函数是一对逆运算，而且是**所有检索指标的入口**：
@@ -937,6 +1007,8 @@ if __name__ == "__main__":
         test_kb_presearch_keeps_task_anchor_at_index_zero,
         test_normalize_queries_string_not_split,
         test_normalize_queries_types_and_edges,
+        # agent.py —— Level 4 Supervisor 工具分发配对不变量
+        test_level4_supervisor_backfills_every_tool_response,
         # kb._fmt / parse_source_docs —— 检索结果格式契约
         test_fmt_empty_returns_not_found,
         test_fmt_distance_shows_relevance,
@@ -955,12 +1027,25 @@ if __name__ == "__main__":
     ]
 
     passed = 0
+    failed = []
     for test in tests:
         try:
             test()
             print(f"  ✅ {test.__name__}")
             passed += 1
         except AssertionError as e:
+            failed.append(test.__name__)
             print(f"  ❌ {test.__name__}: {e}")
+        except Exception as e:
+            # 只捕获 AssertionError 的话，一条测试抛别的异常会让整个 runner 当场中断，
+            # 后面的测试一条都不跑 —— 看到的是「第 N 条崩了」而不是「哪几条真的错了」。
+            # 异常类型一并打印，用来区分「断言不成立」与「测试自身/被测签名变了」。
+            failed.append(test.__name__)
+            print(f"  ❌ {test.__name__}: [{type(e).__name__}] {e}")
 
     print(f"\n  {passed}/{len(tests)} 通过")
+    if failed:
+        print(f"  失败项: {', '.join(failed)}")
+        # 退出码必须反映结果。此前这个 runner 无论失败与否都 exit 0，
+        # 于是任何把它挂进 CI / 脚本当门禁的用法都会静默失效。
+        sys.exit(1)

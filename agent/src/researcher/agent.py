@@ -955,8 +955,10 @@ MERGE_PROMPT = """你是一个研究报告汇总专家。多个研究员已经�
 class Level3Agent:
     """Level 3: LLM 拆题 → 多路并行 Level 2 → 汇总"""
 
-    def __init__(self, on_progress=None, kb_enabled: bool = False, user_id: str = "anonymous", rag_doc_ids: list[str] = None, search_mode: str = "hybrid", trace=None):
-        self.llm = LLMClient()
+    def __init__(self, on_progress=None, kb_enabled: bool = False, user_id: str = "anonymous", llm=None, rag_doc_ids: list[str] = None, search_mode: str = "hybrid", trace=None):
+        # llm 可注入，与 Level2Agent 一致（L3/L4 原先都没有这个参数，
+        # 于是两个级别的逻辑完全无法离线单测）。默认 None → 生产行为不变。
+        self.llm = llm or LLMClient()
         self.llm.trace = trace
         self.emit = on_progress or (lambda e: None)
         self.trace = trace
@@ -1039,14 +1041,21 @@ class Level3Agent:
             for i, (_, topic, report) in enumerate(valid)
         )
         try:
-            final_report = await self.llm.chat(
+            final_report, finish = await self.llm.chat(
                 system_prompt="你是专业的深度研究报告汇总专家。",
                 user_message=MERGE_PROMPT.format(
                     question=question,
                     reports=merged,
                 ),
+                # 与 L1/L2/L4 对齐：显式设置输出上限 + 取回 finish_reason。
+                # 这里原先两者都没有 —— 于是 L3 的汇总报告是四条路径里唯一
+                # 仍会被静默截断的一条：不传 max_tokens 就依赖服务端不稳定的默认值，
+                # 不取 finish_reason 则连「被截断了」都无从判断，finalize_report
+                # 也不会被调用、报告末尾不会出现截断警告。
+                max_tokens=config.report_max_tokens,
+                return_finish_reason=True,
             )
-            return final_report
+            return finalize_report(final_report, finish, 3)
         except Exception as e:
             print(f"  汇总超时，回退到直接拼接: {e}")
             self.emit({"step": "reporting", "message": "LLM 汇总失败，回退到直接拼接子报告"})
@@ -1279,8 +1288,11 @@ RESEARCHER_COMPRESS_PROMPT = """你是一个研究结果整理助手。请将以
 class Level4Agent:
     """Level 4: Supervisor 循环 → 分批派遣 Level 2 → ResearchComplete → 汇总"""
 
-    def __init__(self, on_progress=None, kb_enabled: bool = False, user_id: str = "anonymous", rag_doc_ids: list[str] = None, search_mode: str = "hybrid", trace=None):
-        self.llm = LLMClient()
+    def __init__(self, on_progress=None, kb_enabled: bool = False, user_id: str = "anonymous", llm=None, rag_doc_ids: list[str] = None, search_mode: str = "hybrid", trace=None):
+        # llm 可注入，与 Level2Agent 一致：真实 LLMClient 在构造时就需要凭据，
+        # 不允许注入等于这个类的逻辑无法被离线单测覆盖 —— 工具分发的配对不变量
+        # 就是这么一直没有测试、也一直漏着的。默认 None → 生产行为不变。
+        self.llm = llm or LLMClient()
         self.llm.trace = trace
         self.max_rounds = config.max_supervisor_rounds
         self.max_parallel = config.max_parallel_researchers
@@ -1366,18 +1378,22 @@ class Level4Agent:
             # 轨迹评估：记录 Supervisor 轮次转换
             if self.trace:
                 await self.trace.record_round(round_num, self.max_rounds, event="start")
-            # 消息历史超限保护（与 Level 2 一致）
+            # 消息历史保护（每轮无条件调用，与 Level 2 一致）。
+            #
+            # 关键在「无条件」：`_truncate_context` 末尾会执行 `_drop_dangling_tail`，
+            # 而那是全流程唯一清理尾部残缺 tool_calls 的地方。原先这里只在
+            # `total_chars` 超限时才调用，于是未超限的轮次完全没有这层保护 ——
+            # 而下面 Supervisor 的工具分发有两条路径会留下悬空 tool_call
+            # （JSON 解析失败、工具名未识别），下一轮 `chat_with_tools` 会直接
+            # 400 invalid_request_error。
+            #
+            # 80% 预警由 `_truncate_context` 内部负责（原先这里手写的那段与它
+            # 是逐字相同的重复），用返回的 context_warned 保证只提醒一次。
             total_chars = sum(len(str(m)) for m in messages)
-
-            if not context_warned and total_chars > MAX_HISTORY_CHARS * 0.8:
-                context_warned = True
-                self.emit({"step": "thinking", "message": f"上下文已用 {total_chars * 100 // MAX_HISTORY_CHARS}%，继续追问可能丢失早期内容，建议开新会话"})
-
-            if total_chars > MAX_HISTORY_CHARS:
-                messages, _ = await _truncate_context(
-                    messages, total_chars, MAX_HISTORY_CHARS, self.llm, self.emit, round_num, context_warned,
-                    compressed_summaries=self._compressed_summaries,
-                )
+            messages, context_warned = await _truncate_context(
+                messages, total_chars, MAX_HISTORY_CHARS, self.llm, self.emit, round_num, context_warned,
+                compressed_summaries=self._compressed_summaries,
+            )
 
             print(f"\n{'='*40}")
             print(f"  Supervisor 第 {round_num}/{self.max_rounds} 轮决策")
@@ -1414,11 +1430,36 @@ class Level4Agent:
                 try:
                     args = json.loads(tc.function.arguments)
                 except json.JSONDecodeError:
-                    print(f"  [WARN] Supervisor JSON 解析失败，跳过")
+                    # 必须回填一条 tool 响应。带全部 tool_calls 的 assistant 消息
+                    # 已经在上面 append 过了，这里只 continue 会让该 tool_call
+                    # 永远悬空 —— 下一轮 chat_with_tools 直接 400 invalid_request_error。
+                    # （Level 2 的工具分发一直是这么兜的，Level 4 这段漏了。）
+                    #
+                    # 注意：即使有了「每轮无条件调 _truncate_context」这层兜底，
+                    # 回填仍然必要 —— 实测回退本段后，_drop_dangling_tail 会把整条
+                    # assistant 消息（含同一个 message 里合法的 think_tool 调用）
+                    # 一起悄悄删掉，配对是完整了，但这一轮的工具体验与模型的推理
+                    # 全丢了，模型也拿不到「你参数写错了」的反馈。
+                    print(f"  [WARN] Supervisor JSON 解析失败 (tc.id={tc.id}): "
+                          f"{tc.function.arguments[:80]}...")
+                    messages.append({
+                        "role": "tool", "tool_call_id": tc.id,
+                        "content": (
+                            f"参数不是合法 JSON，本轮跳过。原始参数: {tc.function.arguments[:200]}\n"
+                            "请严格按 schema 重新调用。"
+                        ),
+                    })
                     continue
 
                 if name == "ConductResearch":
-                    topic = args["research_topic"]
+                    topic = args.get("research_topic") or ""
+                    if not topic.strip():
+                        # 缺 research_topic 同样要回填，否则悬空 → 下一轮 400
+                        messages.append({
+                            "role": "tool", "tool_call_id": tc.id,
+                            "content": "缺少 research_topic 参数，本轮跳过。请提供要研究的课题描述。",
+                        })
+                        continue
                     conduct_items.append((tc, topic))
 
                 elif name == "think_tool":
@@ -1427,6 +1468,16 @@ class Level4Agent:
                     messages.append({
                         "role": "tool", "tool_call_id": tc.id,
                         "content": f"反思：{r}",
+                    })
+
+                else:
+                    # 未识别的工具名：回填一条 tool 响应，而不是静默跳过 ——
+                    # 静默跳过就是悬空 tool_call，下一轮必然 400。
+                    print(f"  [WARN] Supervisor 调用了未知工具: {name}")
+                    messages.append({
+                        "role": "tool", "tool_call_id": tc.id,
+                        "content": (f"未知工具 {name}，已忽略。"
+                                    "可用工具：ConductResearch / ResearchComplete / think_tool。"),
                     })
 
             if not conduct_items:
