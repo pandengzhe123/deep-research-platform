@@ -963,6 +963,87 @@ def test_fmt_parse_roundtrip():
 
 
 # ============================================================
+# evaluation/ —— 检索指标与命中判定
+# ============================================================
+# 评测模块此前**一个单测都没有**（agent/tests 下没有任何文件 import researcher.evaluation）。
+# 而它算出来的正是被写进 README / 简历 / 面试话术的那些数字，
+# 所以口径漂移没有任何东西拦得住：
+#   · run_regression 的运行路径与 --update-baseline 各写了一份判定，已经不一致
+#   · no_answer 题的 MRR 在两条路径下处理不同（一条只在拒答时记 1.0，
+#     另一条无条件记 1.0）→ 基准被凭空抬高
+#   · semantic_hit 的 SEMANTIC_THRESHOLD = 0.8 从来没被引用，实际跑的是 0.5
+
+
+def test_ir_metrics_precision_recall_mrr():
+    """retriever_test 的三个传统 IR 指标（文档名口径）。"""
+    from researcher.evaluation.retriever_test import precision_at_k, recall_at_k, mrr
+
+    ret = ["a", "b", "c"]      # 检索顺序
+    rel = {"b"}                # 只有 b 相关
+    assert precision_at_k(rel, ret, 3) == 1 / 3
+    assert precision_at_k(rel, ret, 5) == 1 / 5   # 分母固定为 k，不是 len(ret)
+    assert recall_at_k(rel, ret, 5) == 1.0
+    assert mrr(rel, ret) == 1 / 2                 # b 排第 2 位
+    assert mrr({"z"}, ret) == 0.0                 # 无相关文档
+    assert recall_at_k(set(), ret, 5) == 0.0      # 空 relevant 不应除零
+
+
+def test_calc_mrr_is_keyword_in_block():
+    """run_regression._calc_mrr 按「关键词是否出现在该来源块」判定。
+
+    与 retriever_test.mrr 同名但不同义（一个是 chunk 关键词口径、
+    一个是文档名口径），不可互换 —— 见其 docstring。
+    """
+    from researcher.evaluation.run_regression import _calc_mrr
+
+    text = (
+        "--- 来源 1: a.txt ---\n无关内容\n"
+        "--- 来源 2: b.txt ---\n这里有 Guido\n"
+        "--- 来源 3: c.txt ---\n另一段\n"
+    )
+    assert _calc_mrr(text, ["Guido"]) == 1 / 2
+    assert _calc_mrr(text, ["不存在的词"]) == 0.0
+    assert _calc_mrr("没有来源行", ["Guido"]) == 0.0
+    assert _calc_mrr("", ["Guido"]) == 0.0
+
+
+def test_classify_retrieval_four_kinds():
+    """classify_retrieval 的四类判定；no_answer 题不参与 MRR。"""
+    from researcher.evaluation.run_regression import classify_retrieval
+
+    class FakeHit:
+        def __init__(self, found):
+            self.found = found
+
+        def check(self, question, expected, result):
+            return self.found, 1.0, "literal" if self.found else "miss"
+
+    na = {"type": "no_answer", "question": "库外问题", "expected_chunks": ["未找到"]}
+
+    # ① no_answer + 正确拒答
+    r = classify_retrieval(na, "知识库中未找到相关信息。", FakeHit(False))
+    assert r["kind"] == "refused" and r["hit"] is True and r["mrr"] is None
+
+    # ② no_answer + 该拒答却返回了内容
+    r = classify_retrieval(na, "--- 来源 1: a.txt ---\n有些内容", FakeHit(False))
+    assert r["kind"] == "not_refused" and r["hit"] is False and r["mrr"] is None
+    assert r["missing"] == ["应返回未找到但实际有结果"]
+
+    ans = {"type": "simple", "question": "Q", "expected_chunks": ["Guido"]}
+    hit_text = "--- 来源 1: a.txt ---\nGuido van Rossum"
+
+    # ③ 有答案 + 命中
+    r = classify_retrieval(ans, hit_text, FakeHit(True))
+    assert r["kind"] == "hit" and r["hit"] is True
+    assert r["mrr"] == 1.0 and r["missing"] == []
+
+    # ④ 有答案 + 未命中（missing 列出缺的词）
+    r = classify_retrieval(ans, "--- 来源 1: a.txt ---\n无关", FakeHit(False))
+    assert r["kind"] == "miss" and r["hit"] is False
+    assert r["mrr"] == 0.0 and r["missing"] == ["Guido"]
+
+
+# ============================================================
 # 运行
 # ============================================================
 
@@ -1024,6 +1105,10 @@ if __name__ == "__main__":
         test_parse_source_docs_keeps_filename_with_parens,
         test_parse_source_docs_ignores_header_and_not_found,
         test_fmt_parse_roundtrip,
+        # evaluation/ —— 检索指标与命中判定
+        test_ir_metrics_precision_recall_mrr,
+        test_calc_mrr_is_keyword_in_block,
+        test_classify_retrieval_four_kinds,
     ]
 
     passed = 0

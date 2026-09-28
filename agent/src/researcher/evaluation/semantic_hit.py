@@ -28,8 +28,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".env"))
 
-# 语义命中阈值：余弦相似度 ≥ 0.8 视为语义等价
-SEMANTIC_THRESHOLD = 0.8
+# ⚠️ 生效的语义命中阈值是 `SemanticHit.__init__` 的默认值（0.5），不是模块常量。
+#
+# 这里原先定义过 `SEMANTIC_THRESHOLD = 0.8`，但全项目零引用 —— 所有构造点
+# （ablation.py、run_regression.py 的两处、本文件 __main__）都是无参调用，
+# 实际一直是 0.5。留一个不被使用的常量比没有常量更危险：读代码的人会以为阈值
+# 是 0.8，据此推断命中率，而真实判定比这宽松得多。已删除。
+#
+# 要改阈值请改 `SemanticHit.__init__` 的默认值 —— 它会同时改变消融实验与检索回归
+# 的全部命中率，改之前先量化影响（本项目的 99% / 92.3% 都建立在这个 0.5 上）。
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
@@ -69,6 +76,17 @@ class SemanticHit:
     """
 
     def __init__(self, threshold: float = 0.5):
+        """threshold：question 与候选块的余弦相似度 ≥ 该值即判为语义命中。
+
+        0.5 的依据（来自本文件顶部记录的实测区分度）：命中样本 0.6~0.8、
+        未命中样本 0.33~0.41，0.5 正好落在两段之间的空档。
+
+        但要知道这是**宽松**判定：它回答的是「检索结果里有没有一段话和问题
+        语义相近」，而不是「答案在不在里面」。主题相关却没回答问题的情况会被
+        判为命中（例如「Redis 端口」vs「Redis 是内存库」）。因此本指标适合衡量
+        「检索有没有偏题」，**不适合**衡量「检索有没有找到答案」——
+        后者要靠有 ground truth 对照的指标（见 run_regression 的 MRR / 精确率）。
+        """
         from researcher.kb import _DashScopeEmbeddings
         self._embedder = _DashScopeEmbeddings()
         self._threshold = threshold

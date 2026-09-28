@@ -54,8 +54,29 @@ FORMAT_RULES = {
 # 检索回归
 # ============================================================
 
+# ============================================================
+# 指标口径版本
+# ============================================================
+# 改动任何「命中判定 / MRR 计算 / 题目集合」的逻辑时 +1。
+#
+# 为什么需要：基准文件存的是**某个口径下**测出来的数。口径变了还拿新数去比旧基准，
+# 得出的 PASS/FAIL 没有意义。这个项目的 `.regression_baseline.json` 自 2026-07-16
+# 起再未更新，期间测试集从 112 题涨到 130 题、no_answer 题的 MRR 处理也被改过，
+# 而基准一直作为有效门禁在跑 —— 甚至出现过「实测 MRR 低于基准 MRR，却 passed=true」。
+# 现在口径不匹配时**不静默放行**：打印重建指令并判定失败，逼一次有意识的决定。
+METRIC_VERSION = 2
+
+
 def _calc_mrr(result_text: str, expected_chunks: list[str]) -> float:
-    """计算 Mean Reciprocal Rank——第一个正确答案排在第几位。"""
+    """第一个「含期望关键词的来源块」排在第几位，取其倒数。
+
+    ⚠️ 与 `retriever_test.mrr()` **不是同一个指标**，两者不可互换：
+      · 本函数按 **chunk 文本里是否出现 expected_chunks 关键词** 判定，
+        衡量「答案内容有没有被排到前面」——贴近端到端可用性。
+      · `retriever_test.mrr()` 按 **来源文档名是否命中 expected_docs** 判定，
+        衡量「正确的文档有没有被排到前面」——经典 IR 口径。
+    同名不同义是这套评测体系最容易误读的地方，改动时请保持二者各自的名字清晰。
+    """
     # 从格式化结果中提取 --- 来源 N: 块的位置
     sources = re.findall(r'--- 来源 (\d+):', result_text)
     if not sources:
@@ -71,6 +92,45 @@ def _calc_mrr(result_text: str, expected_chunks: list[str]) -> float:
     return 0.0
 
 
+def classify_retrieval(item: dict, result_text: str, semantic_hit) -> dict:
+    """把一个测试项的检索结果归类 —— 运行路径与 --update-baseline 共用这一份判定。
+
+    抽出来的原因：这两条路径原先各写了一份同样的逻辑，**而且已经漂移了**。
+    no_answer 题的 MRR 处理不一致：
+      · 运行路径：只有「正确拒答」的才 mrr_sum += 1.0，漏拒的既不进分子也不进分母
+      · --update-baseline：**无论是否拒答**都 mrr_sum += 1.0
+    于是同一个 MRR 在两条路径下是两套口径，基准值被凭空抬高（等于给 no_answer 题
+    发满分奖励），门禁因此系统性偏松。
+
+    返回：
+      kind    : "refused" / "not_refused" / "hit" / "miss"
+      hit     : 是否计入命中数（refused 与 hit 为 True）
+      mrr     : 该题倒数排名；**仅对有答案的题目计算** —— no_answer 题在知识库里
+                没有相关文档，MRR 无定义，记 1.0 等于奖励分。
+      missing : 未命中说明，供 failures 记录
+    """
+    expected = item.get("expected_chunks", [])
+    # no_answer 判定按 type，不按 expected_chunks 是否为空 ——
+    # 测试集统一用 chunks=['未找到'] 标注 no_answer，chunks 非空但题型是 no_answer
+    if item.get("type") == "no_answer":
+        refused = "未找到" in result_text or "not found" in result_text.lower()
+        if refused:
+            return {"kind": "refused", "hit": True, "mrr": None, "missing": []}
+        return {
+            "kind": "not_refused", "hit": False, "mrr": None,
+            "missing": ["应返回未找到但实际有结果"],
+        }
+
+    # 语义命中判断：字面全中直接命中，字面不中 embedding 语义判断
+    found, _, _ = semantic_hit.check(item["question"], expected, result_text)
+    return {
+        "kind": "hit" if found else "miss",
+        "hit": found,
+        "mrr": _calc_mrr(result_text, expected),
+        "missing": [] if found else [kw for kw in expected if kw not in result_text],
+    }
+
+
 def run_retriever_regression(mode: str = "v2"):
     """跑检索回归，对比基准命中率和 MRR，检测退化。"""
     from researcher.kb import kb
@@ -80,6 +140,26 @@ def run_retriever_regression(mode: str = "v2"):
     print(f"  检索回归测试 ({mode})")
     print("=" * 60)
 
+    # 口径检查放在检索**之前**：口径不符时这次检索的结果不会被采用，
+    # 没必要先烧掉 130 次 embedding 调用再告诉用户"请重建基准"。
+    #
+    # 版本按**模式**记，不是文件级：各模式的基准值是不同时间、可能不同口径下
+    # 测出来的（现存文件里 hybrid/rerank/full 仍是 2026-07-16 的旧口径值），
+    # 文件级版本会让它们被误认为有效。
+    baseline = _load_baseline() or {}
+    baseline_key_hit = f"retriever_{mode}_hit_rate"
+    baseline_key_mrr = f"retriever_{mode}_mrr"
+    ver_key = f"retriever_{mode}_metric_version"
+    if baseline.get(baseline_key_hit) is not None and baseline.get(ver_key) != METRIC_VERSION:
+        print(f"\n  [FAIL] {mode} 的基准口径版本为 {baseline.get(ver_key)!r}，"
+              f"当前为 {METRIC_VERSION} —— 两者不可比。")
+        print("         已跳过本次检索（避免白跑一遍拿不到可用的数）。")
+        print("         请先重建基准（会覆盖该模式的键）：")
+        print("           python -m src.researcher.evaluation.run_regression --update-baseline")
+        print("         注意 --update-baseline 默认只更新 v2；覆盖全部模式需加 "
+              "--retrieval-mode all。")
+        return False
+
     with open(TESTSET, encoding="utf-8") as f:
         testset = json.load(f)
 
@@ -87,48 +167,46 @@ def run_retriever_regression(mode: str = "v2"):
     mrr_sum = 0.0
     mrr_count = 0
     failures = []
+    refused, not_refused = 0, 0
     semantic_hit = SemanticHit()  # embedding 语义判定
     t0 = time.time()
     for item in testset:
         result = kb.search(item["question"], user_id="eval", mode=mode)
-        expected = item.get("expected_chunks", [])
-        # no_answer 判定：按 type 而非 expected_chunks 是否为空——
-        # 测试集统一用 chunks=['未找到'] 标注 no_answer，chunks 非空但题型是 no_answer
-        if item.get("type") == "no_answer":
-            # no_answer 题型：文档中无答案，检索结果应返回"未找到"
-            total += 1
-            if "未找到" in result or "not found" in result.lower():
-                hits += 1
-                mrr_sum += 1.0
-                mrr_count += 1
-            else:
-                failures.append({"question": item["question"][:50], "missing": ["应返回未找到但实际有结果"]})
-            continue
-        # 语义命中判断：字面全中直接命中，字面不中 embedding 语义判断
-        all_found, _, _ = semantic_hit.check(item["question"], expected, result)
+        cls = classify_retrieval(item, result, semantic_hit)
         total += 1
-        if all_found:
+        if cls["hit"]:
             hits += 1
         else:
-            missing = [kw for kw in expected if kw not in result]
-            failures.append({"question": item["question"][:50], "missing": missing})
-        # MRR: 只对有答案的题目计算
-        mrr = _calc_mrr(result, expected)
-        mrr_sum += mrr
-        mrr_count += 1
+            failures.append({"question": item["question"][:50], "missing": cls["missing"]})
+        if cls["kind"] == "refused":
+            refused += 1
+        elif cls["kind"] == "not_refused":
+            not_refused += 1
+        # MRR 只对有答案的题目计算：no_answer 题在知识库里没有相关文档，
+        # MRR 无定义。此前给它记 1.0（且只在拒答时记）等于发奖励分。
+        if cls["mrr"] is not None:
+            mrr_sum += cls["mrr"]
+            mrr_count += 1
 
     hit_rate = hits / total if total else 0
     mrr = mrr_sum / mrr_count if mrr_count else 0
     elapsed = time.time() - t0
 
     print(f"  题目: {total}  命中: {hits}  命中率: {hit_rate:.1%}  MRR: {mrr:.3f}  耗时: {elapsed:.1f}s")
+    # 分层报数：命中率把两类题混在一起算，会把「拒答」这个独立维度藏起来。
+    # 实测（2026-09-28，用户 kb_eval_v2 / golden_testset_v4）：可答题 116~118/120，
+    # 而 no_answer 只拒答 1/10 —— 合起来的 92.3% 看起来"还行"，
+    # 完全掩盖了「该拒答却答了 9 次」这个真正的缺陷。必须分开报。
+    na_total = refused + not_refused
+    if na_total:
+        ans_total = total - na_total
+        ans_hits = hits - refused
+        print(f"  分层: 可答题 {ans_hits}/{ans_total} = {ans_hits/ans_total:.1%}"
+              f"   |   no_answer 拒答 {refused}/{na_total} = {refused/na_total:.0%}")
 
-    # 加载或创建基准
+    # 口径检查已在检索前做过，这里直接比较（baseline 与两个 key 均已就绪）
     passed = True
-    baseline = _load_baseline()
-    baseline_key_hit = f"retriever_{mode}_hit_rate"
-    baseline_key_mrr = f"retriever_{mode}_mrr"
-    if baseline and baseline.get(baseline_key_hit) is not None:
+    if baseline.get(baseline_key_hit) is not None:
         baseline_hit = baseline[baseline_key_hit]
         baseline_mrr = baseline.get(baseline_key_mrr, 0)
         hit_threshold = baseline_hit - 0.02  # 允许 2% 波动
@@ -148,11 +226,12 @@ def run_retriever_regression(mode: str = "v2"):
             for f in failures[:5]:
                 print(f"    - {f['question']}: 缺失 {f['missing']}")
     else:
-        baseline = baseline or {}
         baseline[baseline_key_hit] = hit_rate
         baseline[baseline_key_mrr] = mrr
+        baseline[ver_key] = METRIC_VERSION
         _save_baseline(baseline)
-        print(f"  [*] 已保存基准: 命中率 {hit_rate:.1%}, MRR {mrr:.3f}")
+        print(f"  [*] 已保存基准: 命中率 {hit_rate:.1%}, MRR {mrr:.3f} "
+              f"(口径版本 {METRIC_VERSION})")
 
     _save_result(
         f"retriever_{mode}",
@@ -261,7 +340,8 @@ async def main():
     parser.add_argument("--retrieval-mode", choices=["v2", "hybrid", "rerank", "full", "all"], default="v2",
                         help="检索回归覆盖的模式: v2/hybrid/rerank/full/all")
     parser.add_argument("--update-baseline", action="store_true",
-                        help="更新基准")
+                        help="重建基准。只重建 --retrieval-mode 指定的模式 —— "
+                             "默认仅 v2；要覆盖全部模式需显式 --retrieval-mode all")
     args = parser.parse_args()
 
     retrieval_modes = ["v2", "hybrid", "rerank", "full"] if args.retrieval_mode == "all" else [args.retrieval_mode]
@@ -275,27 +355,35 @@ async def main():
         baseline = _load_baseline() or {}
         semantic_hit = SemanticHit()
         for rm in retrieval_modes:
-            hits, mrr_sum, mrr_count = 0, 0.0, 0
+            hits, total, mrr_sum, mrr_count = 0, 0, 0.0, 0
+            refused = not_refused = 0
             for item in testset:
                 result = kb.search(item["question"], user_id="eval", mode=rm)
-                expected = item.get("expected_chunks", [])
-                # no_answer 判定：按 type 而非 expected_chunks 是否为空
-                if item.get("type") == "no_answer":
-                    hits += 1 if ("未找到" in result or "not found" in result.lower()) else 0
-                    mrr_sum += 1.0; mrr_count += 1
-                else:
-                    found, _, _ = semantic_hit.check(item["question"], expected, result)
-                    if found:
-                        hits += 1
-                    mrr_sum += _calc_mrr(result, expected)
+                # 与运行路径共用同一份判定 —— 此前两条路径各写一份，且已经漂移
+                # （no_answer 题的 MRR 处理不一致，基准被凭空抬高）。
+                cls = classify_retrieval(item, result, semantic_hit)
+                total += 1
+                if cls["hit"]:
+                    hits += 1
+                if cls["kind"] == "refused":
+                    refused += 1
+                elif cls["kind"] == "not_refused":
+                    not_refused += 1
+                if cls["mrr"] is not None:
+                    mrr_sum += cls["mrr"]
                     mrr_count += 1
-            hit_rate = hits / len(testset) if testset else 0
+            hit_rate = hits / total if total else 0
             mrr_val = mrr_sum / mrr_count if mrr_count else 0
             baseline[f"retriever_{rm}_hit_rate"] = hit_rate
             baseline[f"retriever_{rm}_mrr"] = round(mrr_val, 4)
-            print(f"  {rm}: 命中率 {hit_rate:.1%}, MRR {mrr_val:.3f}")
+            # 版本按模式记：只给本次真正重建过的模式盖章，其余模式的旧口径值
+            # 保持"无版本"状态 → 它们自己那关会失败并要求重建，而不会被误用。
+            baseline[f"retriever_{rm}_metric_version"] = METRIC_VERSION
+            na = refused + not_refused
+            extra = f"，拒答 {refused}/{na}" if na else ""
+            print(f"  {rm}: 命中率 {hit_rate:.1%}, MRR {mrr_val:.3f}{extra}")
         _save_baseline(baseline)
-        print(f"基准已更新 ({len(retrieval_modes)} 个模式)")
+        print(f"基准已更新（{len(retrieval_modes)} 个模式），口径版本 = {METRIC_VERSION}")
         return
 
     all_pass = True
