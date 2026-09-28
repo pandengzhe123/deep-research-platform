@@ -57,20 +57,10 @@ VERIFY_PROMPT = """你是一个严格的验证器，判断一条声明能否从�
 #   - 关键词误判："未找到相关内容，以下是相关知识" 有"未找到"但后半句硬编
 # ============================================================
 
-ANSWER_EXISTS_PROMPT = """你是一个严格的验证器，判断给定的文档里是否真的有回答这个问题的信息。
-
-问题：{question}
-
-文档内容：
-{context}
-
-规则：
-- 如果文档中明确包含了能回答这个问题的信息 → 返回 "yes"
-- 如果文档只是相关但并没有回答这个问题 → 返回 "no"
-- 如果文档中完全没有相关信息 → 返回 "no"
-- 文档"提到相关概念"不等于"回答了问题"——要看是否真的给出了答案
-
-只返回 "yes" 或 "no"："""
+# ⚠️ ANSWER_EXISTS_PROMPT 与判定逻辑已移到生产侧 `researcher/answer_check.py`
+# （生产也要用同一件事，放两处必然漂移 —— 这个项目已经因为「同一契约两份实现」
+# 吃过几次亏）。这里只做转发，保持既有导入路径可用。
+from researcher.answer_check import ANSWER_EXISTS_PROMPT, doc_has_answer
 
 
 class AnswerExistenceEvaluator:
@@ -109,17 +99,12 @@ class AnswerExistenceEvaluator:
         }
 
     def _check_doc_has_answer(self, question: str, contexts: list[str]) -> bool:
-        """LLM 判断文档里有没有这个问题的答案（方案 C 核心）。"""
-        ctx = "\n\n".join(contexts) if contexts else ""
-        if not ctx.strip():
-            return False  # 没喂文档 = 没答案
-        try:
-            text = self._call_llm(
-                ANSWER_EXISTS_PROMPT.format(question=question, context=ctx[:6000])
-            )
-            return text.strip().lower().startswith("yes")
-        except Exception:
-            return False
+        """LLM 判断文档里有没有这个问题的答案（方案 C 核心）。
+
+        复用生产侧 `answer_check.doc_has_answer`，但用 `default_on_error=False`
+        保持原语义：判不出来就不算"文档有答案"（生产侧的拒答闸则取 fail-open）。
+        """
+        return doc_has_answer(question, contexts, default_on_error=False)
 
     def _is_answer_rejection(self, answer: str) -> bool | None:
         """判断生成层是否拒绝（诚实说没有信息）。用关键词，配合 doc_has_answer 一起判。"""

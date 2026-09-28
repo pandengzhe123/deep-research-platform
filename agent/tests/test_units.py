@@ -1210,6 +1210,46 @@ def test_query_rewriter_parse_gives_up_cleanly():
 
 
 # ============================================================
+# answer_check —— 拒答闸的失败姿态（离线可测）
+# ============================================================
+
+
+def test_answer_check_empty_context_is_no_answer():
+    """没检索到任何内容 = 没答案，不该去调 LLM。"""
+    from researcher.answer_check import doc_has_answer
+
+    assert doc_has_answer("q", []) is False
+    assert doc_has_answer("q", ["   "]) is False
+    assert doc_has_answer("q", ["", ""]) is False
+
+
+def test_answer_check_failure_posture():
+    """判定服务不可用时的姿态：生产侧 fail-open、评测侧 fail-closed。
+
+    两者取舍相反且都是刻意的，所以做成显式参数：
+      · 生产（kb.search 的拒答闸）宁可多答不可误拒 —— 判定抖动不该让
+        整个知识库变成"什么都答不了"
+      · 评测（faithfulness 的 no_answer 分支）沿用原语义：判不出来就不算
+        "文档有答案"
+    """
+    import os
+
+    from researcher.answer_check import doc_has_answer
+
+    saved = os.environ.get("DEEPSEEK_BASE_URL")
+    # 指向一个必定连不上的端口，制造调用失败（不产生任何计费）
+    os.environ["DEEPSEEK_BASE_URL"] = "http://127.0.0.1:9/no-listener"
+    try:
+        assert doc_has_answer("q", ["一些文档内容"], default_on_error=True) is True
+        assert doc_has_answer("q", ["一些文档内容"], default_on_error=False) is False
+    finally:
+        if saved is None:
+            os.environ.pop("DEEPSEEK_BASE_URL", None)
+        else:
+            os.environ["DEEPSEEK_BASE_URL"] = saved
+
+
+# ============================================================
 # 运行
 # ============================================================
 
@@ -1286,6 +1326,9 @@ if __name__ == "__main__":
         # retrievers —— 查询改写的容错解析
         test_query_rewriter_parse_shapes,
         test_query_rewriter_parse_gives_up_cleanly,
+        # answer_check —— 拒答闸
+        test_answer_check_empty_context_is_no_answer,
+        test_answer_check_failure_posture,
     ]
 
     passed = 0

@@ -147,6 +147,20 @@ class _DashScopeEmbeddings:
 # 知识库
 # ============================================================
 
+# 「没检索到」的统一措辞。原先 `_fmt()` 里硬编码了一份，而 `run_regression`
+# 的拒答判定靠 `"未找到" in result` 这个子串 —— 两处各自维护，改一处就静默失效。
+NOT_FOUND_MSG = "知识库中未找到相关信息。"
+
+# 拒答闸：开启后每次 KB 检索会多做一次 LLM 判定（「检索到的内容里到底有没有
+# 答案」），判定为「没有」就返回 NOT_FOUND_MSG。
+#
+# **默认关闭** —— 这给每次 KB 检索加一次 LLM 调用（一次 L4 研究会做 10+ 次），
+# 是产品级的成本取舍，需要有意识地打开，不该由代码默认替你决定。
+#   KB_ANSWER_CHECK=true 开
+ANSWER_CHECK_ENABLED = os.getenv("KB_ANSWER_CHECK", "false").strip().lower() in (
+    "1", "true", "yes", "on")
+
+
 class KnowledgeBase:
     """Chroma 向量库封装（阿里云 embedding 单管线）。"""
 
@@ -302,7 +316,7 @@ class KnowledgeBase:
         格式一变，指标会静默失真而不是报错。解析侧见 `parse_source_docs()`。
         """
         if not docs:
-            return "知识库中未找到相关信息。"
+            return NOT_FOUND_MSG
         lines = [f"# 知识库检索结果{label}\n"]
         for i, d in enumerate(docs):
             src = d["meta"].get("doc_id", "未知")
@@ -543,12 +557,46 @@ class KnowledgeBase:
         破坏外部调用方，而不是因为还存在第二种行为。
         """
         if mode == "full":
-            return self._search_full(query, user_id, doc_ids, n_results)
+            return self._maybe_apply_answer_check(
+                query, self._search_full(query, user_id, doc_ids, n_results))
         if mode == "rerank":
-            return self._search_rerank(query, user_id, doc_ids, n_results)
+            return self._maybe_apply_answer_check(
+                query, self._search_rerank(query, user_id, doc_ids, n_results))
         if mode == "hybrid":
-            return self._search_hybrid(query, user_id, doc_ids, n_results)
-        return self._search_v2(query, user_id, doc_ids, n_results)
+            return self._maybe_apply_answer_check(
+                query, self._search_hybrid(query, user_id, doc_ids, n_results))
+        return self._maybe_apply_answer_check(
+            query, self._search_v2(query, user_id, doc_ids, n_results))
+
+    # ================================================================
+    # 拒答闸（默认关闭）
+    # ================================================================
+
+    @staticmethod
+    def _maybe_apply_answer_check(query: str, text: str) -> str:
+        """开启 KB_ANSWER_CHECK 时：判定检索结果里是否真含答案，不含则返回「未找到」。
+
+        为什么不能用阈值代替（实测，见 answer_check 模块 docstring）：
+        精排分阈值要把 9/9 的 no_answer 全拒掉，代价是误拒 38/119 的可答题
+        （净收益 −29）；向量距离更差，可答题有 60% 落在 no_answer 的区间里。
+        「相关」与「可答」是两件事，所以只能做分类判定。
+
+        失败姿态是 **fail-open**：判定服务不可用时保持原行为（把检索结果照常返回）。
+        与每日配额的 fail-closed 相反 —— 那里失败的代价是成本失控（不可接受），
+        这里失败的代价只是少一次拒答（可接受），让整个知识库罢工则不可接受。
+        """
+        if not ANSWER_CHECK_ENABLED:
+            return text
+        if NOT_FOUND_MSG in text or "未找到" in text:
+            return text                      # 已经是空结果，没什么可判的
+        try:
+            from .answer_check import doc_has_answer
+            if doc_has_answer(query, [text], default_on_error=True):
+                return text
+            print(f"  [kb] 拒答闸：检索结果不含答案，按「未找到」返回")
+            return NOT_FOUND_MSG
+        except Exception:
+            return text                      # 判定不可用 → 保持原行为
 
     # ================================================================
     # 通用
