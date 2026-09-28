@@ -177,14 +177,12 @@ if __name__ == "__main__":
     # all 默认跑 v2/hybrid/rerank，full 需显式指定（避免误触发慢模式）
     modes = ["v2", "hybrid", "rerank"] if args.retrieval_mode == "all" else [args.retrieval_mode]
 
-    # 加载测试集
-    testset_path = os.path.join(os.path.dirname(__file__), "golden_testset_v4.json")
+    # 加载测试集（路径见 _testset.py —— 全项目唯一出处）
+    from researcher.evaluation._testset import TESTSET as _TESTSET, load_testset
     try:
-        with open(testset_path, "r", encoding="utf-8") as f:
-            testset = json.load(f)
+        testset = load_testset()
     except FileNotFoundError:
-        print(f"测试集不存在: {testset_path}")
-        print("请先创建 golden_testset.json")
+        print(f"测试集不存在: {_TESTSET}")
         sys.exit(1)
 
     results = run_ablation(testset, user_id="eval", modes=modes)

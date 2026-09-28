@@ -95,9 +95,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
     modes = ["v2", "hybrid", "rerank", "full"] if args.retrieval_mode == "all" else [args.retrieval_mode]
 
-    testset_path = os.path.join(os.path.dirname(__file__), "golden_testset_v4.json")
-    with open(testset_path, encoding="utf-8") as f:
-        testset = json.load(f)
+    # 测试集路径见 _testset.py —— 全项目唯一出处
+    from researcher.evaluation._testset import load_testset
+    testset = load_testset()
     print(f"Loaded {len(testset)} test items, modes: {modes}")
 
     results = run_retriever_test(testset, user_id="eval", modes=modes)

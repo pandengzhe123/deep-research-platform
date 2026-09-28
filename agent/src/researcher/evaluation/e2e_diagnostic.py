@@ -130,7 +130,17 @@ def diagnostic_matrix(testset, retriever_stats, generator_stats):
     print(f"  {'题型':<14} {'题目数':<8} {'Retriever':<14} {'Generator':<14} {'诊断':<25}")
     print("  " + "-" * 70)
 
-    for t in ["simple", "multi_doc", "precision", "colloquial", "no_answer"]:
+    # 题型从测试集派生，不再硬编码 —— 硬编码列表会静默漏掉新增题型
+    # （long_doc 差点就这么被漏掉：题目加了却不出现在诊断表里，等于没加）。
+    # no_answer 排在最后：它不参与 retriever/generator 的命中统计。
+    present = []
+    for it in testset:
+        t = it.get("type", "")
+        if t and t not in present:
+            present.append(t)
+    present.sort(key=lambda x: (x == "no_answer", x))
+
+    for t in present:
         items = [i for i in testset if i["type"] == t]
         n = len(items)
         if n == 0:
@@ -178,9 +188,9 @@ if __name__ == "__main__":
                         help="Retriever 检索模式（默认 hybrid，避免 full 太慢）")
     args = parser.parse_args()
 
-    testset_path = os.path.join(os.path.dirname(__file__), "golden_testset_v4.json")
-    with open(testset_path, encoding="utf-8") as f:
-        testset = json.load(f)
+    # 测试集路径见 _testset.py —— 全项目唯一出处
+    from researcher.evaluation._testset import load_testset
+    testset = load_testset()
 
     from researcher.kb import kb
 

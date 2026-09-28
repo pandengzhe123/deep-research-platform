@@ -263,9 +263,9 @@ def print_report(results, faith_result, docs, rejection_result=None):
 
 
 if __name__ == "__main__":
-    testset_path = os.path.join(os.path.dirname(__file__), "golden_testset_v4.json")
-    with open(testset_path, encoding="utf-8") as f:
-        testset = json.load(f)
+    # 测试集路径见 _testset.py —— 全项目唯一出处
+    from researcher.evaluation._testset import load_testset
+    testset = load_testset()
 
     docs = load_docs()
     print(f"Testset: {len(testset)} items, Docs: {len(docs)} documents")

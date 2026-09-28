@@ -28,13 +28,13 @@ from researcher.evaluation.answer_correctness import AnswerCorrectnessEvaluator
 from researcher.evaluation.judge import ReportJudge
 from researcher.evaluation._results import run_dir_for as _run_dir_for
 
-TESTSET = os.path.join(os.path.dirname(__file__), "golden_testset_v4.json")
+# 测试集路径见 _testset.py —— 全项目唯一出处
+from researcher.evaluation._testset import TESTSET, load_testset
 DOC_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "..", "eval")
 
 
 def _load_testset():
-    with open(TESTSET, encoding="utf-8") as f:
-        return json.load(f)
+    return load_testset()
 
 
 def _load_docs():

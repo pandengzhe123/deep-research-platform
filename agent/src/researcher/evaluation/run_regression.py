@@ -24,8 +24,10 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".env"))
 # 配置
 # ============================================================
 
-TESTSET = os.path.join(os.path.dirname(__file__), "golden_testset_v4.json")
 BASELINE_FILE = os.path.join(os.path.dirname(__file__), ".regression_baseline.json")
+
+# 测试集路径从共享模块取，不再各脚本硬编码（见 _testset.py 的说明）
+from researcher.evaluation._testset import TESTSET
 
 # 保存回归结果到 results/ 下
 from researcher.evaluation._results import run_dir_for as _run_dir_for
@@ -64,7 +66,13 @@ FORMAT_RULES = {
 # 起再未更新，期间测试集从 112 题涨到 130 题、no_answer 题的 MRR 处理也被改过，
 # 而基准一直作为有效门禁在跑 —— 甚至出现过「实测 MRR 低于基准 MRR，却 passed=true」。
 # 现在口径不匹配时**不静默放行**：打印重建指令并判定失败，逼一次有意识的决定。
-METRIC_VERSION = 2
+#
+# 版本历史：
+#   1  最初（隐含，未显式记录）
+#   2  no_answer 的 MRR 改为不参与计算；运行路径与 --update-baseline 共用
+#      classify_retrieval()；命中判定统一
+#   3  测试集切到 golden_testset_v5（130 → 159 题：+14 long_doc、+15 no_answer）
+METRIC_VERSION = 3
 
 
 def _calc_mrr(result_text: str, expected_chunks: list[str]) -> float:
