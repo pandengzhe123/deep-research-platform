@@ -1651,6 +1651,44 @@ def test_rerank_truncation_is_not_silent():
             _os.environ["DASHSCOPE_API_KEY"] = orig_key
 
 
+def test_overlap_only_fires_on_runon_sentences():
+    """`overlap` 只在「单句 > chunk_size」时才生效 —— 这是一条**双重条件**的路径。
+
+    实测（2026-09-28）两个语料、两个 chunk_size 下生效块数都是 **0.00%**：
+
+        生产中文（4,041 句，最长 360 字）    chunk_size=500  →  0 块
+        MultiHop-RAG 英文（21,986 句，最长 781 字） chunk_size=1024 → 0 块
+
+    阈值 = 该语料的最长句子：中文 <360、英文 <781 才会触发。
+    这条测试用**构造的长句**确认机制本身正确（而不是确认它不生效），
+    同时确认段落/句子级路径确实不产生重叠。
+    """
+    from researcher.kb import chunk_text
+
+    # ① 构造一个「无标点长句」→ 必须走字符级、必须带 overlap（step = size - overlap）
+    runon = "啊" * 1300          # 无 。！？，整段就是一句
+    ch = chunk_text(runon, chunk_size=500, overlap=100, min_size=0)
+    assert len(ch) > 1, "超长无标点文本必须被切成多块"
+    assert all(len(c) <= 500 for c in ch), "chunk_size 契约不能破"
+    # step=400 → 相邻块应重叠 100 字（即第 2 块的前 100 字 == 第 1 块的后 100 字）
+    assert ch[1][:100] == ch[0][-100:], (
+        f"字符级路径应带 overlap=100 的重叠，实际第1块尾={ch[0][-20:]!r} 第2块头={ch[1][:20]!r}"
+    )
+
+    # ② 正常散文（段落/句子级）→ **不应有任何重叠**（这正是它 0.00% 生效的原因）
+    prose = "第一句话。第二句话。第三句话。" * 40     # 440 字，单句 5 字
+    ch2 = chunk_text(prose, chunk_size=500, overlap=100, min_size=0)
+    joined = "".join(ch2)
+    assert joined == prose.replace("\n\n", "").replace("\n", ""), "段落级切块不应丢字"
+    assert not any(ch2[i][-100:] in ch2[i + 1][:200] for i in range(len(ch2) - 1)), \
+        "段落/句子级路径不该产生重叠"
+
+    # ③ overlap 上限被钳到 chunk_size//2（防 step<=0 导致内容静默丢弃）
+    over = chunk_text("啊" * 1200, chunk_size=500, overlap=99999, min_size=0)
+    assert over, "overlap 超限不能导致零块（内容静默丢失）"
+    assert all(len(c) <= 500 for c in over)
+
+
 def test_hybrid_respects_n_results():
     """hybrid 必须尊重 n_results —— 修复前它永远最多返回 5 条。
 
@@ -1917,6 +1955,7 @@ if __name__ == "__main__":
         # retrievers —— BM25 词法相关性闸
         test_tokenize_does_not_lowercase,
         test_hybrid_respects_n_results,
+        test_overlap_only_fires_on_runon_sentences,
         test_search_default_n_results_is_10,
         test_rerank_limits_are_measured_correctly,
         test_rerank_truncation_is_not_silent,
