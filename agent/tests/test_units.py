@@ -1651,6 +1651,131 @@ def test_rerank_truncation_is_not_silent():
             _os.environ["DASHSCOPE_API_KEY"] = orig_key
 
 
+def test_rerank_pool_includes_bm25_candidates():
+    """`_search_rerank` 的精排池 = 向量路 + BM25 词法路（去重后）。
+
+    为什么要两路：向量路把**字面信息**压掉了（1024 维稠密向量不保留拼写），
+    对名字/数字/日期/专有名词不敏感；BM25 只认字面，正好互补。
+    MultiHop-RAG 的 `temporal_query` 靠实体+时间词匹配，实测 @10 召回 53.5%，
+    是三类题型里最低的。
+
+    这里钉三件事，都是「错了会静默变差」的类型：
+      · 默认必须**开着**（=0 就退回纯向量，丧失词法补位）
+      · 上限不能超过 20（`_get_bm25` 建的索引 k=20，写更大拿不到更多）
+      · 必须与向量路去重（同口径 content[:200]，见 `_search_full`）
+    """
+    from researcher.kb import RERANK_BM25_CANDIDATES, RERANK_CANDIDATES
+    from researcher.retrievers import reranker as rr
+
+    assert RERANK_BM25_CANDIDATES > 0, (
+        "BM25 已接进精排池，不该是 0 —— 那等于退回纯向量路"
+    )
+    assert RERANK_BM25_CANDIDATES <= 20, (
+        f"RERANK_BM25_CANDIDATES={RERANK_BM25_CANDIDATES}；"
+        "_get_bm25 的索引 k=20，写大于 20 的值不会有额外效果"
+    )
+    assert RERANK_CANDIDATES + RERANK_BM25_CANDIDATES <= rr._MAX_DOCS, (
+        "向量 + BM25 的池子不能超过精排条数上限，否则会被静默截断"
+    )
+
+    kbx = _fresh_kb()
+    kbx._v2_vector_search = lambda q, u, d, k: [
+        {"content": f"向量文档{i} " + "x" * 300, "meta": {"doc_id": "dVec"}}
+        for i in range(3)
+    ]
+
+    class _BM:
+        def invoke(self, q):
+            return [
+                # 第 1 条与向量路**内容相同**（前 200 字一致）→ 必须被去重掉
+                {"page_content": "向量文档0 " + "x" * 300, "metadata": {"doc_id": "dVec"}},
+                {"page_content": "BM25 文档1 " + "y" * 300, "metadata": {"doc_id": "dBm"}},
+                {"page_content": "BM25 文档2 " + "z" * 300, "metadata": {"doc_id": "dBm"}},
+            ]
+
+    kbx._get_bm25 = lambda u: _BM()
+
+    seen = {}
+
+    class _R:
+        def rerank(self, q, docs, top_n):
+            seen["pool"] = list(docs)
+            return [dict(d, rerank_score=1.0) for d in docs[:top_n]]
+
+    orig = rr.build_reranker
+    rr.build_reranker = lambda: _R()
+    try:
+        kbx._search_rerank("查询", "u1", None, 10)
+    finally:
+        rr.build_reranker = orig
+
+    assert "pool" in seen, "精排未被调用 —— 异常被 except 吞掉并回退 v2 了"
+    contents = [d["content"] for d in seen["pool"]]
+    assert len(seen["pool"]) == 5, (
+        f"3 条向量 + 3 条 BM25（其中 1 条重复）= 5 条，实际 {len(seen['pool'])}"
+    )
+    assert sum(1 for c in contents if c.startswith("向量文档0")) == 1, "BM25 重复项没被去重"
+    assert any(c.startswith("BM25 文档1") for c in contents), "BM25 候选没进精排池"
+
+
+def test_rerank_bm25_respects_doc_ids():
+    """BM25 索引是**整个用户库**的，所以精排池必须自己按 doc_ids 过滤。
+
+    `_get_bm25(user_id)` 只按 user_id 建索引、**不认 doc_ids**（它内部调
+    `_get_v2_docs(user_id)` 拿全量）。而向量路是带 `where={"doc_id": {"$in": ...}}`
+    的。两条路作用域不一致 → 不过滤就是**静默越权**：调用方限定「只在这些文档里
+    检索」，BM25 却把范围外文档的块塞进精排池。
+    """
+    from researcher.retrievers import reranker as rr
+
+    kbx = _fresh_kb()
+    kbx._v2_vector_search = lambda q, u, d, k: [
+        {"content": "范围内向量文档 " + "x" * 300, "meta": {"doc_id": "keep"}}
+    ]
+
+    class _BM:
+        def invoke(self, q):
+            return [
+                {"page_content": "范围外 BM25 文档 " + "y" * 300,
+                 "metadata": {"doc_id": "other"}},
+                {"page_content": "范围内 BM25 文档 " + "z" * 300,
+                 "metadata": {"doc_id": "keep"}},
+            ]
+
+    kbx._get_bm25 = lambda u: _BM()
+
+    seen = {}
+
+    class _R:
+        def rerank(self, q, docs, top_n):
+            seen["pool"] = list(docs)
+            return [dict(d, rerank_score=1.0) for d in docs[:top_n]]
+
+    orig = rr.build_reranker
+    rr.build_reranker = lambda: _R()
+    try:
+        # ① 限定作用域 → 范围外的 BM25 文档必须被挡掉
+        kbx._search_rerank("查询", "u1", ["keep"], 10)
+        assert "pool" in seen, "精排未被调用"
+        contents = [d["content"] for d in seen["pool"]]
+        assert not any(c.startswith("范围外") for c in contents), (
+            "doc_ids 限定了作用域，范围外的 BM25 文档不该进精排池"
+        )
+        assert any(c.startswith("范围内 BM25") for c in contents), (
+            "范围内的 BM25 候选应该保留"
+        )
+
+        # ② 不限作用域（doc_ids=None）→ 两路都该进来
+        seen.clear()
+        kbx._search_rerank("查询", "u1", None, 10)
+        contents = [d["content"] for d in seen["pool"]]
+        assert any(c.startswith("范围外") for c in contents), (
+            "doc_ids=None 表示不限范围，不该过滤"
+        )
+    finally:
+        rr.build_reranker = orig
+
+
 def test_overlap_only_fires_on_runon_sentences():
     """`overlap` 只在「单句 > chunk_size」时才生效 —— 这是一条**双重条件**的路径。
 
@@ -1959,6 +2084,8 @@ if __name__ == "__main__":
         test_search_default_n_results_is_10,
         test_rerank_limits_are_measured_correctly,
         test_rerank_truncation_is_not_silent,
+        test_rerank_pool_includes_bm25_candidates,
+        test_rerank_bm25_respects_doc_ids,
         test_bm25_only_returns_positive_score_docs,
         # retrievers —— 查询改写的容错解析
         test_query_rewriter_parse_shapes,
